@@ -13,6 +13,8 @@ from PyQt6.QtCore import QThread, pyqtSignal
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 
+from optimization.walk_forward import WalkForwardAnalyzer, WalkForwardResults
+
 from config.settings import (
     OptimizationConfig, RiskConfig, AlpacaConfig, 
     IndicatorRanges, Paths, TransactionCosts
@@ -29,11 +31,193 @@ from trading import AlpacaLiveTrader, ALPACA_AVAILABLE
 class MainWindow(QMainWindow):
     """Main application window"""
     
+    """
+Deep diagnostic for walk-forward failures
+Add this as a method to MainWindow and call it before running walk-forward
+"""
+
+    def diagnose_walk_forward_issue(self):
+        """Comprehensive diagnostic for walk-forward problems"""
+        print(f"\n{'='*70}")
+        print(f"WALK-FORWARD DEEP DIAGNOSTIC")
+        print(f"{'='*70}")
+        
+        # 1. Check df_dict_full
+        print(f"\n1️⃣  Checking df_dict_full:")
+        print(f"   Type: {type(self.df_dict_full)}")
+        print(f"   Keys: {list(self.df_dict_full.keys()) if self.df_dict_full else 'EMPTY!'}")
+        
+        if not self.df_dict_full:
+            print(f"   ❌ df_dict_full is EMPTY!")
+            return
+        
+        for tf, df in self.df_dict_full.items():
+            print(f"\n   {tf}:")
+            print(f"      Type: {type(df)}")
+            print(f"      Shape: {df.shape}")
+            print(f"      Columns: {list(df.columns)}")
+            print(f"      Index type: {type(df.index)}")
+            
+            # Check Datetime
+            if 'Datetime' in df.columns:
+                print(f"      Datetime column: EXISTS ✅")
+                dt = df['Datetime']
+                print(f"      Datetime type: {dt.dtype}")
+            else:
+                print(f"      Datetime column: MISSING ❌")
+                print(f"      Index: {df.index[:3]}")
+                try:
+                    dt = pd.to_datetime(df.index)
+                    print(f"      Converted index to datetime: ✅")
+                except Exception as e:
+                    print(f"      Cannot convert index: ❌ {e}")
+                    continue
+            
+            # Check date range
+            try:
+                min_date = dt.min()
+                max_date = dt.max()
+                days = (max_date - min_date).days
+                print(f"      Date range: {min_date} to {max_date}")
+                print(f"      Total days: {days}")
+            except Exception as e:
+                print(f"      ❌ Error getting date range: {e}")
+        
+        # 2. Check selected timeframes
+        print(f"\n2️⃣  Checking selected timeframes:")
+        selected_tfs = [
+            tf for tf, cb in self.tf_checkboxes.items() 
+            if cb.isChecked()
+        ]
+        print(f"   Checked boxes: {selected_tfs}")
+        
+        available_selected = [
+            tf for tf in selected_tfs 
+            if tf in self.df_dict_full
+        ]
+        print(f"   Available & selected: {available_selected}")
+        
+        if not available_selected:
+            print(f"   ❌ No valid timeframes selected!")
+            return
+        
+        # 3. Check window settings
+        print(f"\n3️⃣  Checking window settings:")
+        train_days = self.wf_train_days_spin.value()
+        test_days = self.wf_test_days_spin.value()
+        trials = self.wf_trials_spin.value()
+        
+        print(f"   Train days: {train_days}")
+        print(f"   Test days: {test_days}")
+        print(f"   Trials: {trials}")
+        print(f"   Required per window: {train_days + test_days} days")
+        
+        # 4. Check what walk-forward will receive
+        print(f"\n4️⃣  Simulating walk-forward data reception:")
+        
+        tf_order = {'5min': 0, 'hourly': 1, 'daily': 2}
+        finest_tf = sorted(available_selected, key=lambda x: tf_order.get(x, 99))[0]
+        
+        print(f"   Finest timeframe: {finest_tf}")
+        
+        df_test = self.df_dict_full[finest_tf].copy()
+        print(f"   df shape: {df_test.shape}")
+        
+        # Check if Datetime exists
+        if 'Datetime' not in df_test.columns:
+            print(f"   ⚠️  Adding Datetime from index...")
+            df_test['Datetime'] = pd.to_datetime(df_test.index)
+        
+        min_dt = df_test['Datetime'].min()
+        max_dt = df_test['Datetime'].max()
+        total_days = (max_dt - min_dt).days
+        
+        print(f"   Date range: {min_dt.date()} to {max_dt.date()}")
+        print(f"   Total days: {total_days}")
+        
+        # Calculate windows
+        n_windows = max(1, (total_days - train_days) // test_days)
+        print(f"   Calculated windows: {n_windows}")
+        
+        # 5. Simulate first window
+        print(f"\n5️⃣  Simulating first window split:")
+        
+        train_start = min_dt
+        train_end = train_start + pd.Timedelta(days=train_days)
+        test_start = train_end
+        test_end = test_start + pd.Timedelta(days=test_days)
+        
+        print(f"   Train: {train_start.date()} to {train_end.date()}")
+        print(f"   Test:  {test_start.date()} to {test_end.date()}")
+        
+        if test_end > max_dt:
+            print(f"   ❌ Window exceeds data! (test_end={test_end.date()}, max={max_dt.date()})")
+        else:
+            print(f"   ✅ Window fits in data")
+        
+        # Count bars in window
+        train_mask = (df_test['Datetime'] >= train_start) & (df_test['Datetime'] < train_end)
+        test_mask = (df_test['Datetime'] >= test_start) & (df_test['Datetime'] < test_end)
+        
+        train_bars = train_mask.sum()
+        test_bars = test_mask.sum()
+        
+        print(f"   Train bars: {train_bars}")
+        print(f"   Test bars: {test_bars}")
+        
+        if train_bars < 100:
+            print(f"   ❌ Insufficient training bars (need 100+)")
+        else:
+            print(f"   ✅ Sufficient training bars")
+        
+        if test_bars < 10:
+            print(f"   ❌ Insufficient test bars (need 10+)")
+        else:
+            print(f"   ✅ Sufficient test bars")
+        
+        # 6. Check optimizer kwargs
+        print(f"\n6️⃣  Checking optimizer parameters:")
+        print(f"   Ticker: {self.current_ticker}")
+        print(f"   MN1 range: ({self.mn1_min.value()}, {self.mn1_max.value()})")
+        print(f"   MN2 range: ({self.mn2_min.value()}, {self.mn2_max.value()})")
+        print(f"   Entry range: ({self.entry_min.value()}, {self.entry_max.value()})")
+        print(f"   Exit range: ({self.exit_min.value()}, {self.exit_max.value()})")
+        print(f"   Equity curve opt: {self.equity_curve_check.isChecked()}")
+        
+        # 7. Final verdict
+        print(f"\n{'='*70}")
+        print(f"DIAGNOSTIC SUMMARY")
+        print(f"{'='*70}")
+        
+        if not self.df_dict_full:
+            print(f"❌ PROBLEM: No data loaded")
+        elif not available_selected:
+            print(f"❌ PROBLEM: No valid timeframes selected")
+        elif total_days < (train_days + test_days):
+            print(f"❌ PROBLEM: Not enough data")
+            print(f"   Have: {total_days} days")
+            print(f"   Need: {train_days + test_days} days")
+            print(f"   Reduce settings to: train={total_days//3}, test={total_days//6}")
+        elif n_windows < 1:
+            print(f"❌ PROBLEM: Cannot create any windows")
+        elif train_bars < 100 or test_bars < 10:
+            print(f"❌ PROBLEM: Insufficient bars per window")
+        else:
+            print(f"✅ Configuration looks GOOD!")
+            print(f"   Should be able to create {n_windows} window(s)")
+        
+        print(f"{'='*70}\n")
+
+
+    # To use this, add it to MainWindow class, then in run_walk_forward() add:
+    # self.diagnose_walk_forward_issue()
+    # return  # Temporarily return to see diagnostic output
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Multi-Timeframe Trading Optimizer with Alpaca")
         self.setGeometry(100, 100, 1400, 1100)
-        
+    
         # Data storage
         self.df_dict = {}
         self.df_dict_full = {}
@@ -43,19 +227,20 @@ class MainWindow(QMainWindow):
         self.data_source = "yfinance"
         self.buyhold_pct = 0.0
         self.best_params = None
-        
+    
         # Risk management settings
         self.position_size_pct = RiskConfig.DEFAULT_POSITION_SIZE
         self.max_positions = RiskConfig.DEFAULT_MAX_POSITIONS
-        
+    
         # Transaction costs
         self.transaction_costs = TransactionCosts()
-        
+
         # Trade log for Monte Carlo
         self.last_trade_log = []
-        
-        self.init_ui()
 
+        # NOW call init_ui
+        self.init_ui()
+    
     def init_ui(self):
         """Initialize the user interface"""
         self.setStyleSheet(MAIN_STYLESHEET)
@@ -215,7 +400,7 @@ class MainWindow(QMainWindow):
 
     def _add_parameter_ranges(self, layout: QVBoxLayout):
         """Add parameter range controls"""
-        # MN1 and MN2 ranges
+        # MN1 and MN2 rangesself.walk_forward_btn.setEnabled(True)
         magic_layout = QHBoxLayout()
         ranges = IndicatorRanges()
         
@@ -315,25 +500,26 @@ class MainWindow(QMainWindow):
         self.phase_label.setStyleSheet("color: #2979ff; font-weight: bold;")
         layout.addWidget(self.phase_label)
 
+
     def _add_action_buttons(self, layout: QVBoxLayout):
         """Add action buttons"""
         btn_layout = QHBoxLayout()
-        
+    
         self.start_btn = QPushButton("Start Multi-Timeframe Optimization")
         self.stop_btn = QPushButton("Stop")
         self.stop_btn.setEnabled(False)
-        
+    
         self.start_btn.clicked.connect(self.start_optimization)
         self.stop_btn.clicked.connect(self.stop_optimization)
-        
+    
         btn_layout.addWidget(self.start_btn)
         btn_layout.addWidget(self.stop_btn)
-        
+    
         layout.addLayout(btn_layout)
-        
+    
         # Monte Carlo button (separate row)
         mc_layout = QHBoxLayout()
-        
+    
         self.monte_carlo_btn = QPushButton("🎲 Run Monte Carlo Simulation")
         self.monte_carlo_btn.setEnabled(False)
         self.monte_carlo_btn.setToolTip(
@@ -350,7 +536,7 @@ class MainWindow(QMainWindow):
             QPushButton:hover { background-color: #7a3db8; }
             QPushButton:disabled { background-color: #0a0a0a; color: #555; }
         """)
-        
+
         # Monte Carlo settings
         mc_layout.addWidget(QLabel("Simulations:"))
         self.mc_simulations_spin = QSpinBox()
@@ -358,12 +544,401 @@ class MainWindow(QMainWindow):
         self.mc_simulations_spin.setValue(1000)
         self.mc_simulations_spin.setSingleStep(100)
         mc_layout.addWidget(self.mc_simulations_spin)
-        
+
         mc_layout.addWidget(self.monte_carlo_btn)
         mc_layout.addStretch()
-        
+
         layout.addLayout(mc_layout)
 
+        # Walk-Forward button (NEW - third row)
+        wf_layout = QHBoxLayout()
+
+        self.walk_forward_btn = QPushButton("📊 Run Walk-Forward Analysis")
+        self.walk_forward_btn.setEnabled(False)  # Enabled after data load
+        self.walk_forward_btn.setToolTip(
+            "Test strategy on unseen data\n"
+            "Detects overfitting via train/test splits"
+        )
+        self.walk_forward_btn.clicked.connect(self.run_walk_forward)
+        self.walk_forward_btn.setStyleSheet("""
+            QPushButton { 
+                background-color: #009688; 
+                font-weight: bold;
+                padding: 8px;
+            }
+            QPushButton:hover { background-color: #00bfa5; }
+            QPushButton:disabled { background-color: #0a0a0a; color: #555; }
+        """)
+
+        # Walk-Forward settings
+        wf_layout.addWidget(QLabel("WF Train Days:"))
+        self.wf_train_days_spin = QSpinBox()
+        self.wf_train_days_spin.setRange(30, 730)
+        self.wf_train_days_spin.setValue(180)
+        wf_layout.addWidget(self.wf_train_days_spin)
+
+        wf_layout.addWidget(QLabel("Test Days:"))
+        self.wf_test_days_spin = QSpinBox()
+        self.wf_test_days_spin.setRange(7, 180)
+        self.wf_test_days_spin.setValue(30)
+        wf_layout.addWidget(self.wf_test_days_spin)
+
+        wf_layout.addWidget(QLabel("WF Trials:"))
+        self.wf_trials_spin = QSpinBox()
+        self.wf_trials_spin.setRange(100, 5000)
+        self.wf_trials_spin.setValue(500)
+        wf_layout.addWidget(self.wf_trials_spin)
+
+        wf_layout.addWidget(self.walk_forward_btn)
+        wf_layout.addStretch()
+
+        layout.addLayout(wf_layout)
+
+    def run_walk_forward(self):
+        """Run walk-forward analysis with smart defaults"""
+        
+        if not self.df_dict_full:
+            QMessageBox.warning(
+                self, "No Data",
+                "Please load data first before running walk-forward analysis"
+            )
+            return
+
+        # Get selected timeframes
+        selected_tfs = [
+            tf for tf, cb in self.tf_checkboxes.items() 
+            if cb.isChecked() and tf in self.df_dict_full
+        ]
+
+        if not selected_tfs:
+            QMessageBox.warning(self, "Error", "Select at least one timeframe")
+            return
+
+        # Determine finest timeframe
+        tf_order = {'5min': 0, 'hourly': 1, 'daily': 2}
+        finest_tf = sorted(selected_tfs, key=lambda x: tf_order.get(x, 99))[0]
+        
+        # Get data info
+        df_check = self.df_dict_full[finest_tf]
+        dt_check = df_check['Datetime'] if 'Datetime' in df_check.columns else pd.to_datetime(df_check.index)
+        available_days = (dt_check.max() - dt_check.min()).days
+        
+        # 🎯 SMART AUTO-CONFIGURATION based on available data
+        print(f"\n{'='*70}")
+        print(f"WALK-FORWARD SMART CONFIGURATION")
+        print(f"{'='*70}")
+        print(f"Ticker: {self.current_ticker}")
+        print(f"Timeframe: {finest_tf}")
+        print(f"Available data: {available_days} days ({len(df_check)} bars)")
+        print(f"Date range: {dt_check.min().date()} to {dt_check.max().date()}")
+        
+        # Calculate optimal settings based on available data
+        if available_days < 60:
+            # Very limited data - use tiny windows
+            recommended_train = max(14, available_days // 3)
+            recommended_test = max(7, available_days // 6)
+            recommended_trials = 300
+            warning_level = "⚠️  LIMITED DATA"
+        elif available_days < 120:
+            # Limited data (typical for hourly YF)
+            recommended_train = max(30, available_days // 3)
+            recommended_test = max(10, available_days // 6)
+            recommended_trials = 400
+            warning_level = "⚠️  MODEST DATA"
+        elif available_days < 365:
+            # Decent amount of data
+            recommended_train = 90
+            recommended_test = 20
+            recommended_trials = 500
+            warning_level = "✅ GOOD DATA"
+        else:
+            # Lots of data
+            recommended_train = 180
+            recommended_test = 30
+            recommended_trials = 500
+            warning_level = "✅ EXCELLENT DATA"
+        
+        max_possible_windows = max(0, (available_days - recommended_train) // recommended_test)
+        
+        print(f"\n{warning_level}")
+        print(f"Recommended settings for {available_days} days:")
+        print(f"  • Train Days: {recommended_train}")
+        print(f"  • Test Days: {recommended_test}")
+        print(f"  • Trials: {recommended_trials}")
+        print(f"  • Expected Windows: {max_possible_windows}")
+        
+        if max_possible_windows < 2:
+            print(f"\n⚠️  WARNING: Only {max_possible_windows} window(s) possible!")
+            print(f"Walk-forward works best with 3+ windows.")
+            print(f"Consider using daily timeframe for more history.")
+        
+        # Get current user settings
+        user_train = self.wf_train_days_spin.value()
+        user_test = self.wf_test_days_spin.value()
+        user_trials = self.wf_trials_spin.value()
+        
+        # Check if user settings will work
+        user_windows = max(0, (available_days - user_train) // user_test)
+        user_required = user_train + user_test
+        
+        print(f"\nYour current settings:")
+        print(f"  • Train Days: {user_train}")
+        print(f"  • Test Days: {user_test}")
+        print(f"  • Trials: {user_trials}")
+        print(f"  • Required: {user_required} days")
+        print(f"  • Possible Windows: {user_windows}")
+        
+        # Decide whether to use user settings or recommend changes
+        if user_windows < 1:
+            # User settings won't work - force recommended
+            use_recommended = True
+            reason = "Your settings require more data than available!"
+            print(f"\n❌ {reason}")
+            print(f"Will use recommended settings instead.")
+        elif user_windows < 2 and max_possible_windows >= 2:
+            # User settings are suboptimal
+            use_recommended = None  # Ask user
+            reason = "Your settings will only create 1 window."
+        else:
+            # User settings are OK
+            use_recommended = False
+            reason = None
+            print(f"\n✅ Your settings look good!")
+        
+        print(f"{'='*70}\n")
+        
+        # Show dialog with options
+        if use_recommended is None:
+            # Ask user which settings to use
+            reply = QMessageBox.question(
+                self, "Optimize Settings?",
+                f"{warning_level}\n\n"
+                f"Available Data: {available_days} days of {finest_tf}\n\n"
+                f"📊 RECOMMENDED SETTINGS:\n"
+                f"  • Train: {recommended_train} days\n"
+                f"  • Test: {recommended_test} days\n"
+                f"  • Trials: {recommended_trials}\n"
+                f"  • Windows: {max_possible_windows}\n"
+                f"  • Runtime: ~{(max_possible_windows * recommended_trials) // 100}-{(max_possible_windows * recommended_trials) // 50} min\n\n"
+                f"⚙️  YOUR CURRENT SETTINGS:\n"
+                f"  • Train: {user_train} days\n"
+                f"  • Test: {user_test} days\n"
+                f"  • Trials: {user_trials}\n"
+                f"  • Windows: {user_windows}\n"
+                f"  • Runtime: ~{(user_windows * user_trials) // 100}-{(user_windows * user_trials) // 50} min\n\n"
+                f"Use recommended settings? (Click No to use your settings)",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel
+            )
+            
+            if reply == QMessageBox.StandardButton.Cancel:
+                return
+            elif reply == QMessageBox.StandardButton.Yes:
+                use_recommended = True
+            else:
+                use_recommended = False
+        
+        elif use_recommended:
+            # Must use recommended
+            reply = QMessageBox.information(
+                self, "Auto-Configuration Required",
+                f"{warning_level}\n\n"
+                f"Available Data: {available_days} days of {finest_tf}\n\n"
+                f"Your settings require {user_required} days but you only have {available_days} days.\n\n"
+                f"🎯 USING OPTIMIZED SETTINGS:\n"
+                f"  • Train: {recommended_train} days\n"
+                f"  • Test: {recommended_test} days\n"
+                f"  • Trials: {recommended_trials}\n"
+                f"  • Windows: {max_possible_windows}\n"
+                f"  • Runtime: ~{(max_possible_windows * recommended_trials) // 100}-{(max_possible_windows * recommended_trials) // 50} min\n\n"
+                f"Continue?",
+                QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel
+            )
+            
+            if reply == QMessageBox.StandardButton.Cancel:
+                return
+        
+        else:
+            # User settings are fine, just confirm
+            reply = QMessageBox.question(
+                self, "Confirm Walk-Forward",
+                f"Walk-forward analysis configuration:\n\n"
+                f"• Timeframe: {finest_tf}\n"
+                f"• Data: {available_days} days\n"
+                f"• Train: {user_train} days\n"
+                f"• Test: {user_test} days\n"
+                f"• Trials: {user_trials} per window\n"
+                f"• Windows: {user_windows}\n"
+                f"• Estimated time: {(user_windows * user_trials) // 100}-{(user_windows * user_trials) // 50} minutes\n\n"
+                f"Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+        
+        # Set final parameters
+        if use_recommended:
+            final_train = recommended_train
+            final_test = recommended_test
+            final_trials = recommended_trials
+            print(f"✅ Using RECOMMENDED settings: train={final_train}, test={final_test}, trials={final_trials}")
+        else:
+            final_train = user_train
+            final_test = user_test
+            final_trials = user_trials
+            print(f"✅ Using YOUR settings: train={final_train}, test={final_test}, trials={final_trials}")
+        
+        # Disable button during analysis
+        self.walk_forward_btn.setEnabled(False)
+        self.walk_forward_btn.setText("Running Walk-Forward...")
+        self.start_btn.setEnabled(False)
+
+        try:
+            print(f"\n{'='*70}")
+            print(f"STARTING WALK-FORWARD ANALYSIS")
+            print(f"{'='*70}")
+
+            # Prepare optimizer kwargs
+            mn1_range = (self.mn1_min.value(), self.mn1_max.value())
+            mn2_range = (self.mn2_min.value(), self.mn2_max.value())
+            entry_range = (self.entry_min.value(), self.entry_max.value())
+            exit_range = (self.exit_min.value(), self.exit_max.value())
+
+            time_cycle_ranges = (
+                (self.on_min.value(), self.on_max.value()),
+                (self.off_min.value(), self.off_max.value()),
+                (0, self.on_max.value() + self.off_max.value())
+            )
+
+            objective_map = {
+                "Percent Gain": "percent_gain",
+                "Sortino Ratio": "sortino",
+                "Min Drawdown": "drawdown",
+                "Profit Factor": "profit_factor"
+            }
+            objective_type = objective_map[self.objective_combo.currentText()]
+
+            optimizer_kwargs = {
+                'n_trials': final_trials,
+                'time_cycle_ranges': time_cycle_ranges,
+                'mn1_range': mn1_range,
+                'mn2_range': mn2_range,
+                'entry_range': entry_range,
+                'exit_range': exit_range,
+                'ticker': self.current_ticker,
+                'objective_type': objective_type,
+                'timeframes': selected_tfs,
+                'optimize_equity_curve': self.equity_curve_check.isChecked(),
+                'batch_size': self.batch_spin.value(),
+                'transaction_costs': self.transaction_costs
+            }
+
+            # Import here to avoid circular import
+            from optimization import MultiTimeframeOptimizer
+
+            # Run walk-forward analysis
+            results = WalkForwardAnalyzer.run_walk_forward(
+                optimizer_class=MultiTimeframeOptimizer,
+                df_dict=self.df_dict_full,  # Use full dataset
+                train_days=final_train,
+                test_days=final_test,
+                min_trades=5,  # Lower threshold for limited data
+                **optimizer_kwargs
+            )
+
+            # Generate report
+            report = WalkForwardAnalyzer.generate_walk_forward_report(results)
+            print(report)
+
+            # Create plot
+            fig = WalkForwardAnalyzer.plot_walk_forward_results(
+                results,
+                ticker=self.current_ticker
+            )
+
+            # Save plot
+            filename = f"{self.current_ticker}_walk_forward.png"
+            fig.savefig(filename, dpi=150, facecolor='#121212', edgecolor='none')
+            print(f"✅ Saved walk-forward plot to {filename}")
+
+            # Show plot
+            plt.show()
+
+            # Show summary message
+            if results.is_overfit:
+                icon = QMessageBox.Icon.Critical
+                title = "⚠️ Overfitting Detected!"
+                summary = (
+                    f"Walk-Forward Analysis Complete\n\n"
+                    f"❌ STRATEGY IS LIKELY OVERFIT\n\n"
+                    f"📊 Results:\n"
+                    f"   In-Sample Avg: {results.avg_in_sample_return:+.2f}%\n"
+                    f"   Out-of-Sample Avg: {results.avg_out_of_sample_return:+.2f}%\n"
+                    f"   Efficiency: {results.efficiency_ratio:.2f}\n"
+                    f"   Degradation: {results.return_degradation:.1f}%\n\n"
+                    f"⚠️ DO NOT TRADE THIS STRATEGY LIVE\n\n"
+                    f"See console for detailed report."
+                )
+            elif results.efficiency_ratio > 0.7:
+                icon = QMessageBox.Icon.Information
+                title = "✅ Strategy Appears Robust"
+                summary = (
+                    f"Walk-Forward Analysis Complete\n\n"
+                    f"✅ STRATEGY PASSES ROBUSTNESS TESTS\n\n"
+                    f"📊 Results:\n"
+                    f"   In-Sample Avg: {results.avg_in_sample_return:+.2f}%\n"
+                    f"   Out-of-Sample Avg: {results.avg_out_of_sample_return:+.2f}%\n"
+                    f"   Efficiency: {results.efficiency_ratio:.2f}\n"
+                    f"   Consistency: {results.consistency*100:.1f}%\n\n"
+                    f"✅ Ready for paper trading!\n\n"
+                    f"See console for detailed report."
+                )
+            else:
+                icon = QMessageBox.Icon.Warning
+                title = "⚠️ Mixed Results"
+                summary = (
+                    f"Walk-Forward Analysis Complete\n\n"
+                    f"⚠️ STRATEGY SHOWS MIXED RESULTS\n\n"
+                    f"📊 Results:\n"
+                    f"   In-Sample Avg: {results.avg_in_sample_return:+.2f}%\n"
+                    f"   Out-of-Sample Avg: {results.avg_out_of_sample_return:+.2f}%\n"
+                    f"   Efficiency: {results.efficiency_ratio:.2f}\n"
+                    f"   Degradation: {results.return_degradation:.1f}%\n\n"
+                    f"⚠️ Use with caution\n\n"
+                    f"See console for detailed report."
+                )
+
+            QMessageBox(icon, title, summary, QMessageBox.StandardButton.Ok, self).exec()
+
+            # Save results to CSV
+            results_df = pd.DataFrame({
+                'Window': range(1, len(results.in_sample_returns) + 1),
+                'IS_Return_%': results.in_sample_returns,
+                'OOS_Return_%': results.out_of_sample_returns,
+                'Train_Start': [d[0] for d in results.window_dates],
+                'Train_End': [d[1] for d in results.window_dates],
+                'Test_Start': [d[2] for d in results.window_dates],
+                'Test_End': [d[3] for d in results.window_dates]
+            })
+        
+            csv_filename = f"{self.current_ticker}_walk_forward_results.csv"
+            results_df.to_csv(csv_filename, index=False)
+            print(f"✅ Saved results to {csv_filename}")
+
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Walk-Forward Error",
+                f"Failed to run walk-forward analysis:\n{str(e)}"
+            )
+            import traceback
+            traceback.print_exc()
+
+        finally:
+            # Re-enable button
+            self.walk_forward_btn.setEnabled(True)
+            self.walk_forward_btn.setText("📊 Run Walk-Forward Analysis")
+            self.start_btn.setEnabled(True)
+    
     def _add_live_trading_controls(self, layout: QVBoxLayout):
         """Add live trading controls"""
         alpaca_group = QGroupBox("🔴 Live Trading")
@@ -679,6 +1254,8 @@ class MainWindow(QMainWindow):
                 tf_counts += f", {len(df_dict['5min'])}x5m"
             self.ticker_input.setText(f"{symbol} ({tf_counts} max)")
             
+            
+
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load: {str(e)}")
         finally:
@@ -812,6 +1389,8 @@ class MainWindow(QMainWindow):
         self.phase_label.setText("✓ Optimization Complete!")
         self.phase_info_label.setText("✓ All phases completed successfully")
         
+        self.walk_forward_btn.setEnabled(True)
+
         # Enable live trading
         if ALPACA_AVAILABLE:
             self.live_trading_btn.setEnabled(True)

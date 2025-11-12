@@ -74,11 +74,11 @@ class MonteCarloSimulator:
         
         for _ in range(n_simulations):
             # Randomly shuffle trade order
-            shuffled_returns = np.random.permutation(returns)
+            sampled_returns = np.random.choice(returns, size=len(returns), replace=True)
             
             # Calculate equity curve for this sequence
             eq_curve = MonteCarloSimulator._calculate_equity_curve(
-                shuffled_returns, initial_equity
+                sampled_returns, initial_equity
             )
             
             final_equities.append(eq_curve[-1])
@@ -196,12 +196,12 @@ class MonteCarloSimulator:
         final_equities_stopped = []
         
         for _ in range(n_simulations):
-            shuffled_returns = np.random.permutation(returns)
+            sampled_returns = np.random.permutation(returns)
             equity = initial_equity
             peak = initial_equity
             stopped = False
             
-            for ret in shuffled_returns:
+            for ret in sampled_returns:
                 equity *= (1 + ret)
                 peak = max(peak, equity)
                 
@@ -297,7 +297,20 @@ class MonteCarloSimulator:
         ax2.set_facecolor('#121212')
         
         final_equities = [sim[-1] for sim in results.simulations]
-        ax2.hist(final_equities, bins=50, color='#2979ff', alpha=0.7, edgecolor='white')
+        # ADAPTIVE BIN CALCULATION
+        data_range = np.ptp(final_equities)
+        n_unique = len(np.unique(final_equities))
+
+        if data_range < 1e-10 or n_unique < 5:
+            n_bins = min(n_unique, 10)
+        else:
+            sturges = int(np.ceil(np.log2(len(final_equities)) + 1))
+            n_bins = min(50, max(10, sturges, n_unique // 2))
+
+        try:
+            ax2.hist(final_equities, bins=n_bins, color='#2979ff', alpha=0.7, edgecolor='white')
+        except ValueError:
+            ax2.hist(final_equities, bins='auto', color='#2979ff', alpha=0.7, edgecolor='white')
         
         # Add vertical lines for statistics
         ax2.axvline(results.original_equity, color='#00ff00', linestyle='--', 
