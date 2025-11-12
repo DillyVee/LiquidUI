@@ -1,0 +1,380 @@
+"""
+Monte Carlo Simulation for Strategy Robustness Testing
+
+Monte Carlo methods randomize trade sequences to assess:
+1. How sensitive is the strategy to trade order?
+2. What's the range of possible outcomes?
+3. How likely is the strategy to meet expectations?
+"""
+import numpy as np
+import pandas as pd
+from typing import List, Dict, Tuple, Optional
+import matplotlib.pyplot as plt
+from dataclasses import dataclass
+
+
+@dataclass
+class MonteCarloResults:
+    """Results from Monte Carlo simulation"""
+    original_equity: float
+    mean_equity: float
+    median_equity: float
+    percentile_5: float
+    percentile_95: float
+    std_dev: float
+    min_equity: float
+    max_equity: float
+    probability_profit: float
+    simulations: List[np.ndarray]
+
+
+class MonteCarloSimulator:
+    """
+    Monte Carlo simulation for backtesting validation
+    
+    Two main approaches:
+    1. Trade Randomization: Randomly reorder trades
+    2. Return Bootstrap: Resample trade returns with replacement
+    """
+    
+    @staticmethod
+    def simulate_trade_randomization(
+        trades: List[Dict],
+        n_simulations: int = 1000,
+        initial_equity: float = 1000.0
+    ) -> MonteCarloResults:
+        """
+        Randomize trade order to see range of outcomes
+        
+        Method: Shuffle the order of trades randomly and recalculate equity
+        
+        Args:
+            trades: List of trade dictionaries with 'Percent_Change'
+            n_simulations: Number of random shuffles
+            initial_equity: Starting capital
+            
+        Returns:
+            MonteCarloResults object
+        """
+        if not trades or len(trades) == 0:
+            raise ValueError("No trades provided for Monte Carlo simulation")
+        
+        # Extract returns
+        returns = np.array([trade['Percent_Change'] / 100.0 for trade in trades])
+        
+        # Original equity curve
+        original_equity_curve = MonteCarloSimulator._calculate_equity_curve(
+            returns, initial_equity
+        )
+        original_final = original_equity_curve[-1]
+        
+        # Run simulations
+        final_equities = []
+        all_curves = []
+        
+        for _ in range(n_simulations):
+            # Randomly shuffle trade order
+            shuffled_returns = np.random.permutation(returns)
+            
+            # Calculate equity curve for this sequence
+            eq_curve = MonteCarloSimulator._calculate_equity_curve(
+                shuffled_returns, initial_equity
+            )
+            
+            final_equities.append(eq_curve[-1])
+            all_curves.append(eq_curve)
+        
+        final_equities = np.array(final_equities)
+        
+        # Calculate statistics
+        return MonteCarloResults(
+            original_equity=original_final,
+            mean_equity=np.mean(final_equities),
+            median_equity=np.median(final_equities),
+            percentile_5=np.percentile(final_equities, 5),
+            percentile_95=np.percentile(final_equities, 95),
+            std_dev=np.std(final_equities),
+            min_equity=np.min(final_equities),
+            max_equity=np.max(final_equities),
+            probability_profit=np.mean(final_equities > initial_equity),
+            simulations=all_curves
+        )
+    
+    @staticmethod
+    def simulate_bootstrap(
+        trades: List[Dict],
+        n_simulations: int = 1000,
+        initial_equity: float = 1000.0,
+        n_trades_per_sim: Optional[int] = None
+    ) -> MonteCarloResults:
+        """
+        Bootstrap resampling: randomly sample trades with replacement
+        
+        Method: Create new trade sequences by sampling from original trades
+        Useful when you want to test with different trade counts
+        
+        Args:
+            trades: List of trade dictionaries
+            n_simulations: Number of bootstrap samples
+            initial_equity: Starting capital
+            n_trades_per_sim: Trades per simulation (None = same as original)
+            
+        Returns:
+            MonteCarloResults object
+        """
+        if not trades or len(trades) == 0:
+            raise ValueError("No trades provided for Monte Carlo simulation")
+        
+        returns = np.array([trade['Percent_Change'] / 100.0 for trade in trades])
+        
+        if n_trades_per_sim is None:
+            n_trades_per_sim = len(returns)
+        
+        # Original equity
+        original_equity_curve = MonteCarloSimulator._calculate_equity_curve(
+            returns, initial_equity
+        )
+        original_final = original_equity_curve[-1]
+        
+        # Run simulations
+        final_equities = []
+        all_curves = []
+        
+        for _ in range(n_simulations):
+            # Bootstrap sample (with replacement)
+            sampled_returns = np.random.choice(returns, size=n_trades_per_sim, replace=True)
+            
+            # Calculate equity curve
+            eq_curve = MonteCarloSimulator._calculate_equity_curve(
+                sampled_returns, initial_equity
+            )
+            
+            final_equities.append(eq_curve[-1])
+            all_curves.append(eq_curve)
+        
+        final_equities = np.array(final_equities)
+        
+        return MonteCarloResults(
+            original_equity=original_final,
+            mean_equity=np.mean(final_equities),
+            median_equity=np.median(final_equities),
+            percentile_5=np.percentile(final_equities, 5),
+            percentile_95=np.percentile(final_equities, 95),
+            std_dev=np.std(final_equities),
+            min_equity=np.min(final_equities),
+            max_equity=np.max(final_equities),
+            probability_profit=np.mean(final_equities > initial_equity),
+            simulations=all_curves
+        )
+    
+    @staticmethod
+    def simulate_with_drawdown_constraint(
+        trades: List[Dict],
+        n_simulations: int = 1000,
+        initial_equity: float = 1000.0,
+        max_drawdown_pct: float = 20.0
+    ) -> Dict:
+        """
+        Monte Carlo with stop-loss: Stop simulation if drawdown exceeds threshold
+        
+        Tests: How often would risk management have stopped the strategy?
+        
+        Args:
+            trades: List of trade dictionaries
+            n_simulations: Number of simulations
+            initial_equity: Starting capital
+            max_drawdown_pct: Stop if drawdown exceeds this (e.g., 20.0 = 20%)
+            
+        Returns:
+            Dictionary with results including stop-out statistics
+        """
+        returns = np.array([trade['Percent_Change'] / 100.0 for trade in trades])
+        
+        stopped_count = 0
+        completed_count = 0
+        final_equities_completed = []
+        final_equities_stopped = []
+        
+        for _ in range(n_simulations):
+            shuffled_returns = np.random.permutation(returns)
+            equity = initial_equity
+            peak = initial_equity
+            stopped = False
+            
+            for ret in shuffled_returns:
+                equity *= (1 + ret)
+                peak = max(peak, equity)
+                
+                # Check drawdown
+                drawdown = (peak - equity) / peak * 100
+                
+                if drawdown > max_drawdown_pct:
+                    stopped = True
+                    stopped_count += 1
+                    final_equities_stopped.append(equity)
+                    break
+            
+            if not stopped:
+                completed_count += 1
+                final_equities_completed.append(equity)
+        
+        return {
+            'stopped_count': stopped_count,
+            'completed_count': completed_count,
+            'stop_out_rate': stopped_count / n_simulations,
+            'avg_equity_completed': np.mean(final_equities_completed) if final_equities_completed else 0,
+            'avg_equity_stopped': np.mean(final_equities_stopped) if final_equities_stopped else 0,
+            'max_drawdown_threshold': max_drawdown_pct
+        }
+    
+    @staticmethod
+    def _calculate_equity_curve(returns: np.ndarray, initial_equity: float) -> np.ndarray:
+        """Calculate equity curve from returns"""
+        equity_curve = np.zeros(len(returns) + 1)
+        equity_curve[0] = initial_equity
+        
+        for i, ret in enumerate(returns):
+            equity_curve[i + 1] = equity_curve[i] * (1 + ret)
+        
+        return equity_curve
+    
+    @staticmethod
+    def plot_monte_carlo_results(
+        results: MonteCarloResults,
+        title: str = "Monte Carlo Simulation Results",
+        max_paths: int = 100
+    ):
+        """
+        Plot Monte Carlo simulation results
+        
+        Args:
+            results: MonteCarloResults object
+            title: Plot title
+            max_paths: Maximum number of paths to show (avoid clutter)
+        """
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+        fig.patch.set_facecolor('#121212')
+        
+        # Plot 1: Equity curves (sample of paths)
+        ax1.set_facecolor('#121212')
+        
+        # Show random sample of paths
+        n_paths = min(max_paths, len(results.simulations))
+        sample_indices = np.random.choice(len(results.simulations), n_paths, replace=False)
+        
+        for idx in sample_indices:
+            ax1.plot(results.simulations[idx], color='#2979ff', alpha=0.1, linewidth=0.5)
+        
+        # Show percentile bands
+        # Calculate percentiles at each time step
+        if results.simulations:
+            n_steps = len(results.simulations[0])
+            percentile_5_curve = np.zeros(n_steps)
+            percentile_95_curve = np.zeros(n_steps)
+            median_curve = np.zeros(n_steps)
+            
+            for i in range(n_steps):
+                values = [sim[i] for sim in results.simulations]
+                percentile_5_curve[i] = np.percentile(values, 5)
+                percentile_95_curve[i] = np.percentile(values, 95)
+                median_curve[i] = np.median(values)
+            
+            ax1.fill_between(
+                range(n_steps), percentile_5_curve, percentile_95_curve,
+                color='#FFA500', alpha=0.3, label='5-95% Range'
+            )
+            ax1.plot(median_curve, color='#FFA500', linewidth=2, label='Median Path')
+        
+        ax1.axhline(y=1000, color='#888888', linestyle='--', alpha=0.5, label='Break-even')
+        ax1.set_xlabel('Trade Number', color='white')
+        ax1.set_ylabel('Equity ($)', color='white')
+        ax1.set_title('Monte Carlo Equity Paths', color='white')
+        ax1.tick_params(colors='white')
+        ax1.legend(loc='upper left')
+        ax1.grid(True, alpha=0.2)
+        
+        # Plot 2: Distribution of final equities
+        ax2.set_facecolor('#121212')
+        
+        final_equities = [sim[-1] for sim in results.simulations]
+        ax2.hist(final_equities, bins=50, color='#2979ff', alpha=0.7, edgecolor='white')
+        
+        # Add vertical lines for statistics
+        ax2.axvline(results.original_equity, color='#00ff00', linestyle='--', 
+                   linewidth=2, label=f'Original: ${results.original_equity:.0f}')
+        ax2.axvline(results.median_equity, color='#FFA500', linestyle='-', 
+                   linewidth=2, label=f'Median: ${results.median_equity:.0f}')
+        ax2.axvline(results.percentile_5, color='#ff4444', linestyle=':', 
+                   linewidth=2, label=f'5%: ${results.percentile_5:.0f}')
+        ax2.axvline(results.percentile_95, color='#44ff44', linestyle=':', 
+                   linewidth=2, label=f'95%: ${results.percentile_95:.0f}')
+        
+        ax2.set_xlabel('Final Equity ($)', color='white')
+        ax2.set_ylabel('Frequency', color='white')
+        ax2.set_title('Distribution of Final Equity', color='white')
+        ax2.tick_params(colors='white')
+        ax2.legend(loc='upper right')
+        ax2.grid(True, alpha=0.2)
+        
+        plt.suptitle(title, color='white', fontsize=14, fontweight='bold')
+        plt.tight_layout()
+        
+        return fig
+    
+    @staticmethod
+    def generate_monte_carlo_report(results: MonteCarloResults, initial_equity: float = 1000.0) -> str:
+        """Generate text report from Monte Carlo results"""
+        original_return = (results.original_equity / initial_equity - 1) * 100
+        mean_return = (results.mean_equity / initial_equity - 1) * 100
+        median_return = (results.median_equity / initial_equity - 1) * 100
+        
+        report = f"""
+╔══════════════════════════════════════════════════════════╗
+║          MONTE CARLO SIMULATION REPORT                   ║
+╚══════════════════════════════════════════════════════════╝
+
+📊 ORIGINAL BACKTEST:
+   Final Equity:  ${results.original_equity:,.2f}
+   Return:        {original_return:+.2f}%
+
+📈 MONTE CARLO RESULTS ({len(results.simulations)} simulations):
+   Mean Equity:   ${results.mean_equity:,.2f} ({mean_return:+.2f}%)
+   Median Equity: ${results.median_equity:,.2f} ({median_return:+.2f}%)
+   
+🎯 CONFIDENCE INTERVALS:
+   95% Confidence: ${results.percentile_5:,.2f} to ${results.percentile_95:,.2f}
+   Range:          ${results.max_equity - results.min_equity:,.2f}
+   Std Dev:        ${results.std_dev:,.2f}
+   
+⚠️  RISK ASSESSMENT:
+   Best Case:      ${results.max_equity:,.2f}
+   Worst Case:     ${results.min_equity:,.2f}
+   Probability of Profit: {results.probability_profit * 100:.1f}%
+
+🎲 INTERPRETATION:
+"""
+        
+        # Add interpretation
+        if results.probability_profit < 0.5:
+            report += "   ❌ Strategy is more likely to LOSE than win in random scenarios\n"
+        elif results.probability_profit < 0.7:
+            report += "   ⚠️  Strategy has moderate probability of profit\n"
+        elif results.probability_profit < 0.9:
+            report += "   ✅ Strategy has good probability of profit\n"
+        else:
+            report += "   ✅✅ Strategy is very robust to trade randomization\n"
+        
+        if results.original_equity > results.percentile_95:
+            report += "   🎉 Original result is in TOP 5% (may be lucky!)\n"
+        elif results.original_equity < results.percentile_5:
+            report += "   ⚠️  Original result is in BOTTOM 5% (may be unlucky!)\n"
+        else:
+            report += "   ✓ Original result is within normal range\n"
+        
+        deviation = abs(results.original_equity - results.median_equity) / results.std_dev
+        if deviation > 2:
+            report += "   ⚠️  Original result is >2 std devs from median (unusual!)\n"
+        
+        report += "\n" + "═" * 60 + "\n"
+        
+        return report
