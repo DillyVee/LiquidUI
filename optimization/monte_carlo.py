@@ -47,6 +47,7 @@ class MonteCarloSimulator:
         Randomize trade order to see range of outcomes
         
         Method: Shuffle the order of trades randomly and recalculate equity
+        (WITHOUT replacement - true randomization)
         
         Args:
             trades: List of trade dictionaries with 'Percent_Change'
@@ -62,7 +63,7 @@ class MonteCarloSimulator:
         # Extract returns
         returns = np.array([trade['Percent_Change'] / 100.0 for trade in trades])
         
-        # Original equity curve
+        # Original equity curve (trades in actual order)
         original_equity_curve = MonteCarloSimulator._calculate_equity_curve(
             returns, initial_equity
         )
@@ -73,10 +74,10 @@ class MonteCarloSimulator:
         all_curves = []
         
         for _ in range(n_simulations):
-            # Randomly shuffle trade order
-            sampled_returns = np.random.choice(returns, size=len(returns), replace=True)
+            # ✅ TRUE RANDOMIZATION - shuffle without replacement
+            sampled_returns = np.random.permutation(returns)
             
-            # Calculate equity curve for this sequence
+            # Calculate equity curve for this shuffled sequence
             eq_curve = MonteCarloSimulator._calculate_equity_curve(
                 sampled_returns, initial_equity
             )

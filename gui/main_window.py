@@ -592,13 +592,13 @@ Add this as a method to MainWindow and call it before running walk-forward
         mc_layout.addWidget(self.monte_carlo_btn)
         mc_layout.addStretch()
 
-        layout.addLayout(mc_layout)
+        layout.addLayout(mc_layout)  # ✅ THIS WAS MISSING!
 
         # Row 3: Walk-Forward button
         wf_layout = QHBoxLayout()
 
         self.walk_forward_btn = QPushButton("📊 Run Walk-Forward Analysis")
-        self.walk_forward_btn.setEnabled(False)  # Enabled after data load
+        self.walk_forward_btn.setEnabled(False)
         self.walk_forward_btn.setToolTip(
             "Test strategy on unseen data\n"
             "Detects overfitting via train/test splits\n"
