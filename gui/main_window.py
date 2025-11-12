@@ -11,7 +11,8 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import QThread, pyqtSignal
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from PyQt6.QtGui import QFont
 
 from optimization.walk_forward import WalkForwardAnalyzer, WalkForwardResults
 
@@ -379,24 +380,106 @@ Add this as a method to MainWindow and call it before running walk-forward
         controls_layout.addWidget(QLabel("Batch Size:"))
         controls_layout.addWidget(self.batch_spin)
         
-        # Objective
-        self.objective_combo = QComboBox()
-        self.objective_combo.addItems([
-            "Percent Gain",
-            "Sortino Ratio", 
-            "Min Drawdown",
-            "Profit Factor"
-        ])
-        controls_layout.addWidget(QLabel("Objective:"))
-        controls_layout.addWidget(self.objective_combo)
-
-        # Results display
-        self.best_label = QLabel("Best Result: N/A")
+        # REMOVED: Objective dropdown (always uses composite)
+        
+        # Composite score display (prominent)
+        self.composite_label = QLabel("Composite Score: N/A")
+        self.composite_label.setStyleSheet(
+            "color: #2979ff; font-size: 12pt; font-weight: bold;"
+        )
+        controls_layout.addWidget(self.composite_label)
+        
+        # Traditional metrics
+        self.best_label = QLabel("Return: N/A")
         self.buyhold_label = QLabel("Buy & Hold: N/A")
         controls_layout.addWidget(self.best_label)
         controls_layout.addWidget(self.buyhold_label)
         
         layout.addLayout(controls_layout)
+        
+        # Second row: PSR metrics
+        psr_layout = QHBoxLayout()
+        
+        self.psr_label = QLabel("PSR: N/A")
+        self.psr_label.setStyleSheet("color: #00ff88; font-size: 10pt;")
+        psr_layout.addWidget(self.psr_label)
+        
+        self.wfa_label = QLabel("WFA Sharpe: N/A")
+        self.wfa_label.setStyleSheet("color: #00ff88; font-size: 10pt;")
+        psr_layout.addWidget(self.wfa_label)
+        
+        self.pbo_label = QLabel("PBO: N/A")
+        self.pbo_label.setStyleSheet("color: #ffaa00; font-size: 10pt;")
+        psr_layout.addWidget(self.pbo_label)
+        
+        self.turnover_label = QLabel("Turnover: N/A")
+        self.turnover_label.setStyleSheet("color: #ffaa00; font-size: 10pt;")
+        psr_layout.addWidget(self.turnover_label)
+        
+        psr_layout.addStretch()
+        layout.addLayout(psr_layout)
+
+
+    # Update the start_optimization method to remove objective parameter:
+
+    def start_optimization(self):
+        """Start the optimization process"""
+        if not self.df_dict:
+            QMessageBox.warning(self, "Error", "Please load data first")
+            return
+
+        selected_tfs = [
+            tf for tf, cb in self.tf_checkboxes.items() 
+            if cb.isChecked() and tf in self.df_dict
+        ]
+
+        if not selected_tfs:
+            QMessageBox.warning(self, "Error", "Select at least one timeframe")
+            return
+
+        self.start_btn.setEnabled(False)
+        self.stop_btn.setEnabled(True)
+        self.progress_bar.setValue(0)
+        self.phase_label.setText("Initializing PSR Composite Optimization...")
+        self.phase_info_label.setText("Preparing composite optimization...")
+
+        # Gather parameters
+        mn1_range = (self.mn1_min.value(), self.mn1_max.value())
+        mn2_range = (self.mn2_min.value(), self.mn2_max.value())
+        entry_range = (self.entry_min.value(), self.entry_max.value())
+        exit_range = (self.exit_min.value(), self.exit_max.value())
+        
+        time_cycle_ranges = (
+            (self.on_min.value(), self.on_max.value()),
+            (self.off_min.value(), self.off_max.value()),
+            (0, self.on_max.value() + self.off_max.value())
+        )
+
+        optimize_equity_curve = self.equity_curve_check.isChecked()
+
+        # Create optimizer with PSR composite (no objective_type parameter)
+        self.worker = MultiTimeframeOptimizer(
+            self.df_dict, 
+            self.trials_spin.value(), 
+            time_cycle_ranges, 
+            mn1_range, mn2_range, entry_range, exit_range,
+            ticker=self.current_ticker,
+            timeframes=selected_tfs, 
+            optimize_equity_curve=optimize_equity_curve,
+            batch_size=self.batch_spin.value(),
+            transaction_costs=self.transaction_costs
+        )
+
+        # Connect signals
+        self.worker.progress.connect(self.progress_bar.setValue)
+        self.worker.new_best.connect(self.update_best_label)
+        self.worker.error.connect(self.show_error)
+        self.worker.phase_update.connect(self.update_phase_label)
+        self.worker.finished.connect(self.show_results)
+        self.worker.stopped = False
+
+        self.worker.start()
+
 
     def _add_parameter_ranges(self, layout: QVBoxLayout):
         """Add parameter range controls"""
@@ -1347,13 +1430,72 @@ Add this as a method to MainWindow and call it before running walk-forward
         self.phase_info_label.setText(f"Current: {phase_text}")
 
     def update_best_label(self, best_params: Dict):
-        """Update best result display"""
+        """Update best result display with PSR metrics"""
         self.best_params = best_params
         
-        # Build metrics text
-        metrics_text = f"Gain: {best_params['Percent_Gain_%']:.2f}%"
+        # Composite score (prominent)
+        if 'Composite_Score' in best_params:
+            comp_score = best_params['Composite_Score']
+            self.composite_label.setText(f"Composite Score: {comp_score:.3f}")
+            
+            # Color code based on score
+            if comp_score > 0.6:
+                color = "#00ff88"  # Green
+            elif comp_score > 0.3:
+                color = "#ffaa00"  # Orange
+            else:
+                color = "#ff4444"  # Red
+            
+            self.composite_label.setStyleSheet(
+                f"color: {color}; font-size: 12pt; font-weight: bold;"
+            )
+        
+        # PSR metrics
+        if 'PSR' in best_params:
+            psr = best_params['PSR']
+            psr_pct = psr * 100
+            
+            # Color code PSR
+            if psr > 0.95:
+                psr_color = "#00ff88"
+                psr_icon = "✅"
+            elif psr > 0.75:
+                psr_color = "#88ff88"
+                psr_icon = "✓"
+            elif psr > 0.50:
+                psr_color = "#ffaa00"
+                psr_icon = "⚠"
+            else:
+                psr_color = "#ff4444"
+                psr_icon = "❌"
+            
+            self.psr_label.setText(f"PSR: {psr_pct:.1f}% {psr_icon}")
+            self.psr_label.setStyleSheet(f"color: {psr_color}; font-size: 10pt;")
+        
+        if 'WFA_Sharpe' in best_params:
+            wfa = best_params['WFA_Sharpe']
+            wfa_color = "#00ff88" if wfa > 1.0 else "#ffaa00" if wfa > 0.5 else "#ff4444"
+            self.wfa_label.setText(f"WFA Sharpe: {wfa:.2f}")
+            self.wfa_label.setStyleSheet(f"color: {wfa_color}; font-size: 10pt;")
+        
+        if 'PBO' in best_params:
+            pbo = best_params['PBO']
+            pbo_pct = pbo * 100
+            pbo_color = "#00ff88" if pbo < 0.3 else "#ffaa00" if pbo < 0.5 else "#ff4444"
+            pbo_icon = "✅" if pbo < 0.3 else "⚠" if pbo < 0.5 else "❌"
+            self.pbo_label.setText(f"PBO: {pbo_pct:.1f}% {pbo_icon}")
+            self.pbo_label.setStyleSheet(f"color: {pbo_color}; font-size: 10pt;")
+        
+        if 'Annual_Turnover' in best_params:
+            turnover = best_params['Annual_Turnover']
+            to_color = "#00ff88" if turnover < 30 else "#ffaa00" if turnover < 100 else "#ff4444"
+            self.turnover_label.setText(f"Turnover: {turnover:.0f}/yr")
+            self.turnover_label.setStyleSheet(f"color: {to_color}; font-size: 10pt;")
+        
+        # Traditional metrics
+        metrics_text = f"Return: {best_params['Percent_Gain_%']:.2f}%"
         if 'Sortino_Ratio' in best_params:
-            metrics_text += f" | Sortino: {best_params['Sortino_Ratio']:.3f}"
+            metrics_text += f" | Sortino: {best_params['Sortino_Ratio']:.2f}"
         if 'Max_Drawdown_%' in best_params:
             metrics_text += f" | DD: {best_params['Max_Drawdown_%']:.2f}%"
         if 'Profit_Factor' in best_params:
@@ -1361,7 +1503,7 @@ Add this as a method to MainWindow and call it before running walk-forward
         if 'Trade_Count' in best_params:
             metrics_text += f" | Trades: {best_params['Trade_Count']}"
         
-        self.best_label.setText(f"Best: {metrics_text}")
+        self.best_label.setText(metrics_text)
         
         # Build parameter text
         param_lines = []
@@ -1375,11 +1517,156 @@ Add this as a method to MainWindow and call it before running walk-forward
         
         self.best_params_label.setText(" | ".join(param_lines))
 
+    def _add_psr_tooltips(self):
+        """Add helpful tooltips explaining PSR metrics"""
+        self.psr_label.setToolTip(
+            "Probabilistic Sharpe Ratio\n"
+            "Probability that true Sharpe > 0\n\n"
+            ">95%: Very confident\n"
+            ">75%: Good confidence\n"
+            "<50%: Likely false positive"
+        )
+        
+        self.wfa_label.setToolTip(
+            "Walk-Forward Analysis Sharpe\n"
+            "Average out-of-sample Sharpe\n\n"
+            ">1.5: Excellent\n"
+            ">1.0: Good\n"
+            "<0.5: Poor robustness"
+        )
+        
+        self.pbo_label.setToolTip(
+            "Probability of Backtest Overfitting\n"
+            "Likelihood result is curve-fitted\n\n"
+            "<30%: Low overfitting risk\n"
+            "<50%: Moderate risk\n"
+            ">70%: High overfitting risk"
+        )
+        
+        self.turnover_label.setToolTip(
+            "Annual Turnover\n"
+            "Number of trades per year\n\n"
+            "<30: Low frequency\n"
+            "<100: Moderate\n"
+            ">100: High frequency (costs matter!)"
+        )
+        
+        self.composite_label.setToolTip(
+            "Composite Optimization Score\n"
+            "Weighted combination of:\n"
+            "• PSR (40%)\n"
+            "• WFA Sharpe (30%)\n"
+            "• PBO penalty (15%)\n"
+            "• Turnover penalty (10%)\n"
+            "• Drawdown penalty (5%)\n\n"
+            ">0.6: Excellent\n"
+            ">0.3: Good\n"
+            "<0.3: Needs improvement"
+        )
+
+    def __init__(self):
+        super().__init__()
+        # ... existing init code ...
+        
+        # After init_ui():
+        self._add_psr_tooltips()
+
+    def show_psr_report(self):
+        """Show detailed PSR composite metrics report"""
+        if not self.best_params:
+            QMessageBox.warning(self, "No Results", "Run optimization first")
+            return
+        
+        report = f"""
+    ╔════════════════════════════════════════════════════════╗
+    ║       PSR COMPOSITE OPTIMIZATION REPORT                ║
+    ╚════════════════════════════════════════════════════════╝
+
+    📊 COMPOSITE SCORE: {self.best_params.get('Composite_Score', 0):.3f}
+
+    🎯 COMPONENT SCORES:
+    {'─'*58}
+    Probabilistic Sharpe Ratio:  {self.best_params.get('PSR', 0)*100:.1f}%
+    {'✅ Very confident' if self.best_params.get('PSR', 0) > 0.95 else '✓ Good confidence' if self.best_params.get('PSR', 0) > 0.75 else '⚠ Moderate confidence' if self.best_params.get('PSR', 0) > 0.50 else '❌ Low confidence'}
+
+    Walk-Forward Sharpe:         {self.best_params.get('WFA_Sharpe', 0):.2f}
+    {'✅ Excellent robustness' if self.best_params.get('WFA_Sharpe', 0) > 1.5 else '✓ Good robustness' if self.best_params.get('WFA_Sharpe', 0) > 1.0 else '⚠ Moderate robustness' if self.best_params.get('WFA_Sharpe', 0) > 0.5 else '❌ Poor robustness'}
+
+    Probability of Overfitting:  {self.best_params.get('PBO', 0)*100:.1f}%
+    {'✅ Low overfitting risk' if self.best_params.get('PBO', 0) < 0.3 else '⚠ Moderate risk' if self.best_params.get('PBO', 0) < 0.5 else '❌ High overfitting risk'}
+
+    Annual Turnover:             {self.best_params.get('Annual_Turnover', 0):.0f} trades/year
+    {'✅ Low frequency' if self.best_params.get('Annual_Turnover', 0) < 30 else '✓ Moderate frequency' if self.best_params.get('Annual_Turnover', 0) < 100 else '⚠ High frequency'}
+
+    📈 TRADITIONAL METRICS:
+    {'─'*58}
+    Return:                      {self.best_params.get('Percent_Gain_%', 0):+.2f}%
+    Sortino Ratio:               {self.best_params.get('Sortino_Ratio', 0):.2f}
+    Max Drawdown:                {self.best_params.get('Max_Drawdown_%', 0):.2f}%
+    Profit Factor:               {self.best_params.get('Profit_Factor', 0):.2f}
+    Trade Count:                 {self.best_params.get('Trade_Count', 0)}
+
+    ✅ ASSESSMENT:
+    {'─'*58}
+    """
+        
+        # Overall assessment
+        comp_score = self.best_params.get('Composite_Score', 0)
+        psr = self.best_params.get('PSR', 0)
+        pbo = self.best_params.get('PBO', 1)
+        
+        if comp_score > 0.6 and psr > 0.75 and pbo < 0.5:
+            report += "✅ EXCELLENT - Strategy is robust and ready for paper trading\n"
+        elif comp_score > 0.3 and psr > 0.50:
+            report += "✓ GOOD - Strategy shows promise, monitor in paper trading\n"
+        elif pbo > 0.7:
+            report += "❌ OVERFIT - Strategy is likely curve-fitted to data\n"
+        elif psr < 0.5:
+            report += "❌ LOW CONFIDENCE - Performance may be due to luck\n"
+        else:
+            report += "⚠ MARGINAL - Use with caution, consider refinement\n"
+        
+        report += f"\n{'═'*58}\n"
+        
+        # Show in message box
+        msg = QMessageBox(self)
+        msg.setWindowTitle("PSR Composite Report")
+        msg.setText(report)
+        msg.setFont(QFont("Courier", 9))
+        msg.exec()
+
+    # Add button to show PSR report:
+    def _add_action_buttons(self, layout: QVBoxLayout):
+        """Add action buttons"""
+        btn_layout = QHBoxLayout()
+
+        self.start_btn = QPushButton("Start PSR Composite Optimization")
+        self.stop_btn = QPushButton("Stop")
+        self.stop_btn.setEnabled(False)
+        
+        # NEW: PSR Report button
+        self.psr_report_btn = QPushButton("📊 View PSR Report")
+        self.psr_report_btn.setEnabled(False)
+        self.psr_report_btn.clicked.connect(self.show_psr_report)
+        self.psr_report_btn.setToolTip("View detailed PSR composite metrics")
+
+        self.start_btn.clicked.connect(self.start_optimization)
+        self.stop_btn.clicked.connect(self.stop_optimization)
+
+        btn_layout.addWidget(self.start_btn)
+        btn_layout.addWidget(self.stop_btn)
+        btn_layout.addWidget(self.psr_report_btn)
+
+        layout.addLayout(btn_layout)
+        
+        # ... rest of the method (Monte Carlo, Walk-Forward buttons) ...
+
+
     def show_results(self, df_results: pd.DataFrame):
         """Display optimization results"""
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
-        
+        self.psr_report_btn.setEnabled(True)
         if df_results.empty:
             QMessageBox.information(self, "Complete", "No valid results")
             self.phase_label.setText("No results")
