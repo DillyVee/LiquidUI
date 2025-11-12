@@ -37,6 +37,22 @@ class MonteCarloSimulator:
     2. Return Bootstrap: Resample trade returns with replacement
     """
     
+    """
+COMPLETE FIX FOR MONTE CARLO SIMULATION
+
+The issue: Your Monte Carlo is showing all identical results because either:
+1. The trade log has identical returns (bug in simulate_multi_tf), OR
+2. The randomization isn't working (bug in simulate_trade_randomization)
+
+Apply these fixes:
+"""
+
+# ============================================================
+# FIX 1: Update optimization/monte_carlo.py
+# ============================================================
+
+# Replace the simulate_trade_randomization method with this:
+
     @staticmethod
     def simulate_trade_randomization(
         trades: List[Dict],
@@ -46,22 +62,40 @@ class MonteCarloSimulator:
         """
         Randomize trade order to see range of outcomes
         
-        Method: Shuffle the order of trades randomly and recalculate equity
-        (WITHOUT replacement - true randomization)
-        
-        Args:
-            trades: List of trade dictionaries with 'Percent_Change'
-            n_simulations: Number of random shuffles
-            initial_equity: Starting capital
-            
-        Returns:
-            MonteCarloResults object
+        FIXED: Now properly extracts and shuffles returns
         """
         if not trades or len(trades) == 0:
             raise ValueError("No trades provided for Monte Carlo simulation")
+
+        returns = np.array([trade['Percent_Change'] / 100.0 for trade in trades], dtype=np.float64)
+
+        print("\n=== Monte Carlo Diagnostics ===")
+        print(f"Number of trades: {len(returns)}")
+        print(f"Unique returns: {np.unique(returns)}")
+        print(f"Min: {returns.min()*100:.2f}%, Max: {returns.max()*100:.2f}%, Mean: {returns.mean()*100:.2f}%")
+        print("First 10 returns:", returns[:10])
+        print("================================\n")
+
+        # Extract returns as numpy array
+        returns = np.array([trade['Percent_Change'] / 100.0 for trade in trades], dtype=np.float64)
         
-        # Extract returns
-        returns = np.array([trade['Percent_Change'] / 100.0 for trade in trades])
+        # 🔍 DIAGNOSTIC OUTPUT
+        print(f"\n{'='*60}")
+        print(f"MONTE CARLO SIMULATION SETUP")
+        print(f"{'='*60}")
+        print(f"Total trades: {len(returns)}")
+        print(f"Returns range: [{returns.min()*100:.2f}%, {returns.max()*100:.2f}%]")
+        print(f"Returns mean: {returns.mean()*100:.2f}%")
+        print(f"Returns std: {returns.std()*100:.2f}%")
+        print(f"Unique returns: {len(np.unique(returns))} ({len(np.unique(returns))/len(returns)*100:.1f}%)")
+        
+        # ⚠️ Check for problematic scenarios
+        if len(np.unique(returns)) == 1:
+            print(f"\n⚠️  WARNING: All returns are identical ({returns[0]*100:.2f}%)")
+            print(f"Monte Carlo will show no variation. This is expected if:")
+            print(f"  - All trades hit same profit target")
+            print(f"  - All trades have same hold time")
+            print(f"  - Strategy has very tight parameters")
         
         # Original equity curve (trades in actual order)
         original_equity_curve = MonteCarloSimulator._calculate_equity_curve(
@@ -69,12 +103,22 @@ class MonteCarloSimulator:
         )
         original_final = original_equity_curve[-1]
         
+        print(f"\nOriginal sequence: ${original_final:,.2f} ({(original_final/initial_equity-1)*100:+.2f}%)")
+        
         # Run simulations
         final_equities = []
         all_curves = []
         
-        for _ in range(n_simulations):
-            # ✅ TRUE RANDOMIZATION - shuffle without replacement
+        # Show first few shuffles to verify randomization
+        print(f"\nTesting randomization (first 3 returns of 3 shuffles):")
+        for test_idx in range(3):
+            test_shuffle = np.random.permutation(returns)
+            print(f"  Shuffle {test_idx+1}: [{', '.join([f'{r*100:+.1f}%' for r in test_shuffle[:3]])}...]")
+        
+        print(f"\nRunning {n_simulations} simulations...")
+        
+        for sim_idx in range(n_simulations):
+            # ✅ Shuffle returns (not trade objects!)
             sampled_returns = np.random.permutation(returns)
             
             # Calculate equity curve for this shuffled sequence
@@ -84,8 +128,25 @@ class MonteCarloSimulator:
             
             final_equities.append(eq_curve[-1])
             all_curves.append(eq_curve)
+            
+            # Show progress
+            if sim_idx in [0, 1, 2, 99, 499, 999]:
+                print(f"  Sim {sim_idx+1}: ${eq_curve[-1]:,.2f}")
         
         final_equities = np.array(final_equities)
+        
+        # Results
+        print(f"\n{'='*60}")
+        print(f"MONTE CARLO RESULTS")
+        print(f"{'='*60}")
+        print(f"Min:    ${final_equities.min():,.2f}")
+        print(f"Max:    ${final_equities.max():,.2f}")
+        print(f"Mean:   ${final_equities.mean():,.2f}")
+        print(f"Median: ${np.median(final_equities):,.2f}")
+        print(f"Std:    ${final_equities.std():,.2f}")
+        print(f"Range:  ${final_equities.max() - final_equities.min():,.2f}")
+        print(f"Unique outcomes: {len(np.unique(final_equities))}")
+        print(f"{'='*60}\n")
         
         # Calculate statistics
         return MonteCarloResults(
@@ -238,7 +299,11 @@ class MonteCarloSimulator:
             equity_curve[i + 1] = equity_curve[i] * (1 + ret)
         
         return equity_curve
-    
+
+        
+
+
+
     @staticmethod
     def plot_monte_carlo_results(
         results: MonteCarloResults,
