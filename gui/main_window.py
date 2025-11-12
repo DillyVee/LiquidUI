@@ -232,7 +232,7 @@ Add this as a method to MainWindow and call it before running walk-forward
         
         # Optimization controls
         self._add_optimization_controls(main_layout)
-        
+
         # Parameter ranges
         self._add_parameter_ranges(main_layout)
         
@@ -332,10 +332,10 @@ Add this as a method to MainWindow and call it before running walk-forward
         layout.addWidget(self.phase_info_label)
 
     def _add_optimization_controls(self, layout: QVBoxLayout):
-        """Add optimization parameter controls - PSR ONLY"""
+        """Add optimization parameter controls - Sharpe/PSR focused"""
         controls_layout = QHBoxLayout()
         
-        # Trials
+        # Total trials
         self.trials_spin = QSpinBox()
         self.trials_spin.setRange(300, 100000)
         self.trials_spin.setValue(OptimizationConfig.DEFAULT_TRIALS)
@@ -350,7 +350,7 @@ Add this as a method to MainWindow and call it before running walk-forward
         controls_layout.addWidget(QLabel("Batch Size:"))
         controls_layout.addWidget(self.batch_spin)
         
-        # PSR score display (prominent)
+        # PSR display (main metric)
         self.psr_label = QLabel("PSR: N/A")
         self.psr_label.setStyleSheet(
             "color: #2979ff; font-size: 12pt; font-weight: bold;"
@@ -364,21 +364,23 @@ Add this as a method to MainWindow and call it before running walk-forward
         )
         controls_layout.addWidget(self.psr_label)
         
-        # Sharpe Ratio display
+        # Sharpe ratio display
         self.sharpe_label = QLabel("Sharpe: N/A")
         self.sharpe_label.setStyleSheet("color: #00ff88; font-size: 10pt;")
+        self.sharpe_label.setToolTip("Annualized Sharpe Ratio (mean / std * sqrt(252))")
         controls_layout.addWidget(self.sharpe_label)
         
-        # Traditional metrics
+        # Return metrics
         self.best_label = QLabel("Return: N/A")
+        self.best_label.setStyleSheet("color: #ffffff; font-size: 10pt;")
         self.buyhold_label = QLabel("Buy & Hold: N/A")
+        self.buyhold_label.setStyleSheet("color: #aaaaaa; font-size: 10pt;")
         controls_layout.addWidget(self.best_label)
         controls_layout.addWidget(self.buyhold_label)
         
+        # Add to layout
         layout.addLayout(controls_layout)
 
-
-    # Update the start_optimization method to remove objective parameter:
 
     def start_optimization(self):
         """Start the optimization process - PSR ONLY"""
