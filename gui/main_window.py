@@ -332,7 +332,7 @@ Add this as a method to MainWindow and call it before running walk-forward
         layout.addWidget(self.phase_info_label)
 
     def _add_optimization_controls(self, layout: QVBoxLayout):
-        """Add optimization parameter controls"""
+        """Add optimization parameter controls - PSR ONLY"""
         controls_layout = QHBoxLayout()
         
         # Trials
@@ -350,14 +350,24 @@ Add this as a method to MainWindow and call it before running walk-forward
         controls_layout.addWidget(QLabel("Batch Size:"))
         controls_layout.addWidget(self.batch_spin)
         
-        # REMOVED: Objective dropdown (always uses composite)
-        
-        # Composite score display (prominent)
-        self.composite_label = QLabel("Composite Score: N/A")
-        self.composite_label.setStyleSheet(
+        # PSR score display (prominent)
+        self.psr_label = QLabel("PSR: N/A")
+        self.psr_label.setStyleSheet(
             "color: #2979ff; font-size: 12pt; font-weight: bold;"
         )
-        controls_layout.addWidget(self.composite_label)
+        self.psr_label.setToolTip(
+            "Probabilistic Sharpe Ratio\n"
+            "Probability that true Sharpe > 0\n\n"
+            ">95%: Very confident\n"
+            ">75%: Good confidence\n"
+            "<50%: Likely false positive"
+        )
+        controls_layout.addWidget(self.psr_label)
+        
+        # Sharpe Ratio display
+        self.sharpe_label = QLabel("Sharpe: N/A")
+        self.sharpe_label.setStyleSheet("color: #00ff88; font-size: 10pt;")
+        controls_layout.addWidget(self.sharpe_label)
         
         # Traditional metrics
         self.best_label = QLabel("Return: N/A")
@@ -366,34 +376,12 @@ Add this as a method to MainWindow and call it before running walk-forward
         controls_layout.addWidget(self.buyhold_label)
         
         layout.addLayout(controls_layout)
-        
-        # Second row: PSR metrics
-        psr_layout = QHBoxLayout()
-        
-        self.psr_label = QLabel("PSR: N/A")
-        self.psr_label.setStyleSheet("color: #00ff88; font-size: 10pt;")
-        psr_layout.addWidget(self.psr_label)
-        
-        self.wfa_label = QLabel("WFA Sharpe: N/A")
-        self.wfa_label.setStyleSheet("color: #00ff88; font-size: 10pt;")
-        psr_layout.addWidget(self.wfa_label)
-        
-        self.pbo_label = QLabel("PBO: N/A")
-        self.pbo_label.setStyleSheet("color: #ffaa00; font-size: 10pt;")
-        psr_layout.addWidget(self.pbo_label)
-        
-        self.turnover_label = QLabel("Turnover: N/A")
-        self.turnover_label.setStyleSheet("color: #ffaa00; font-size: 10pt;")
-        psr_layout.addWidget(self.turnover_label)
-        
-        psr_layout.addStretch()
-        layout.addLayout(psr_layout)
 
 
     # Update the start_optimization method to remove objective parameter:
 
     def start_optimization(self):
-        """Start the optimization process"""
+        """Start the optimization process - PSR ONLY"""
         if not self.df_dict:
             QMessageBox.warning(self, "Error", "Please load data first")
             return
@@ -410,8 +398,8 @@ Add this as a method to MainWindow and call it before running walk-forward
         self.start_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.progress_bar.setValue(0)
-        self.phase_label.setText("Initializing PSR Composite Optimization...")
-        self.phase_info_label.setText("Preparing composite optimization...")
+        self.phase_label.setText("Initializing PSR Optimization...")
+        self.phase_info_label.setText("Preparing PSR optimization...")
 
         # Gather parameters
         mn1_range = (self.mn1_min.value(), self.mn1_max.value())
@@ -427,7 +415,7 @@ Add this as a method to MainWindow and call it before running walk-forward
 
         optimize_equity_curve = self.equity_curve_check.isChecked()
 
-        # Create optimizer with PSR composite (no objective_type parameter)
+        # Create optimizer (no objective_type parameter needed)
         self.worker = MultiTimeframeOptimizer(
             self.df_dict, 
             self.trials_spin.value(), 
@@ -556,23 +544,24 @@ Add this as a method to MainWindow and call it before running walk-forward
 
     def _add_action_buttons(self, layout: QVBoxLayout):
         """Add action buttons"""
+        # Row 1: Start/Stop
         btn_layout = QHBoxLayout()
-    
-        self.start_btn = QPushButton("Start Multi-Timeframe Optimization")
+
+        self.start_btn = QPushButton("Start PSR Optimization")
         self.stop_btn = QPushButton("Stop")
         self.stop_btn.setEnabled(False)
-    
+
         self.start_btn.clicked.connect(self.start_optimization)
         self.stop_btn.clicked.connect(self.stop_optimization)
-    
+
         btn_layout.addWidget(self.start_btn)
         btn_layout.addWidget(self.stop_btn)
-    
+
         layout.addLayout(btn_layout)
-    
-        # Monte Carlo button (separate row)
+
+        # Row 2: Monte Carlo button
         mc_layout = QHBoxLayout()
-    
+
         self.monte_carlo_btn = QPushButton("🎲 Run Monte Carlo Simulation")
         self.monte_carlo_btn.setEnabled(False)
         self.monte_carlo_btn.setToolTip(
@@ -603,14 +592,15 @@ Add this as a method to MainWindow and call it before running walk-forward
 
         layout.addLayout(mc_layout)
 
-        # Walk-Forward button (NEW - third row)
+        # Row 3: Walk-Forward button
         wf_layout = QHBoxLayout()
 
         self.walk_forward_btn = QPushButton("📊 Run Walk-Forward Analysis")
         self.walk_forward_btn.setEnabled(False)  # Enabled after data load
         self.walk_forward_btn.setToolTip(
             "Test strategy on unseen data\n"
-            "Detects overfitting via train/test splits"
+            "Detects overfitting via train/test splits\n"
+            "⚠️ MAINTAINS CYCLE ALIGNMENT"
         )
         self.walk_forward_btn.clicked.connect(self.run_walk_forward)
         self.walk_forward_btn.setStyleSheet("""
@@ -624,7 +614,7 @@ Add this as a method to MainWindow and call it before running walk-forward
         """)
 
         # Walk-Forward settings
-        wf_layout.addWidget(QLabel("WF Train Days:"))
+        wf_layout.addWidget(QLabel("Train Days:"))
         self.wf_train_days_spin = QSpinBox()
         self.wf_train_days_spin.setRange(30, 730)
         self.wf_train_days_spin.setValue(180)
@@ -873,17 +863,17 @@ Add this as a method to MainWindow and call it before running walk-forward
 
             optimizer_kwargs = {
                 'n_trials': final_trials,
-                'time_cycle_ranges': time_cycle_ranges,
+                'time_cycle_ranges': time_cycle_ranges,  # ✅ Cycle preserved
                 'mn1_range': mn1_range,
                 'mn2_range': mn2_range,
                 'entry_range': entry_range,
                 'exit_range': exit_range,
                 'ticker': self.current_ticker,
-                                'timeframes': selected_tfs,
+                'timeframes': selected_tfs,
                 'optimize_equity_curve': self.equity_curve_check.isChecked(),
                 'batch_size': self.batch_spin.value(),
                 'transaction_costs': self.transaction_costs
-            }
+}
 
             # Import here to avoid circular import
             from optimization import MultiTimeframeOptimizer
@@ -1306,7 +1296,10 @@ Add this as a method to MainWindow and call it before running walk-forward
                 tf_counts += f", {len(df_dict['5min'])}x5m"
             self.ticker_input.setText(f"{symbol} ({tf_counts} max)")
             
-            
+            # ✅ ENABLE WALK-FORWARD BUTTON after data load
+            if hasattr(self, 'walk_forward_btn'):
+                self.walk_forward_btn.setEnabled(True)
+                print("✅ Walk-Forward Analysis button enabled")
 
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load: {str(e)}")
@@ -1391,27 +1384,10 @@ Add this as a method to MainWindow and call it before running walk-forward
         self.phase_info_label.setText(f"Current: {phase_text}")
 
     def update_best_label(self, best_params: Dict):
-        """Update best result display with PSR metrics"""
+        """Update best result display with PSR"""
         self.best_params = best_params
         
-        # Composite score (prominent)
-        if 'Composite_Score' in best_params:
-            comp_score = best_params['Composite_Score']
-            self.composite_label.setText(f"Composite Score: {comp_score:.3f}")
-            
-            # Color code based on score
-            if comp_score > 0.6:
-                color = "#00ff88"  # Green
-            elif comp_score > 0.3:
-                color = "#ffaa00"  # Orange
-            else:
-                color = "#ff4444"  # Red
-            
-            self.composite_label.setStyleSheet(
-                f"color: {color}; font-size: 12pt; font-weight: bold;"
-            )
-        
-        # PSR metrics
+        # PSR score (prominent)
         if 'PSR' in best_params:
             psr = best_params['PSR']
             psr_pct = psr * 100
@@ -1431,27 +1407,16 @@ Add this as a method to MainWindow and call it before running walk-forward
                 psr_icon = "❌"
             
             self.psr_label.setText(f"PSR: {psr_pct:.1f}% {psr_icon}")
-            self.psr_label.setStyleSheet(f"color: {psr_color}; font-size: 10pt;")
+            self.psr_label.setStyleSheet(
+                f"color: {psr_color}; font-size: 12pt; font-weight: bold;"
+            )
         
-        if 'WFA_Sharpe' in best_params:
-            wfa = best_params['WFA_Sharpe']
-            wfa_color = "#00ff88" if wfa > 1.0 else "#ffaa00" if wfa > 0.5 else "#ff4444"
-            self.wfa_label.setText(f"WFA Sharpe: {wfa:.2f}")
-            self.wfa_label.setStyleSheet(f"color: {wfa_color}; font-size: 10pt;")
-        
-        if 'PBO' in best_params:
-            pbo = best_params['PBO']
-            pbo_pct = pbo * 100
-            pbo_color = "#00ff88" if pbo < 0.3 else "#ffaa00" if pbo < 0.5 else "#ff4444"
-            pbo_icon = "✅" if pbo < 0.3 else "⚠" if pbo < 0.5 else "❌"
-            self.pbo_label.setText(f"PBO: {pbo_pct:.1f}% {pbo_icon}")
-            self.pbo_label.setStyleSheet(f"color: {pbo_color}; font-size: 10pt;")
-        
-        if 'Annual_Turnover' in best_params:
-            turnover = best_params['Annual_Turnover']
-            to_color = "#00ff88" if turnover < 30 else "#ffaa00" if turnover < 100 else "#ff4444"
-            self.turnover_label.setText(f"Turnover: {turnover:.0f}/yr")
-            self.turnover_label.setStyleSheet(f"color: {to_color}; font-size: 10pt;")
+        # Sharpe Ratio
+        if 'Sharpe_Ratio' in best_params:
+            sharpe = best_params['Sharpe_Ratio']
+            sharpe_color = "#00ff88" if sharpe > 1.0 else "#ffaa00" if sharpe > 0.5 else "#ff4444"
+            self.sharpe_label.setText(f"Sharpe: {sharpe:.2f}")
+            self.sharpe_label.setStyleSheet(f"color: {sharpe_color}; font-size: 10pt;")
         
         # Traditional metrics
         metrics_text = f"Return: {best_params['Percent_Gain_%']:.2f}%"
@@ -1480,50 +1445,24 @@ Add this as a method to MainWindow and call it before running walk-forward
 
     def _add_psr_tooltips(self):
         """Add helpful tooltips explaining PSR metrics"""
-        self.psr_label.setToolTip(
-            "Probabilistic Sharpe Ratio\n"
-            "Probability that true Sharpe > 0\n\n"
-            ">95%: Very confident\n"
-            ">75%: Good confidence\n"
-            "<50%: Likely false positive"
-        )
+        # Only add tooltips for labels that exist in PSR-only mode
+        if hasattr(self, 'psr_label'):
+            self.psr_label.setToolTip(
+                "Probabilistic Sharpe Ratio\n"
+                "Probability that true Sharpe > 0\n\n"
+                ">95%: Very confident\n"
+                ">75%: Good confidence\n"
+                "<50%: Likely false positive"
+            )
         
-        self.wfa_label.setToolTip(
-            "Walk-Forward Analysis Sharpe\n"
-            "Average out-of-sample Sharpe\n\n"
-            ">1.5: Excellent\n"
-            ">1.0: Good\n"
-            "<0.5: Poor robustness"
-        )
-        
-        self.pbo_label.setToolTip(
-            "Probability of Backtest Overfitting\n"
-            "Likelihood result is curve-fitted\n\n"
-            "<30%: Low overfitting risk\n"
-            "<50%: Moderate risk\n"
-            ">70%: High overfitting risk"
-        )
-        
-        self.turnover_label.setToolTip(
-            "Annual Turnover\n"
-            "Number of trades per year\n\n"
-            "<30: Low frequency\n"
-            "<100: Moderate\n"
-            ">100: High frequency (costs matter!)"
-        )
-        
-        self.composite_label.setToolTip(
-            "Composite Optimization Score\n"
-            "Weighted combination of:\n"
-            "• PSR (40%)\n"
-            "• WFA Sharpe (30%)\n"
-            "• PBO penalty (15%)\n"
-            "• Turnover penalty (10%)\n"
-            "• Drawdown penalty (5%)\n\n"
-            ">0.6: Excellent\n"
-            ">0.3: Good\n"
-            "<0.3: Needs improvement"
-        )
+        if hasattr(self, 'sharpe_label'):
+            self.sharpe_label.setToolTip(
+                "Annualized Sharpe Ratio\n"
+                "Risk-adjusted return metric\n\n"
+                ">2.0: Excellent\n"
+                ">1.0: Good\n"
+                "<0.5: Poor"
+            )
 
     def __init__(self):
         super().__init__()
@@ -1628,36 +1567,52 @@ Add this as a method to MainWindow and call it before running walk-forward
         """Add action buttons"""
         btn_layout = QHBoxLayout()
 
-        self.start_btn = QPushButton("Start PSR Composite Optimization")
+        self.start_btn = QPushButton("Start PSR Optimization")  # ✅ Updated label
         self.stop_btn = QPushButton("Stop")
         self.stop_btn.setEnabled(False)
-        
-        # NEW: PSR Report button
-        self.psr_report_btn = QPushButton("📊 View PSR Report")
-        self.psr_report_btn.setEnabled(False)
-        self.psr_report_btn.clicked.connect(self.show_psr_report)
-        self.psr_report_btn.setToolTip("View detailed PSR composite metrics")
 
         self.start_btn.clicked.connect(self.start_optimization)
         self.stop_btn.clicked.connect(self.stop_optimization)
 
         btn_layout.addWidget(self.start_btn)
         btn_layout.addWidget(self.stop_btn)
-        btn_layout.addWidget(self.psr_report_btn)
 
         layout.addLayout(btn_layout)
-        
-        # ... rest of the method (Monte Carlo, Walk-Forward buttons) ...
 
+        # Monte Carlo button (separate row)
+        mc_layout = QHBoxLayout()
 
+        self.monte_carlo_btn = QPushButton("🎲 Run Monte Carlo Simulation")
+        self.monte_carlo_btn.setEnabled(False)  # Enabled after optimization
+        self.monte_carlo_btn.setToolTip(
+            "Test strategy robustness by randomizing trade order\n"
+            "Requires completed optimization with trades"
+        )
+        self.monte_carlo_btn.clicked.connect(self.run_monte_carlo)
+        # ... rest of Monte Carlo setup ...
+
+        # Walk-Forward button (third row)
+        wf_layout = QHBoxLayout()
+
+        self.walk_forward_btn = QPushButton("📊 Run Walk-Forward Analysis")
+        self.walk_forward_btn.setEnabled(False)  # Enabled after data load
+        self.walk_forward_btn.setToolTip(
+            "Test strategy on unseen data\n"
+            "Detects overfitting via train/test splits\n"
+            "⚠️ MAINTAINS CYCLE ALIGNMENT"
+        )
+        self.walk_forward_btn.clicked.connect(self.run_walk_forward)
+    # ... rest of Walk-Forward setup ...
     def show_results(self, df_results: pd.DataFrame):
         """Display optimization results"""
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         
-        # ✅ FIX: Check if buttons exist before enabling
-        if hasattr(self, 'psr_report_btn'):
-            self.psr_report_btn.setEnabled(True)
+        # ✅ ENABLE BOTH BUTTONS after optimization
+        if hasattr(self, 'monte_carlo_btn'):
+            self.monte_carlo_btn.setEnabled(True)
+        if hasattr(self, 'walk_forward_btn'):
+            self.walk_forward_btn.setEnabled(True)
         
         if df_results.empty:
             QMessageBox.information(self, "Complete", "No valid results")
@@ -1667,12 +1622,8 @@ Add this as a method to MainWindow and call it before running walk-forward
         self.progress_bar.setValue(100)
         self.phase_label.setText("✓ Optimization Complete!")
         self.phase_info_label.setText("✓ All phases completed successfully")
-        
-        # ✅ FIX: Check if walk_forward_btn exists before enabling
-        if hasattr(self, 'walk_forward_btn'):
-            self.walk_forward_btn.setEnabled(True)
 
-        # Enable live trading
+        # Enable live trading if available
         if ALPACA_AVAILABLE:
             self.live_trading_btn.setEnabled(True)
             self.trading_status_label.setText("Ready")
@@ -1683,9 +1634,9 @@ Add this as a method to MainWindow and call it before running walk-forward
         best = df_results.iloc[0]
         self.update_best_label(best.to_dict() if isinstance(best, pd.Series) else best)
 
-        # Plot results and GET TRADE LOG
+        # Plot results and get trade log for Monte Carlo
         self._plot_results(best)
-
+    
     def _plot_results(self, best):
         """Plot optimization results on chart"""
         # Get optimized timeframes
