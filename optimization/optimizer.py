@@ -171,11 +171,12 @@ class MultiTimeframeOptimizer(QThread):
         else:  # 5min
             ann_factor = 252.0 * 6.5 * 12
         
-        # Calculate PSR
+        # Calculate PSR (with trade-count awareness for realistic confidence)
         psr = PSRCalculator.calculate_psr(
-            returns,
-            benchmark_sharpe=0.0,
-            annualization_factor=ann_factor
+        returns,
+        benchmark_sharpe=0.0,
+        annualization_factor=ann_factor,
+        trade_count=trade_count  # ← ADD THIS LINE
         )
         
         # Calculate Sharpe Ratio
@@ -347,11 +348,8 @@ class MultiTimeframeOptimizer(QThread):
             print(f"Total trials: {self.n_trials}")
             print(f"{'='*60}\n")
             
-            print(f"📊 Optimization Weights:")
-            print(f"   PSR: {self.composite_optimizer.weights.psr:.2f}")
-            print(f"   PBO Penalty: {self.composite_optimizer.weights.pbo_penalty:.2f}")
-            print(f"   Turnover Penalty: {self.composite_optimizer.weights.turnover:.2f}")
-            print(f"   Drawdown Penalty: {self.composite_optimizer.weights.drawdown:.2f}")
+            # ✅ NEW - PSR composite doesn't need to print weights
+            print("📊 Using PSR Composite Optimization")
             print(f"   (Walk-Forward: SEPARATE - not in optimization)")
             print()
             

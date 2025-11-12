@@ -1,9 +1,9 @@
 """
-FIXED PSR Composite System
-Issues Fixed:
-1. PSR calculation capped at realistic values (not always 1.00)
-2. Reduced turnover penalty to allow more trades
-3. Added minimum trade count requirement
+FINAL FIXED PSR Composite System
+Key fixes:
+1. PSR uses effective sample size (trade count) for low-trade strategies
+2. Conservative fallback when variance term is negative
+3. Adaptive z-score clipping based on sample size
 """
 import numpy as np
 import pandas as pd
@@ -15,18 +15,13 @@ import optuna
 
 @dataclass
 class CompositeWeights:
-    """
-    ADJUSTED weights to allow more trades
-    - Reduced turnover penalty from 15% to 5%
-    - Increased PSR weight
-    """
-    psr: float = 0.70           # Probabilistic Sharpe Ratio (increased)
-    pbo_penalty: float = 0.20   # Overfitting penalty
-    turnover: float = 0.05      # Trading cost penalty (REDUCED)
-    drawdown: float = 0.05      # Risk penalty
+    """Weights for composite score"""
+    psr: float = 0.70
+    pbo_penalty: float = 0.20
+    turnover: float = 0.05
+    drawdown: float = 0.05
     
     def validate(self):
-        """Ensure weights sum to ~1.0"""
         total = self.psr + self.pbo_penalty + self.turnover + self.drawdown
         if abs(total - 1.0) > 0.01:
             raise ValueError(f"Weights sum to {total:.3f}, should be ~1.0")
@@ -34,31 +29,33 @@ class CompositeWeights:
 
 class PSRCalculator:
     """
-    FIXED Probabilistic Sharpe Ratio Calculator
-    
-    Issues Fixed:
-    1. Returns NaN/inf values properly
-    2. Caps PSR at realistic values
-    3. Requires minimum sample size
+    FINAL FIXED Probabilistic Sharpe Ratio Calculator
+    - Properly handles low trade counts
+    - Conservative fallback for negative variance
+    - Realistic confidence bounds
     """
     
     @staticmethod
     def calculate_psr(
         returns: np.ndarray,
         benchmark_sharpe: float = 0.0,
-        annualization_factor: float = 252.0
+        annualization_factor: float = 252.0,
+        trade_count: int = None
     ) -> float:
         """
-        Calculate Probabilistic Sharpe Ratio with proper validation
+        Calculate PSR with proper confidence adjustment for low-trade strategies
         
-        Returns:
-            PSR between 0.0 and 1.0 (NEVER exactly 1.00 unless very strong evidence)
+        CRITICAL FIX: When trade_count is low, use it as effective sample size
+        instead of the number of bars, which gives false confidence.
+        
+        Example:
+        - 15 trades over 3480 bars
+        - Old way: n=3480 → PSR=99.9% (WRONG - overconfident)
+        - New way: n=15 → PSR=53% (CORRECT - realistic)
         """
-        # ✅ FIX: Require minimum 30 returns for reliable PSR
         if len(returns) < 30:
-            return 0.5  # Unknown - neutral score
+            return 0.5
         
-        # Clean returns
         returns = returns[~(np.isnan(returns) | np.isinf(returns))]
         
         if len(returns) < 30:
@@ -67,63 +64,78 @@ class PSRCalculator:
         mean_ret = np.mean(returns)
         std_ret = np.std(returns, ddof=1)
         
-        # ✅ FIX: If std is zero, return based on mean
         if std_ret == 0 or std_ret < 1e-10:
-            return 0.95 if mean_ret > 0 else 0.05  # Strong but not 1.00
+            return 0.95 if mean_ret > 0 else 0.05
         
-        # Calculate observed Sharpe
         observed_sharpe = mean_ret / std_ret * np.sqrt(annualization_factor)
+        observed_sharpe = np.clip(observed_sharpe, -5, 10)
         
-        # ✅ FIX: Cap unrealistic Sharpe ratios
-        if observed_sharpe > 10:
-            observed_sharpe = 10  # Extremely high Sharpe, cap it
-        elif observed_sharpe < -5:
-            observed_sharpe = -5
-        
-        # Calculate skewness and kurtosis with error handling
         try:
             skew = stats.skew(returns, bias=False)
             kurt = stats.kurtosis(returns, bias=False, fisher=True)
-            
-            # ✅ FIX: Cap extreme values
             skew = np.clip(skew, -5, 5)
             kurt = np.clip(kurt, -5, 10)
         except:
-            skew = 0
-            kurt = 0
+            skew = 0.0
+            kurt = 0.0
         
         n = len(returns)
         
-        # PSR formula with higher moments
+        # ============================================================
+        # CRITICAL FIX: Use effective sample size
+        # ============================================================
+        # For low-trade strategies, the true degrees of freedom is the
+        # number of independent trades, not the number of bars
+        # ============================================================
+        if trade_count is not None and trade_count < n / 10:
+            effective_n = max(trade_count, 10)  # Minimum 10
+            # Note: We don't print here during optimization to avoid spam
+        else:
+            effective_n = n
+        
         try:
-            sharpe_std = np.sqrt(
-                (1 + (0.5 * observed_sharpe**2) - 
-                 (skew * observed_sharpe) + 
-                 (((kurt - 3) / 4) * observed_sharpe**2)) / n
-            )
+            # Bailey & López de Prado (2014) formula
+            variance_term = (
+                1.0 - (skew * observed_sharpe) + 
+                (((kurt - 1.0) / 4.0) * observed_sharpe**2)
+            ) / (effective_n - 1.0)
             
-            # ✅ FIX: Ensure sharpe_std is reasonable
-            if sharpe_std < 1e-10:
-                sharpe_std = 0.01  # Small but non-zero
+            # Handle negative variance (can occur with extreme higher moments)
+            if variance_term <= 0 or not np.isfinite(variance_term):
+                # Use conservative fallback with higher-moment penalty
+                base_se = 1.0 / np.sqrt(effective_n - 1.0)
+                
+                # Penalty increases with extreme skew/kurtosis (more uncertainty)
+                skew_penalty = 1.0 + abs(skew) * 0.3
+                kurt_penalty = 1.0 + max(0, abs(kurt)) * 0.15
+                
+                sharpe_std = base_se * skew_penalty * kurt_penalty
+            else:
+                sharpe_std = np.sqrt(variance_term)
+            
+            if sharpe_std < 1e-10 or not np.isfinite(sharpe_std):
+                sharpe_std = 0.2  # Conservative default
             
             # Z-score
             z_score = (observed_sharpe - benchmark_sharpe) / sharpe_std
             
-            # ✅ FIX: Cap z-score to prevent PSR = 1.000000
-            z_score = np.clip(z_score, -5, 5)  # ~99.9999% confidence at ±5
+            # Adaptive clipping: smaller samples = more conservative
+            if effective_n < 30:
+                max_z = 2.0  # ~97.7% max confidence
+            elif effective_n < 100:
+                max_z = 2.5  # ~99.4% max confidence
+            else:
+                max_z = 3.0  # ~99.87% max confidence
             
-            # PSR from CDF
+            z_score = np.clip(z_score, -max_z, max_z)
+            
+            # PSR from cumulative normal distribution
             psr = stats.norm.cdf(z_score)
-            
-            # ✅ FIX: Never return exactly 1.0 or 0.0
             psr = np.clip(psr, 0.001, 0.999)
             
-        except:
-            # Fallback calculation
-            if observed_sharpe > benchmark_sharpe:
-                psr = 0.75  # Moderate confidence
-            else:
-                psr = 0.25
+        except Exception as e:
+            # Fallback if anything goes wrong
+            psr = 0.75 if observed_sharpe > benchmark_sharpe else 0.25
         
         return float(psr)
     
@@ -149,53 +161,45 @@ class PSRCalculator:
             return 0.0
         
         sharpe = mean_ret / std_ret * np.sqrt(annualization_factor)
-        
-        # Cap Sharpe at realistic values
         return np.clip(sharpe, -5, 10)
 
 
 class PBOCalculatorSimple:
-    """Simplified PBO without requiring multiple equity curves"""
+    """Simplified PBO estimation"""
     
     @staticmethod
     def estimate_pbo_from_returns(returns: np.ndarray) -> float:
-        """
-        Estimate PBO using return characteristics
-        
-        ✅ FIXED: Better heuristics for overfitting detection
-        """
+        """Estimate overfitting probability from return characteristics"""
         if len(returns) < 20:
-            return 0.5  # Unknown
+            return 0.5
         
         returns = returns[~(np.isnan(returns) | np.isinf(returns))]
         
         if len(returns) < 20:
             return 0.5
         
-        # Split returns into two halves
+        # Split into two halves
         mid = len(returns) // 2
         first_half = returns[:mid]
         second_half = returns[mid:]
         
-        # Calculate Sharpe for each half
         sharpe_1 = (np.mean(first_half) / (np.std(first_half, ddof=1) + 1e-10))
         sharpe_2 = (np.mean(second_half) / (np.std(second_half, ddof=1) + 1e-10))
         
-        # ✅ FIXED: More nuanced PBO estimation
         if sharpe_1 <= 0 and sharpe_2 <= 0:
-            pbo = 0.9  # Both halves negative - bad strategy
+            pbo = 0.9  # Both negative
         elif sharpe_1 > 1.0 and sharpe_2 < 0:
             pbo = 0.8  # High overfitting risk
-        elif sharpe_1 > sharpe_2 * 3:  # First much better than second
-            pbo = 0.7  # Moderate-high risk
+        elif sharpe_1 > sharpe_2 * 3:
+            pbo = 0.7  # Significant degradation
         elif sharpe_1 > sharpe_2 * 1.5:
-            pbo = 0.5  # Moderate risk
+            pbo = 0.5  # Moderate degradation
         elif sharpe_2 > sharpe_1:
-            pbo = 0.2  # Good sign (improving)
+            pbo = 0.2  # Improving (good sign)
         elif abs(sharpe_1 - sharpe_2) < 0.2:
             pbo = 0.3  # Consistent
         else:
-            pbo = 0.4  # Slightly degrading but acceptable
+            pbo = 0.4  # Slight degradation
         
         return np.clip(pbo, 0.0, 1.0)
 
@@ -221,20 +225,15 @@ class TurnoverCalculator:
 
 
 class CompositeOptimizer:
-    """
-    FIXED Composite Optimizer
-    - Allows more trades
-    - Better PSR calculation
-    - Minimum trade requirement
-    """
+    """Composite optimizer with fixed PSR"""
     
     def __init__(
         self,
         weights: Optional[CompositeWeights] = None,
         benchmark_sharpe: float = 0.0,
-        max_acceptable_turnover: float = 200.0,  # ✅ INCREASED from 100
+        max_acceptable_turnover: float = 200.0,
         max_acceptable_dd: float = 0.50,
-        min_trades: int = 20  # ✅ NEW: Minimum required trades
+        min_trades: int = 20
     ):
         self.weights = weights or CompositeWeights()
         self.weights.validate()
@@ -251,40 +250,35 @@ class CompositeOptimizer:
         total_days: int,
         annualization_factor: float = 252.0
     ) -> Dict[str, float]:
-        """
-        Calculate composite score with fixes:
-        1. Better PSR calculation
-        2. Penalty for too few trades
-        3. Reduced turnover penalty
-        """
-        # ✅ PENALTY for insufficient trades
+        """Calculate composite score with all components"""
+        
+        # Penalty for too few trades
         if trade_count < self.min_trades:
             trade_penalty = 1.0 - (trade_count / self.min_trades)
         else:
             trade_penalty = 0.0
         
-        # Component 1: PSR (FIXED)
+        # Component 1: PSR (with trade-count awareness)
         returns = np.diff(equity_curve) / equity_curve[:-1]
         psr = PSRCalculator.calculate_psr(
             returns,
             benchmark_sharpe=self.benchmark_sharpe,
-            annualization_factor=annualization_factor
+            annualization_factor=annualization_factor,
+            trade_count=trade_count  # ← KEY FIX
         )
         psr_score = psr
         
-        # Component 2: PBO penalty (FIXED)
+        # Component 2: PBO penalty
         pbo = PBOCalculatorSimple.estimate_pbo_from_returns(returns)
         pbo_penalty = pbo
         
-        # Component 3: Turnover penalty (REDUCED IMPACT)
+        # Component 3: Turnover penalty
         annual_turnover = TurnoverCalculator.calculate_annual_turnover(
             trade_count, total_days
         )
         
-        # ✅ FIX: Gentler turnover penalty
-        # Only penalize if > 200 trades/year (was 100)
         if annual_turnover < self.max_acceptable_turnover:
-            turnover_penalty = 0.0  # No penalty for reasonable trading
+            turnover_penalty = 0.0
         else:
             turnover_penalty = (annual_turnover - self.max_acceptable_turnover) / 200.0
             turnover_penalty = np.clip(turnover_penalty, 0.0, 1.0)
@@ -295,16 +289,15 @@ class CompositeOptimizer:
         max_dd = np.max(drawdown)
         dd_penalty = np.clip(max_dd / self.max_acceptable_dd, 0.0, 1.0)
         
-        # Calculate composite score
+        # Composite score
         composite = (
             self.weights.psr * psr_score -
             self.weights.pbo_penalty * pbo_penalty -
             self.weights.turnover * turnover_penalty -
             self.weights.drawdown * dd_penalty -
-            (0.3 * trade_penalty)  # ✅ NEW: Penalty for too few trades
+            (0.3 * trade_penalty)
         )
         
-        # ✅ Cap composite score to reasonable range
         composite = np.clip(composite, -1.0, 1.0)
         
         return {
@@ -326,7 +319,7 @@ class CompositeOptimizer:
         storage_path: str = "sqlite:///optuna_composite.db",
         load_if_exists: bool = True
     ) -> optuna.Study:
-        """Create Optuna study with optimal settings"""
+        """Create Optuna study"""
         sampler = optuna.samplers.TPESampler(
             n_startup_trials=30,
             n_ei_candidates=24,
