@@ -1564,47 +1564,7 @@ Add this as a method to MainWindow and call it before running walk-forward
         msg.setFont(QFont("Courier", 9))
         msg.exec()
 
-    # Add button to show PSR report:
-    def _add_action_buttons(self, layout: QVBoxLayout):
-        """Add action buttons"""
-        btn_layout = QHBoxLayout()
-
-        self.start_btn = QPushButton("Start PSR Optimization")  # ✅ Updated label
-        self.stop_btn = QPushButton("Stop")
-        self.stop_btn.setEnabled(False)
-
-        self.start_btn.clicked.connect(self.start_optimization)
-        self.stop_btn.clicked.connect(self.stop_optimization)
-
-        btn_layout.addWidget(self.start_btn)
-        btn_layout.addWidget(self.stop_btn)
-
-        layout.addLayout(btn_layout)
-
-        # Monte Carlo button (separate row)
-        mc_layout = QHBoxLayout()
-
-        self.monte_carlo_btn = QPushButton("🎲 Run Monte Carlo Simulation")
-        self.monte_carlo_btn.setEnabled(False)  # Enabled after optimization
-        self.monte_carlo_btn.setToolTip(
-            "Test strategy robustness by randomizing trade order\n"
-            "Requires completed optimization with trades"
-        )
-        self.monte_carlo_btn.clicked.connect(self.run_monte_carlo)
-        # ... rest of Monte Carlo setup ...
-
-        # Walk-Forward button (third row)
-        wf_layout = QHBoxLayout()
-
-        self.walk_forward_btn = QPushButton("📊 Run Walk-Forward Analysis")
-        self.walk_forward_btn.setEnabled(False)  # Enabled after data load
-        self.walk_forward_btn.setToolTip(
-            "Test strategy on unseen data\n"
-            "Detects overfitting via train/test splits\n"
-            "⚠️ MAINTAINS CYCLE ALIGNMENT"
-        )
-        self.walk_forward_btn.clicked.connect(self.run_walk_forward)
-    # ... rest of Walk-Forward setup ...
+    
     def show_results(self, df_results: pd.DataFrame):
         """Display optimization results"""
         self.start_btn.setEnabled(True)

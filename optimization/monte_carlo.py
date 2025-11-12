@@ -267,7 +267,6 @@ class MonteCarloSimulator:
             ax1.plot(results.simulations[idx], color='#2979ff', alpha=0.1, linewidth=0.5)
         
         # Show percentile bands
-        # Calculate percentiles at each time step
         if results.simulations:
             n_steps = len(results.simulations[0])
             percentile_5_curve = np.zeros(n_steps)
@@ -297,31 +296,80 @@ class MonteCarloSimulator:
         # Plot 2: Distribution of final equities
         ax2.set_facecolor('#121212')
         
-        final_equities = [sim[-1] for sim in results.simulations]
-        # ADAPTIVE BIN CALCULATION
-        data_range = np.ptp(final_equities)
+        final_equities = np.array([sim[-1] for sim in results.simulations])
+        
+        # ✅ ROBUST BIN CALCULATION
+        data_range = np.ptp(final_equities)  # max - min
         n_unique = len(np.unique(final_equities))
-
-        if data_range < 1e-10 or n_unique < 5:
-            n_bins = min(n_unique, 10)
+        n_data = len(final_equities)
+        
+        # Handle edge cases
+        if n_unique <= 1:
+            # All values are the same - show single bar
+            n_bins = 1
+        elif n_unique <= 5:
+            # Very few unique values - use exact number
+            n_bins = n_unique
+        elif data_range < 1e-6:
+            # Virtually no range - use few bins
+            n_bins = min(n_unique, 5)
         else:
-            sturges = int(np.ceil(np.log2(len(final_equities)) + 1))
-            n_bins = min(50, max(10, sturges, n_unique // 2))
-
+            # Normal case - use adaptive calculation
+            # Sturges' rule: k = ceil(log2(n) + 1)
+            sturges = int(np.ceil(np.log2(n_data) + 1))
+            
+            # Rice rule: k = ceil(2 * n^(1/3))
+            rice = int(np.ceil(2 * (n_data ** (1/3))))
+            
+            # Use the minimum to avoid too many bins
+            n_bins = min(sturges, rice, n_unique, 50)
+            n_bins = max(n_bins, 10)  # At least 10 bins for normal data
+        
+        print(f"📊 Histogram: {n_data} points, {n_unique} unique, range={data_range:.2f}, using {n_bins} bins")
+        
         try:
-            ax2.hist(final_equities, bins=n_bins, color='#2979ff', alpha=0.7, edgecolor='white')
-        except ValueError:
-            ax2.hist(final_equities, bins='auto', color='#2979ff', alpha=0.7, edgecolor='white')
+            # Try to create histogram with calculated bins
+            counts, bins, patches = ax2.hist(
+                final_equities, 
+                bins=n_bins, 
+                color='#2979ff', 
+                alpha=0.7, 
+                edgecolor='white',
+                linewidth=0.5
+            )
+        except (ValueError, RuntimeError) as e:
+            print(f"⚠️  Histogram warning: {e}")
+            # Fallback: let matplotlib decide
+            try:
+                counts, bins, patches = ax2.hist(
+                    final_equities, 
+                    bins='auto', 
+                    color='#2979ff', 
+                    alpha=0.7, 
+                    edgecolor='white',
+                    linewidth=0.5
+                )
+            except Exception as e2:
+                print(f"⚠️  Histogram fallback failed: {e2}")
+                # Last resort: use fixed small number
+                counts, bins, patches = ax2.hist(
+                    final_equities, 
+                    bins=max(n_unique, 5), 
+                    color='#2979ff', 
+                    alpha=0.7, 
+                    edgecolor='white',
+                    linewidth=0.5
+                )
         
         # Add vertical lines for statistics
         ax2.axvline(results.original_equity, color='#00ff00', linestyle='--', 
-                   linewidth=2, label=f'Original: ${results.original_equity:.0f}')
+                linewidth=2, label=f'Original: ${results.original_equity:.0f}')
         ax2.axvline(results.median_equity, color='#FFA500', linestyle='-', 
-                   linewidth=2, label=f'Median: ${results.median_equity:.0f}')
+                linewidth=2, label=f'Median: ${results.median_equity:.0f}')
         ax2.axvline(results.percentile_5, color='#ff4444', linestyle=':', 
-                   linewidth=2, label=f'5%: ${results.percentile_5:.0f}')
+                linewidth=2, label=f'5%: ${results.percentile_5:.0f}')
         ax2.axvline(results.percentile_95, color='#44ff44', linestyle=':', 
-                   linewidth=2, label=f'95%: ${results.percentile_95:.0f}')
+                linewidth=2, label=f'95%: ${results.percentile_95:.0f}')
         
         ax2.set_xlabel('Final Equity ($)', color='white')
         ax2.set_ylabel('Frequency', color='white')
