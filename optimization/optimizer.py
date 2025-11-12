@@ -1,5 +1,7 @@
 """
-Multi-Timeframe Optimization Engine - FIXED VERSION
+Multi-Timeframe Optimization Engine - FIXED
+PSR calculation NO LONGER includes walk-forward analysis
+Walk-forward is now a separate button/function
 """
 from typing import Dict, List, Tuple, Optional
 import numpy as np
@@ -10,23 +12,18 @@ import optuna
 from optimization.metrics import PerformanceMetrics
 from config.settings import RETRACEMENT_ZONES
 
+# Import the SIMPLIFIED PSR composite (no WFA)
 from optimization.psr_composite import (
     CompositeOptimizer,
     CompositeWeights,
-    PSRCalculator,
-    WalkForwardLite,
-    PBOCalculator,
-    TurnoverCalculator
+    PSRCalculator
 )
 
-# Suppress Optuna logging
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 
 class MultiTimeframeOptimizer(QThread):
-    """
-    Multi-timeframe strategy optimizer with sequential optimization
-    """
+    """Multi-timeframe strategy optimizer with PSR (no WFA in optimization)"""
     progress = pyqtSignal(int)
     new_best = pyqtSignal(dict)
     finished = pyqtSignal(pd.DataFrame)
@@ -74,7 +71,7 @@ class MultiTimeframeOptimizer(QThread):
         else:
             self.transaction_costs = transaction_costs
         
-        # Composite optimization setup
+        # Composite optimization (SIMPLIFIED - no WFA)
         self.composite_optimizer = CompositeOptimizer(
             weights=composite_weights,
             benchmark_sharpe=0.0,
@@ -82,7 +79,7 @@ class MultiTimeframeOptimizer(QThread):
             max_acceptable_dd=0.50
         )
         
-        # Create Optuna study with persistence
+        # Create Optuna study
         self.study = CompositeOptimizer.create_optuna_study(
             study_name=f"{ticker}_composite_opt" if ticker else "composite_opt",
             storage_path=f"sqlite:///optuna_{ticker}.db" if ticker else "sqlite:///optuna.db",
@@ -95,9 +92,9 @@ class MultiTimeframeOptimizer(QThread):
 
     def calculate_composite_metrics(self, params: Dict) -> Dict[str, float]:
         """
-        Calculate composite optimization metrics for given parameters
+        Calculate composite optimization metrics - NO WALK-FORWARD
         
-        Returns all component scores plus composite total
+        This is now much faster since we don't run WFA during optimization
         """
         # Run full backtest
         eq_curve, trade_count = self.simulate_multi_tf(params)
@@ -106,19 +103,10 @@ class MultiTimeframeOptimizer(QThread):
             return {
                 'composite_score': 0.0,
                 'psr': 0.0,
-                'wfa_sharpe': 0.0,
                 'pbo': 1.0,
                 'annual_turnover': 0.0,
                 'max_drawdown': 1.0
             }
-        
-        # Run lightweight WFA
-        _, oos_curves = WalkForwardLite.evaluate_wfa(
-            simulate_func=self.simulate_multi_tf,
-            params=params,
-            df_dict=self.df_dict,
-            n_folds=4
-        )
         
         # Calculate total days
         df_finest = self.df_dict[self.finest_tf]
@@ -135,12 +123,11 @@ class MultiTimeframeOptimizer(QThread):
         else:  # 5min
             ann_factor = 252.0 * 6.5 * 12
         
-        # Calculate composite score
+        # Calculate composite score WITHOUT walk-forward
         scores = self.composite_optimizer.calculate_composite_score(
             eq_curve,
             trade_count,
             max(total_days, 1),
-            oos_curves,
             annualization_factor=ann_factor
         )
         
@@ -210,16 +197,7 @@ class MultiTimeframeOptimizer(QThread):
         self.finest_tf = finest_tf
 
     def simulate_multi_tf(self, params: Dict, return_trades: bool = False):
-        """
-        Heavily optimized backtest using pre-computed numpy arrays
-        
-        Args:
-            params: Strategy parameters
-            return_trades: Whether to return trade log
-            
-        Returns:
-            Tuple of (equity_curve, trade_count, [trades])
-        """
+        """Heavily optimized backtest using pre-computed numpy arrays"""
         if self.stopped:
             return (None, 0, []) if return_trades else (None, 0)
 
@@ -235,15 +213,11 @@ class MultiTimeframeOptimizer(QThread):
             exit_signal = np.zeros(n_bars, dtype=bool)
             
             # Calculate signals for each timeframe
-            # Calculate signals for each timeframe
             for tf in self.timeframes:
                 mn1 = int(params[f'MN1_{tf}'])
                 mn2 = int(params[f'MN2_{tf}'])
                 entry = params[f'Entry_{tf}']
                 exit_val = params[f'Exit_{tf}']
-                
-                # ✅ DEBUG: Print what parameters are actually being used
-                print(f"  🔍 {tf}: MN1={mn1}, MN2={mn2}, Entry<{entry:.1f}, Exit>{exit_val:.1f}")
                 
                 # Use cached numpy arrays
                 close_tf = self.np_data[tf]['close']
@@ -252,9 +226,6 @@ class MultiTimeframeOptimizer(QThread):
                 rsi = PerformanceMetrics.compute_rsi_vectorized(close_tf, mn1)
                 rsi_smooth = PerformanceMetrics.smooth_vectorized(rsi, mn2)
                 
-                # ✅ DEBUG: Print RSI statistics
-                print(f"     RSI range: {np.nanmin(rsi_smooth):.1f} to {np.nanmax(rsi_smooth):.1f}")
-                print(f"     Trades possible: {np.sum(rsi_smooth < entry)} entry signals")
                 # Vectorized cycle calculation
                 on = int(params[f'On_{tf}'])
                 off = int(params[f'Off_{tf}'])
@@ -288,25 +259,21 @@ class MultiTimeframeOptimizer(QThread):
             trades = [] if return_trades else None
 
             for i in range(n_bars):
-                # Entry logic: NOT in position AND entry signal
                 if not position and enter_signal[i]:
                     if i + 1 < n_bars:
                         entry_price = open_finest[i + 1]
                         entry_idx = i + 1
                         
-                        # Apply transaction costs on entry
                         entry_cost_pct = self.transaction_costs.TOTAL_PCT
                         entry_price_with_costs = entry_price * (1 + entry_cost_pct)
                         
-                        # Apply fixed commission if any
                         if self.transaction_costs.COMMISSION_FIXED > 0:
                             equity -= self.transaction_costs.COMMISSION_FIXED
                         
                         position = True
                         trade_count += 1
                         entry_price = entry_price_with_costs
-                
-                # Exit logic: IN position AND exit signal
+                        
                 elif position and exit_signal[i]:
                     if i + 1 < n_bars:
                         exit_price = open_finest[i + 1]
@@ -315,15 +282,12 @@ class MultiTimeframeOptimizer(QThread):
                         exit_price = open_finest[i]
                         exit_idx = i
                     
-                    # Apply transaction costs on exit
                     exit_cost_pct = self.transaction_costs.TOTAL_PCT
                     exit_price_with_costs = exit_price * (1 - exit_cost_pct)
                     
-                    # Calculate profit/loss
                     pct_change = (exit_price_with_costs / entry_price - 1) * 100
                     equity *= exit_price_with_costs / entry_price
                     
-                    # Apply fixed commission if any
                     if self.transaction_costs.COMMISSION_FIXED > 0:
                         equity -= self.transaction_costs.COMMISSION_FIXED
                     
@@ -341,14 +305,8 @@ class MultiTimeframeOptimizer(QThread):
                         })
                     
                     position = False
-                
-                # Update equity curve
-                if position:
-                    # Mark-to-market: current value of position
-                    equity_curve[i] = equity * (open_finest[i] / entry_price)
-                else:
-                    # Cash position
-                    equity_curve[i] = equity
+                    
+                equity_curve[i] = equity * (open_finest[i] / entry_price) if position else equity
 
             # Close any open position at end
             if position:
@@ -385,66 +343,11 @@ class MultiTimeframeOptimizer(QThread):
             print(f"Simulation error: {e}")
             return (None, 0, []) if return_trades else (None, 0)
 
-    def simulate_equity_curve_retracement(
-        self, 
-        base_eq_curve: np.ndarray, 
-        entry_zone_idx: int, 
-        exit_zone_idx: int
-    ) -> Tuple[np.ndarray, int]:
-        """Optimize trades on equity curve using retracement zones"""
-        try:
-            entry_zone = RETRACEMENT_ZONES[entry_zone_idx]
-            exit_zone = RETRACEMENT_ZONES[exit_zone_idx]
-            
-            # Vectorized retracement calculation
-            peak = np.maximum.accumulate(base_eq_curve)
-            retracement = (peak - base_eq_curve) / peak
-            
-            enter_signal = (retracement >= entry_zone[0]) & (retracement <= entry_zone[1])
-            exit_signal = (
-                ((retracement >= exit_zone[0]) & (retracement <= exit_zone[1])) | 
-                (retracement < 0.001)
-            )
-            
-            # Vectorized trade execution
-            final_equity_curve = np.zeros(len(base_eq_curve))
-            portfolio_equity = 1000.0
-            position = False
-            entry_eq = 0.0
-            trade_count = 0
-            
-            for i in range(len(base_eq_curve)):
-                if not position and enter_signal[i]:
-                    entry_eq = base_eq_curve[i]
-                    position = True
-                    trade_count += 1
-                elif position and exit_signal[i]:
-                    exit_eq = base_eq_curve[i]
-                    portfolio_equity *= exit_eq / entry_eq
-                    position = False
-                
-                final_equity_curve[i] = (
-                    portfolio_equity * (base_eq_curve[i] / entry_eq) 
-                    if position 
-                    else portfolio_equity
-                )
-            
-            if position:
-                exit_eq = base_eq_curve[-1]
-                portfolio_equity *= exit_eq / entry_eq
-                final_equity_curve[-1] = portfolio_equity
-            
-            return final_equity_curve, trade_count
-            
-        except Exception as e:
-            print(f"Equity curve retracement optimization error: {e}")
-            return base_eq_curve, 0
-
     def run(self):
-        """Sequential optimization using PSR composite objective"""
+        """Sequential optimization using SIMPLIFIED PSR (no WFA)"""
         try:
             print(f"\n{'='*60}")
-            print(f"PSR COMPOSITE OPTIMIZATION")
+            print(f"PSR COMPOSITE OPTIMIZATION (NO WALK-FORWARD)")
             print(f"Ticker: {self.ticker}")
             print(f"Timeframes: {self.timeframes}")
             print(f"Total trials: {self.n_trials}")
@@ -452,10 +355,10 @@ class MultiTimeframeOptimizer(QThread):
             
             print(f"📊 Optimization Weights:")
             print(f"   PSR: {self.composite_optimizer.weights.psr:.2f}")
-            print(f"   WFA Sharpe: {self.composite_optimizer.weights.wfa_sharpe:.2f}")
             print(f"   PBO Penalty: {self.composite_optimizer.weights.pbo_penalty:.2f}")
             print(f"   Turnover Penalty: {self.composite_optimizer.weights.turnover:.2f}")
             print(f"   Drawdown Penalty: {self.composite_optimizer.weights.drawdown:.2f}")
+            print(f"   (Walk-Forward: SEPARATE - not in optimization)")
             print()
             
             on_range, off_range, start_range = self.time_cycle_ranges
@@ -479,12 +382,11 @@ class MultiTimeframeOptimizer(QThread):
                 print(f"PHASE {phase_counter}: {tf.upper()} TIME CYCLE")
                 print(f"{'='*60}")
                 
-                # ✅ FIX: Create NEW study for cycle phase
                 cycle_study = optuna.create_study(
                     direction="maximize",
                     sampler=optuna.samplers.TPESampler(
                         n_startup_trials=10,
-                        multivariate=False,  # ✅ FIX: Set to False to avoid warnings
+                        multivariate=False,
                         warn_independent_sampling=False
                     )
                 )
@@ -503,11 +405,9 @@ class MultiTimeframeOptimizer(QThread):
                     # Build params
                     params = {}
                     
-                    # Add previous TF params
                     for prev_tf in self.timeframes[:tf_idx]:
                         params.update(self.best_params_per_tf[prev_tf])
                     
-                    # Default values for current TF
                     mn1_default = (self.mn1_range[0] + self.mn1_range[1]) // 2
                     mn2_default = (self.mn2_range[0] + self.mn2_range[1]) // 2
                     entry_default = (self.entry_range[0] + self.entry_range[1]) / 2
@@ -518,12 +418,10 @@ class MultiTimeframeOptimizer(QThread):
                     params[f'Entry_{tf}'] = entry_default
                     params[f'Exit_{tf}'] = exit_default
                     
-                    # Optimize cycle params
                     params[f'On_{tf}'] = trial.suggest_int(f"On_{tf}", *on_range)
                     params[f'Off_{tf}'] = trial.suggest_int(f"Off_{tf}", *off_range)
                     params[f'Start_{tf}'] = trial.suggest_int(f"Start_{tf}", 0, on_range[1] + off_range[1])
                     
-                    # Add future TF defaults
                     for future_tf in self.timeframes[tf_idx+1:]:
                         params[f'MN1_{future_tf}'] = mn1_default
                         params[f'MN2_{future_tf}'] = mn2_default
@@ -533,7 +431,6 @@ class MultiTimeframeOptimizer(QThread):
                         params[f'Off_{future_tf}'] = off_range[0]
                         params[f'Start_{future_tf}'] = 0
                     
-                    # Calculate composite score (lightweight for cycle phase)
                     eq_curve, trades = self.simulate_multi_tf(params)
                     
                     if eq_curve is None or len(eq_curve) < 50:
@@ -543,7 +440,6 @@ class MultiTimeframeOptimizer(QThread):
                     trade_penalty = min(trades / 50.0, 1.0)
                     score = sharpe - trade_penalty
                     
-                    # Update progress
                     progress_pct = ((phase_counter - 1) / total_phases) * 100
                     phase_pct = (trial_count[0] / trials_per_phase) * (100 / total_phases)
                     self.progress.emit(int(progress_pct + phase_pct))
@@ -553,7 +449,6 @@ class MultiTimeframeOptimizer(QThread):
                 cycle_study.optimize(objective_cycle, n_trials=trials_per_phase, n_jobs=1,
                                 catch=(Exception,), show_progress_bar=False)
                 
-                # Store cycle params
                 best_cycle = {
                     f'On_{tf}': cycle_study.best_params[f'On_{tf}'],
                     f'Off_{tf}': cycle_study.best_params[f'Off_{tf}'],
@@ -565,19 +460,17 @@ class MultiTimeframeOptimizer(QThread):
                 self.best_params_per_tf[tf].update(best_cycle)
                 
                 print(f"✓ Phase {phase_counter} Complete - Cycle params optimized")
-                print(f"  Stored: {best_cycle}")
                 
                 # PHASE: Optimize RSI
                 phase_counter += 1
                 self.phase_update.emit(f"Phase {phase_counter}/{total_phases}: {tf.upper()} RSI...")
-                print(f"\nPHASE {phase_counter}: {tf.upper()} RSI (COMPOSITE)")
+                print(f"\nPHASE {phase_counter}: {tf.upper()} RSI (COMPOSITE - NO WFA)")
                 
-                # ✅ FIX: Create NEW study for RSI phase
                 rsi_study = optuna.create_study(
                     direction="maximize",
                     sampler=optuna.samplers.TPESampler(
                         n_startup_trials=10,
-                        multivariate=False,  # ✅ FIX: Set to False
+                        multivariate=False,
                         warn_independent_sampling=False
                     )
                 )
@@ -593,20 +486,17 @@ class MultiTimeframeOptimizer(QThread):
                     if trial_count[0] % 50 == 0:
                         print(f"  Phase {phase_counter} - Trial {trial_count[0]}/{trials_per_phase}")
                     
-                    # Build params
                     params = {}
                     for prev_tf in self.timeframes[:tf_idx]:
                         params.update(self.best_params_per_tf[prev_tf])
                     
                     params.update(best_cycle)
                     
-                    # Optimize RSI params
                     params[f'MN1_{tf}'] = trial.suggest_int(f"MN1_{tf}", *self.mn1_range)
                     params[f'MN2_{tf}'] = trial.suggest_int(f"MN2_{tf}", *self.mn2_range)
                     params[f'Entry_{tf}'] = trial.suggest_float(f"Entry_{tf}", *self.entry_range, step=0.5)
                     params[f'Exit_{tf}'] = trial.suggest_float(f"Exit_{tf}", *self.exit_range, step=0.5)
                     
-                    # Add future TF defaults
                     for future_tf in self.timeframes[tf_idx+1:]:
                         mn1_default = (self.mn1_range[0] + self.mn1_range[1]) // 2
                         mn2_default = (self.mn2_range[0] + self.mn2_range[1]) // 2
@@ -621,17 +511,14 @@ class MultiTimeframeOptimizer(QThread):
                         params[f'Off_{future_tf}'] = off_range[0]
                         params[f'Start_{future_tf}'] = 0
                     
-                    # Calculate FULL composite score
+                    # Calculate composite score WITHOUT walk-forward
                     scores = self.calculate_composite_metrics(params)
                     
-                    # Store component scores
                     trial.set_user_attr('psr', scores['psr'])
-                    trial.set_user_attr('wfa_sharpe', scores['wfa_sharpe'])
                     trial.set_user_attr('pbo', scores['pbo'])
                     trial.set_user_attr('annual_turnover', scores['annual_turnover'])
                     trial.set_user_attr('max_drawdown', scores['max_drawdown'])
                     
-                    # Update progress
                     progress_pct = ((phase_counter - 1) / total_phases) * 100
                     phase_pct = (trial_count[0] / trials_per_phase) * (100 / total_phases)
                     self.progress.emit(int(progress_pct + phase_pct))
@@ -641,7 +528,6 @@ class MultiTimeframeOptimizer(QThread):
                 rsi_study.optimize(objective_rsi, n_trials=trials_per_phase, n_jobs=1,
                                 catch=(Exception,), show_progress_bar=False)
                 
-                # Store RSI params
                 best_rsi = {
                     f'MN1_{tf}': rsi_study.best_params[f'MN1_{tf}'],
                     f'MN2_{tf}': rsi_study.best_params[f'MN2_{tf}'],
@@ -652,29 +538,20 @@ class MultiTimeframeOptimizer(QThread):
                 self.best_params_per_tf[tf].update(best_rsi)
                 
                 print(f"✓ Phase {phase_counter} Complete - RSI optimized")
-                print(f"  Stored: {best_rsi}")
-                print(f"  Complete params for {tf}: {self.best_params_per_tf[tf]}")
             
             # Compile final results
             print(f"\n{'='*60}")
             print(f"Compiling final results...")
-            print(f"Timeframes optimized: {list(self.best_params_per_tf.keys())}")
             
             base_params = {}
             for tf in self.timeframes:
                 if tf in self.best_params_per_tf:
                     base_params.update(self.best_params_per_tf[tf])
-                    print(f"  Added {tf}: {len(self.best_params_per_tf[tf])} params")
-                else:
-                    print(f"  ⚠️  WARNING: {tf} not in best_params_per_tf!")
             
-            print(f"\nFinal params keys: {list(base_params.keys())}")
-            
-            # Calculate ALL metrics for display
             base_eq_curve, base_trade_count = self.simulate_multi_tf(base_params)
             
             if base_eq_curve is None:
-                raise ValueError("Final simulation failed - no equity curve generated")
+                raise ValueError("Final simulation failed")
             
             base_metrics = PerformanceMetrics.calculate_metrics(base_eq_curve)
             
@@ -683,12 +560,11 @@ class MultiTimeframeOptimizer(QThread):
             
             base_metrics['Trade_Count'] = base_trade_count
             
-            # Add composite metrics
+            # Add composite metrics (without WFA)
             composite_scores = self.calculate_composite_metrics(base_params)
             base_metrics.update({
                 'Composite_Score': composite_scores['composite_score'],
                 'PSR': composite_scores['psr'],
-                'WFA_Sharpe': composite_scores['wfa_sharpe'],
                 'PBO': composite_scores['pbo'],
                 'Annual_Turnover': composite_scores['annual_turnover']
             })
@@ -707,7 +583,6 @@ class MultiTimeframeOptimizer(QThread):
             print(f"{'='*60}")
             print(f"Composite Score: {composite_scores['composite_score']:.3f}")
             print(f"  PSR: {composite_scores['psr']:.3f}")
-            print(f"  WFA Sharpe: {composite_scores['wfa_sharpe']:.2f}")
             print(f"  PBO: {composite_scores['pbo']:.3f}")
             print(f"  Annual Turnover: {composite_scores['annual_turnover']:.1f}")
             print(f"  Max DD: {composite_scores['max_drawdown']*100:.1f}%")
@@ -718,18 +593,15 @@ class MultiTimeframeOptimizer(QThread):
             print(f"  Profit Factor: {final_result['Profit_Factor']:.2f}")
             print(f"  Trades: {final_result['Trade_Count']}")
             
-            # ✅ FIX: Display all optimized parameters by timeframe
             print(f"\n⚙️  Optimized Parameters:")
             for tf in self.timeframes:
                 if tf in self.best_params_per_tf:
                     params = self.best_params_per_tf[tf]
                     print(f"\n  {tf.upper()}:")
                     
-                    # Time Cycle
                     if f'On_{tf}' in params:
                         print(f"    Time Cycle: ON={params[f'On_{tf}']}, OFF={params[f'Off_{tf}']}, START={params[f'Start_{tf}']}")
                     
-                    # RSI
                     if f'MN1_{tf}' in params:
                         print(f"    RSI: MN1={params[f'MN1_{tf}']}, MN2={params[f'MN2_{tf}']}")
                         print(f"    Thresholds: ENTRY<{params[f'Entry_{tf}']:.1f}, EXIT>{params[f'Exit_{tf}']:.1f}")
