@@ -209,38 +209,6 @@ Add this as a method to MainWindow and call it before running walk-forward
         
         print(f"{'='*70}\n")
 
-
-    # To use this, add it to MainWindow class, then in run_walk_forward() add:
-    # self.diagnose_walk_forward_issue()
-    # return  # Temporarily return to see diagnostic output
-
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("Multi-Timeframe Trading Optimizer with Alpaca")
-        self.setGeometry(100, 100, 1400, 1100)
-    
-        # Data storage
-        self.df_dict = {}
-        self.df_dict_full = {}
-        self.worker: Optional[MultiTimeframeOptimizer] = None
-        self.live_trader: Optional[AlpacaLiveTrader] = None
-        self.current_ticker = ""
-        self.data_source = "yfinance"
-        self.buyhold_pct = 0.0
-        self.best_params = None
-    
-        # Risk management settings
-        self.position_size_pct = RiskConfig.DEFAULT_POSITION_SIZE
-        self.max_positions = RiskConfig.DEFAULT_MAX_POSITIONS
-    
-        # Transaction costs
-        self.transaction_costs = TransactionCosts()
-
-        # Trade log for Monte Carlo
-        self.last_trade_log = []
-
-        # NOW call init_ui
-        self.init_ui()
     
     def init_ui(self):
         """Initialize the user interface"""
@@ -1566,7 +1534,34 @@ Add this as a method to MainWindow and call it before running walk-forward
 
     def __init__(self):
         super().__init__()
-        # ... existing init code ...
+        self.setWindowTitle("Multi-Timeframe Trading Optimizer with Alpaca")
+        self.setGeometry(100, 100, 1400, 1100)
+    
+        # Data storage
+        self.df_dict = {}
+        self.df_dict_full = {}
+        self.worker: Optional[MultiTimeframeOptimizer] = None
+        self.live_trader: Optional[AlpacaLiveTrader] = None
+        self.current_ticker = ""
+        self.data_source = "yfinance"
+        self.buyhold_pct = 0.0
+        self.best_params = None
+    
+        # Risk management settings
+        self.position_size_pct = RiskConfig.DEFAULT_POSITION_SIZE
+        self.max_positions = RiskConfig.DEFAULT_MAX_POSITIONS
+    
+        # Transaction costs
+        self.transaction_costs = TransactionCosts()
+
+        # Trade log for Monte Carlo
+        self.last_trade_log = []
+
+        # Create UI first
+        self.init_ui()
+        
+        # Then add tooltips AFTER labels exist
+        self._add_psr_tooltips()
         
         # After init_ui():
         self._add_psr_tooltips()
