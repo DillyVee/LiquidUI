@@ -563,19 +563,6 @@ class MultiTimeframeOptimizer(QThread):
                     f'Start_{tf}': self.study.best_params[f'Start_{tf}']
                 }
                 
-                # ✅ FIX: Store cycle params RIGHT NOW (don't wait!)
-                if tf not in self.best_params_per_tf:
-                    self.best_params_per_tf[tf] = {}
-                self.best_params_per_tf[tf].update(best_cycle)
-                
-                print(f"✓ Phase {phase_counter} Complete - Cycle params optimized")
-                
-                # PHASE: Optimize RSI with FULL composite score
-                # Store cycle params temporarily
-                if tf not in self.best_params_per_tf:
-                    self.best_params_per_tf[tf] = {}
-                self.best_params_per_tf[tf].update(best_cycle)
-                
                 print(f"✓ Phase {phase_counter} Complete - Cycle params optimized")
                 
                 # PHASE: Optimize RSI with FULL composite score
@@ -642,13 +629,13 @@ class MultiTimeframeOptimizer(QThread):
                 self.study.optimize(objective_rsi, n_trials=trials_per_phase, n_jobs=1,
                                 catch=(Exception,), show_progress_bar=False)
                 
-                # Add RSI params to the timeframe's params
-                self.best_params_per_tf[tf].update({
+                self.best_params_per_tf[tf] = {
+                    **best_cycle,
                     f'MN1_{tf}': self.study.best_params[f'MN1_{tf}'],
                     f'MN2_{tf}': self.study.best_params[f'MN2_{tf}'],
                     f'Entry_{tf}': self.study.best_params[f'Entry_{tf}'],
                     f'Exit_{tf}': self.study.best_params[f'Exit_{tf}']
-                })
+                }
                 
                 print(f"✓ Phase {phase_counter} Complete - RSI optimized with composite score")
             

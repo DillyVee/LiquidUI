@@ -216,8 +216,6 @@ Add this as a method to MainWindow and call it before running walk-forward
         
         main_layout = QVBoxLayout()
         
-        self.setMinimumSize(1000, 800)
-
         # Data source controls
         self._add_data_source_controls(main_layout)
         
@@ -879,7 +877,8 @@ Add this as a method to MainWindow and call it before running walk-forward
                 'entry_range': entry_range,
                 'exit_range': exit_range,
                 'ticker': self.current_ticker,
-                                'timeframes': selected_tfs,
+                'objective_type': objective_type,
+                'timeframes': selected_tfs,
                 'optimize_equity_curve': self.equity_curve_check.isChecked(),
                 'batch_size': self.batch_spin.value(),
                 'transaction_costs': self.transaction_costs
@@ -1346,15 +1345,23 @@ Add this as a method to MainWindow and call it before running walk-forward
             (0, self.on_max.value() + self.off_max.value())
         )
 
+        objective_map = {
+            "Percent Gain": "percent_gain",
+            "Sortino Ratio": "sortino",
+            "Min Drawdown": "drawdown",
+            "Profit Factor": "profit_factor"
+        }
+        objective_type = objective_map[self.objective_combo.currentText()]
         optimize_equity_curve = self.equity_curve_check.isChecked()
 
-        # Create optimizer with PSR composite (no objective_type parameter)
+        # Create optimizer
         self.worker = MultiTimeframeOptimizer(
             self.df_dict, 
             self.trials_spin.value(), 
             time_cycle_ranges, 
             mn1_range, mn2_range, entry_range, exit_range,
-            ticker=self.current_ticker,
+            ticker=self.current_ticker, 
+            objective_type=objective_type,
             timeframes=selected_tfs, 
             optimize_equity_curve=optimize_equity_curve,
             batch_size=self.batch_spin.value(),
