@@ -288,6 +288,7 @@ class MultiTimeframeOptimizer(QThread):
             trades = [] if return_trades else None
 
             for i in range(n_bars):
+                # Entry logic: NOT in position AND entry signal
                 if not position and enter_signal[i]:
                     if i + 1 < n_bars:
                         entry_price = open_finest[i + 1]
@@ -304,7 +305,8 @@ class MultiTimeframeOptimizer(QThread):
                         position = True
                         trade_count += 1
                         entry_price = entry_price_with_costs
-                        
+                
+                # Exit logic: IN position AND exit signal
                 elif position and exit_signal[i]:
                     if i + 1 < n_bars:
                         exit_price = open_finest[i + 1]
@@ -339,8 +341,14 @@ class MultiTimeframeOptimizer(QThread):
                         })
                     
                     position = False
-                    
-                equity_curve[i] = equity * (open_finest[i] / entry_price) if position else equity
+                
+                # Update equity curve
+                if position:
+                    # Mark-to-market: current value of position
+                    equity_curve[i] = equity * (open_finest[i] / entry_price)
+                else:
+                    # Cash position
+                    equity_curve[i] = equity
 
             # Close any open position at end
             if position:

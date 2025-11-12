@@ -110,15 +110,14 @@ class AlpacaConfig:
         """Convert yfinance symbol to Alpaca format"""
         return AlpacaConfig.TICKER_MAP.get(yfinance_symbol, yfinance_symbol)
 
-
 @dataclass
 class IndicatorRanges:
     MN1_RANGE: Tuple[int, int] = (5, 50)   # ✅ Not 2-100!
     MN2_RANGE: Tuple[int, int] = (1, 20)   # ✅ Not 2-100!
     ENTRY_RANGE: Tuple[float, float] = (25.0, 45.0)
     EXIT_RANGE: Tuple[float, float] = (55.0, 75.0)
-    ON_RANGE: Tuple[int, int] = (5, 40)
-    OFF_RANGE: Tuple[int, int] = (0, 20)
+    ON_RANGE: Tuple[int, int] = (1, 200)   # ✅ Much wider range
+    OFF_RANGE: Tuple[int, int] = (0, 100)  # ✅ Much wider range
 
 
 class Paths:
