@@ -1654,7 +1654,11 @@ Add this as a method to MainWindow and call it before running walk-forward
         """Display optimization results"""
         self.start_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
-        self.psr_report_btn.setEnabled(True)
+        
+        # ✅ FIX: Check if buttons exist before enabling
+        if hasattr(self, 'psr_report_btn'):
+            self.psr_report_btn.setEnabled(True)
+        
         if df_results.empty:
             QMessageBox.information(self, "Complete", "No valid results")
             self.phase_label.setText("No results")
@@ -1664,7 +1668,9 @@ Add this as a method to MainWindow and call it before running walk-forward
         self.phase_label.setText("✓ Optimization Complete!")
         self.phase_info_label.setText("✓ All phases completed successfully")
         
-        self.walk_forward_btn.setEnabled(True)
+        # ✅ FIX: Check if walk_forward_btn exists before enabling
+        if hasattr(self, 'walk_forward_btn'):
+            self.walk_forward_btn.setEnabled(True)
 
         # Enable live trading
         if ALPACA_AVAILABLE:
@@ -1718,13 +1724,14 @@ Add this as a method to MainWindow and call it before running walk-forward
         # Store trade log for Monte Carlo
         self.last_trade_log = trade_log
         
-        # Enable Monte Carlo button if we have trades
-        if len(trade_log) > 10:  # Need at least 10 trades for meaningful MC
-            self.monte_carlo_btn.setEnabled(True)
-            print(f"✓ {len(trade_log)} trades available for Monte Carlo simulation")
-        else:
-            self.monte_carlo_btn.setEnabled(False)
-            print(f"⚠ Only {len(trade_log)} trades - need >10 for Monte Carlo")
+        # ✅ FIX: Check if monte_carlo_btn exists before enabling
+        if hasattr(self, 'monte_carlo_btn'):
+            if len(trade_log) > 10:  # Need at least 10 trades for meaningful MC
+                self.monte_carlo_btn.setEnabled(True)
+                print(f"✓ {len(trade_log)} trades available for Monte Carlo simulation")
+            else:
+                self.monte_carlo_btn.setEnabled(False)
+                print(f"⚠ Only {len(trade_log)} trades - need >10 for Monte Carlo")
         
         if final_eq_curve is not None:
             label = (
@@ -1840,6 +1847,51 @@ Add this as a method to MainWindow and call it before running walk-forward
         self.trading_status_label.setText(f"Error: {error_msg}")
         self.trading_status_label.setStyleSheet("color: #ff4444; font-size: 10pt;")
         QMessageBox.critical(self, "Trading Error", error_msg)
+
+    def test_rsi_sensitivity():
+        """Test how different MN1/MN2 values affect trade count"""
+        import yfinance as yf
+        import numpy as np
+        
+        # Get AAPL hourly data
+        df = yf.download("AAPL", period="2y", interval="1h")
+        close = df['Close'].values
+        
+        print("\nRSI Sensitivity Test:")
+        print("="*50)
+        
+        test_cases = [
+            (14, 3, "Standard RSI"),
+            (50, 20, "Smooth RSI"),
+            (70, 38, "Your optimized values"),
+        ]
+        
+        for mn1, mn2, label in test_cases:
+            # Calculate RSI
+            delta = np.diff(close, prepend=close[0])
+            gain = np.maximum(delta, 0)
+            loss = np.maximum(-delta, 0)
+            
+            avg_gain = np.convolve(gain, np.ones(mn1)/mn1, mode='same')
+            avg_loss = np.convolve(loss, np.ones(mn1)/mn1, mode='same')
+            
+            rs = avg_gain / (avg_loss + 1e-10)
+            rsi = 100 - 100 / (1 + rs)
+            
+            # Smooth
+            rsi_smooth = np.convolve(rsi, np.ones(mn2)/mn2, mode='same')
+            
+            # Count signals
+            below_30 = np.sum(rsi_smooth < 30)
+            below_35 = np.sum(rsi_smooth < 35)
+            below_40 = np.sum(rsi_smooth < 40)
+            
+            print(f"\n{label} (MN1={mn1}, MN2={mn2}):")
+            print(f"  RSI < 30: {below_30} bars ({below_30/len(rsi)*100:.1f}%)")
+            print(f"  RSI < 35: {below_35} bars ({below_35/len(rsi)*100:.1f}%)")
+            print(f"  RSI < 40: {below_40} bars ({below_40/len(rsi)*100:.1f}%)")
+            print(f"  Min RSI: {np.nanmin(rsi_smooth):.1f}")
+            print(f"  Max RSI: {np.nanmax(rsi_smooth):.1f}")
 
     def run_monte_carlo(self):
         """Run Monte Carlo simulation on trade results"""

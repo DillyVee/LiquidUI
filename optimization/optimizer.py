@@ -1,5 +1,5 @@
 """
-Multi-Timeframe Optimization Engine
+Multi-Timeframe Optimization Engine - FIXED VERSION
 """
 from typing import Dict, List, Tuple, Optional
 import numpy as np
@@ -48,7 +48,7 @@ class MultiTimeframeOptimizer(QThread):
         optimize_equity_curve: bool = False,
         batch_size: int = 500,
         transaction_costs: Optional['TransactionCosts'] = None,
-        composite_weights: Optional[CompositeWeights] = None  # NEW
+        composite_weights: Optional[CompositeWeights] = None
     ):
         super().__init__()
         self.df_dict = df_dict
@@ -74,7 +74,7 @@ class MultiTimeframeOptimizer(QThread):
         else:
             self.transaction_costs = transaction_costs
         
-        # NEW: Composite optimization setup
+        # Composite optimization setup
         self.composite_optimizer = CompositeOptimizer(
             weights=composite_weights,
             benchmark_sharpe=0.0,
@@ -209,22 +209,6 @@ class MultiTimeframeOptimizer(QThread):
         
         self.finest_tf = finest_tf
 
-    def get_objective_value(self, metrics: Optional[Dict]) -> float:
-        """Get optimization objective based on selected metric"""
-        if metrics is None:
-            return -1e6 if self.objective_type != "drawdown" else 1e6
-         
-        if self.objective_type == "percent_gain":
-            return metrics["Percent_Gain_%"]
-        elif self.objective_type == "sortino":
-            return metrics["Sortino_Ratio"]
-        elif self.objective_type == "drawdown":
-            return metrics["Max_Drawdown_%"]
-        elif self.objective_type == "profit_factor":
-            return metrics["Profit_Factor"]
-        else:
-            return metrics["Percent_Gain_%"]
-
     def simulate_multi_tf(self, params: Dict, return_trades: bool = False):
         """
         Heavily optimized backtest using pre-computed numpy arrays
@@ -251,11 +235,15 @@ class MultiTimeframeOptimizer(QThread):
             exit_signal = np.zeros(n_bars, dtype=bool)
             
             # Calculate signals for each timeframe
+            # Calculate signals for each timeframe
             for tf in self.timeframes:
                 mn1 = int(params[f'MN1_{tf}'])
                 mn2 = int(params[f'MN2_{tf}'])
                 entry = params[f'Entry_{tf}']
                 exit_val = params[f'Exit_{tf}']
+                
+                # ✅ DEBUG: Print what parameters are actually being used
+                print(f"  🔍 {tf}: MN1={mn1}, MN2={mn2}, Entry<{entry:.1f}, Exit>{exit_val:.1f}")
                 
                 # Use cached numpy arrays
                 close_tf = self.np_data[tf]['close']
@@ -264,6 +252,9 @@ class MultiTimeframeOptimizer(QThread):
                 rsi = PerformanceMetrics.compute_rsi_vectorized(close_tf, mn1)
                 rsi_smooth = PerformanceMetrics.smooth_vectorized(rsi, mn2)
                 
+                # ✅ DEBUG: Print RSI statistics
+                print(f"     RSI range: {np.nanmin(rsi_smooth):.1f} to {np.nanmax(rsi_smooth):.1f}")
+                print(f"     Trades possible: {np.sum(rsi_smooth < entry)} entry signals")
                 # Vectorized cycle calculation
                 on = int(params[f'On_{tf}'])
                 off = int(params[f'Off_{tf}'])
@@ -303,7 +294,6 @@ class MultiTimeframeOptimizer(QThread):
                         entry_idx = i + 1
                         
                         # Apply transaction costs on entry
-                        # Costs include: commission + slippage + spread
                         entry_cost_pct = self.transaction_costs.TOTAL_PCT
                         entry_price_with_costs = entry_price * (1 + entry_cost_pct)
                         
@@ -313,8 +303,6 @@ class MultiTimeframeOptimizer(QThread):
                         
                         position = True
                         trade_count += 1
-                        
-                        # Store the actual entry price with costs for calculation
                         entry_price = entry_price_with_costs
                         
                 elif position and exit_signal[i]:
@@ -483,6 +471,16 @@ class MultiTimeframeOptimizer(QThread):
                 print(f"PHASE {phase_counter}: {tf.upper()} TIME CYCLE")
                 print(f"{'='*60}")
                 
+                # ✅ FIX: Create NEW study for cycle phase
+                cycle_study = optuna.create_study(
+                    direction="maximize",
+                    sampler=optuna.samplers.TPESampler(
+                        n_startup_trials=10,
+                        multivariate=False,  # ✅ FIX: Set to False to avoid warnings
+                        warn_independent_sampling=False
+                    )
+                )
+                
                 trial_count = [0]
                 
                 def objective_cycle(trial):
@@ -533,18 +531,8 @@ class MultiTimeframeOptimizer(QThread):
                     if eq_curve is None or len(eq_curve) < 50:
                         return 0.0
                     
-                    # For cycle optimization, just use basic Sharpe + penalty for high trades
-                    returns = np.diff(eq_curve) / eq_curve[:-1]
-                    returns = returns[~(np.isnan(returns) | np.isinf(returns))]
-                    
-                    if len(returns) < 10:
-                        return 0.0
-                    
                     sharpe = PSRCalculator.calculate_sharpe_from_equity(eq_curve)
-                    
-                    # Penalize excessive trading in cycle phase
-                    trade_penalty = min(trades / 50.0, 1.0)  # Penalty grows above 50 trades
-                    
+                    trade_penalty = min(trades / 50.0, 1.0)
                     score = sharpe - trade_penalty
                     
                     # Update progress
@@ -554,34 +542,37 @@ class MultiTimeframeOptimizer(QThread):
                     
                     return score
                 
-                self.study.optimize(objective_cycle, n_trials=trials_per_phase, n_jobs=1,
+                cycle_study.optimize(objective_cycle, n_trials=trials_per_phase, n_jobs=1,
                                 catch=(Exception,), show_progress_bar=False)
                 
+                # Store cycle params
                 best_cycle = {
-                    f'On_{tf}': self.study.best_params[f'On_{tf}'],
-                    f'Off_{tf}': self.study.best_params[f'Off_{tf}'],
-                    f'Start_{tf}': self.study.best_params[f'Start_{tf}']
+                    f'On_{tf}': cycle_study.best_params[f'On_{tf}'],
+                    f'Off_{tf}': cycle_study.best_params[f'Off_{tf}'],
+                    f'Start_{tf}': cycle_study.best_params[f'Start_{tf}']
                 }
                 
-                # ✅ FIX: Store cycle params RIGHT NOW (don't wait!)
                 if tf not in self.best_params_per_tf:
                     self.best_params_per_tf[tf] = {}
                 self.best_params_per_tf[tf].update(best_cycle)
                 
                 print(f"✓ Phase {phase_counter} Complete - Cycle params optimized")
+                print(f"  Stored: {best_cycle}")
                 
-                # PHASE: Optimize RSI with FULL composite score
-                # Store cycle params temporarily
-                if tf not in self.best_params_per_tf:
-                    self.best_params_per_tf[tf] = {}
-                self.best_params_per_tf[tf].update(best_cycle)
-                
-                print(f"✓ Phase {phase_counter} Complete - Cycle params optimized")
-                
-                # PHASE: Optimize RSI with FULL composite score
+                # PHASE: Optimize RSI
                 phase_counter += 1
                 self.phase_update.emit(f"Phase {phase_counter}/{total_phases}: {tf.upper()} RSI...")
                 print(f"\nPHASE {phase_counter}: {tf.upper()} RSI (COMPOSITE)")
+                
+                # ✅ FIX: Create NEW study for RSI phase
+                rsi_study = optuna.create_study(
+                    direction="maximize",
+                    sampler=optuna.samplers.TPESampler(
+                        n_startup_trials=10,
+                        multivariate=False,  # ✅ FIX: Set to False
+                        warn_independent_sampling=False
+                    )
+                )
                 
                 trial_count = [0]
                 
@@ -639,30 +630,50 @@ class MultiTimeframeOptimizer(QThread):
                     
                     return scores['composite_score']
                 
-                self.study.optimize(objective_rsi, n_trials=trials_per_phase, n_jobs=1,
+                rsi_study.optimize(objective_rsi, n_trials=trials_per_phase, n_jobs=1,
                                 catch=(Exception,), show_progress_bar=False)
                 
-                # Add RSI params to the timeframe's params
-                self.best_params_per_tf[tf].update({
-                    f'MN1_{tf}': self.study.best_params[f'MN1_{tf}'],
-                    f'MN2_{tf}': self.study.best_params[f'MN2_{tf}'],
-                    f'Entry_{tf}': self.study.best_params[f'Entry_{tf}'],
-                    f'Exit_{tf}': self.study.best_params[f'Exit_{tf}']
-                })
+                # Store RSI params
+                best_rsi = {
+                    f'MN1_{tf}': rsi_study.best_params[f'MN1_{tf}'],
+                    f'MN2_{tf}': rsi_study.best_params[f'MN2_{tf}'],
+                    f'Entry_{tf}': rsi_study.best_params[f'Entry_{tf}'],
+                    f'Exit_{tf}': rsi_study.best_params[f'Exit_{tf}']
+                }
                 
-                print(f"✓ Phase {phase_counter} Complete - RSI optimized with composite score")
+                self.best_params_per_tf[tf].update(best_rsi)
+                
+                print(f"✓ Phase {phase_counter} Complete - RSI optimized")
+                print(f"  Stored: {best_rsi}")
+                print(f"  Complete params for {tf}: {self.best_params_per_tf[tf]}")
             
             # Compile final results
+            print(f"\n{'='*60}")
+            print(f"Compiling final results...")
+            print(f"Timeframes optimized: {list(self.best_params_per_tf.keys())}")
+            
             base_params = {}
             for tf in self.timeframes:
-                base_params.update(self.best_params_per_tf[tf])
+                if tf in self.best_params_per_tf:
+                    base_params.update(self.best_params_per_tf[tf])
+                    print(f"  Added {tf}: {len(self.best_params_per_tf[tf])} params")
+                else:
+                    print(f"  ⚠️  WARNING: {tf} not in best_params_per_tf!")
+            
+            print(f"\nFinal params keys: {list(base_params.keys())}")
             
             # Calculate ALL metrics for display
             base_eq_curve, base_trade_count = self.simulate_multi_tf(base_params)
+            
+            if base_eq_curve is None:
+                raise ValueError("Final simulation failed - no equity curve generated")
+            
             base_metrics = PerformanceMetrics.calculate_metrics(base_eq_curve)
             
-            if base_metrics:
-                base_metrics['Trade_Count'] = base_trade_count
+            if base_metrics is None:
+                raise ValueError("Failed to calculate performance metrics")
+            
+            base_metrics['Trade_Count'] = base_trade_count
             
             # Add composite metrics
             composite_scores = self.calculate_composite_metrics(base_params)
@@ -692,11 +703,29 @@ class MultiTimeframeOptimizer(QThread):
             print(f"  PBO: {composite_scores['pbo']:.3f}")
             print(f"  Annual Turnover: {composite_scores['annual_turnover']:.1f}")
             print(f"  Max DD: {composite_scores['max_drawdown']*100:.1f}%")
-            print(f"\nTraditional Metrics:")
+            
+            print(f"\n📊 Traditional Metrics:")
             print(f"  Return: {final_result['Percent_Gain_%']:.2f}%")
             print(f"  Sortino: {final_result['Sortino_Ratio']:.2f}")
             print(f"  Profit Factor: {final_result['Profit_Factor']:.2f}")
             print(f"  Trades: {final_result['Trade_Count']}")
+            
+            # ✅ FIX: Display all optimized parameters by timeframe
+            print(f"\n⚙️  Optimized Parameters:")
+            for tf in self.timeframes:
+                if tf in self.best_params_per_tf:
+                    params = self.best_params_per_tf[tf]
+                    print(f"\n  {tf.upper()}:")
+                    
+                    # Time Cycle
+                    if f'On_{tf}' in params:
+                        print(f"    Time Cycle: ON={params[f'On_{tf}']}, OFF={params[f'Off_{tf}']}, START={params[f'Start_{tf}']}")
+                    
+                    # RSI
+                    if f'MN1_{tf}' in params:
+                        print(f"    RSI: MN1={params[f'MN1_{tf}']}, MN2={params[f'MN2_{tf}']}")
+                        print(f"    Thresholds: ENTRY<{params[f'Entry_{tf}']:.1f}, EXIT>{params[f'Exit_{tf}']:.1f}")
+            
             print(f"{'='*60}\n")
             
             self.finished.emit(df_results)

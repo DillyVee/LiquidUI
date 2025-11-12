@@ -113,13 +113,12 @@ class AlpacaConfig:
 
 @dataclass
 class IndicatorRanges:
-    """Default parameter ranges for optimization"""
-    MN1_RANGE: Tuple[int, int] = (2, 100)
-    MN2_RANGE: Tuple[int, int] = (2, 100)
-    ENTRY_RANGE: Tuple[float, float] = (30.0, 60.0)
-    EXIT_RANGE: Tuple[float, float] = (40.0, 70.0)
-    ON_RANGE: Tuple[int, int] = (1, 50)
-    OFF_RANGE: Tuple[int, int] = (0, 50)
+    MN1_RANGE: Tuple[int, int] = (5, 50)   # ✅ Not 2-100!
+    MN2_RANGE: Tuple[int, int] = (1, 20)   # ✅ Not 2-100!
+    ENTRY_RANGE: Tuple[float, float] = (25.0, 45.0)
+    EXIT_RANGE: Tuple[float, float] = (55.0, 75.0)
+    ON_RANGE: Tuple[int, int] = (5, 40)
+    OFF_RANGE: Tuple[int, int] = (0, 20)
 
 
 class Paths:
