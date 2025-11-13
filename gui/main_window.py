@@ -24,10 +24,12 @@ from gui.styles import (
     MAIN_STYLESHEET, LIVE_TRADING_BUTTON_ACTIVE, 
     LIVE_TRADING_BUTTON_STOPPED, COLOR_SUCCESS, COLOR_WARNING
 )
-from data import DataLoader
-from optimization import MultiTimeframeOptimizer, PerformanceMetrics, MonteCarloSimulator
-from trading import AlpacaLiveTrader, ALPACA_AVAILABLE
-
+from optimization.monte_carlo import (
+    MonteCarloSimulator,
+    MonteCarloResults,
+    AdvancedMonteCarloAnalyzer,  # Now this will work!
+    AdvancedMonteCarloMetrics
+   )
 
 class MainWindow(QMainWindow):
     """Main application window"""
