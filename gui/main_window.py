@@ -14,22 +14,33 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from PyQt6.QtGui import QFont
 
+# Walk-forward imports
 from optimization.walk_forward import WalkForwardAnalyzer, WalkForwardResults
 
+# Config imports
 from config.settings import (
     OptimizationConfig, RiskConfig, AlpacaConfig, 
     IndicatorRanges, Paths, TransactionCosts
 )
+
+# GUI style imports
 from gui.styles import (
     MAIN_STYLESHEET, LIVE_TRADING_BUTTON_ACTIVE, 
     LIVE_TRADING_BUTTON_STOPPED, COLOR_SUCCESS, COLOR_WARNING
 )
+
+# Monte Carlo imports (these are correct!)
 from optimization.monte_carlo import (
     MonteCarloSimulator,
     MonteCarloResults,
-    AdvancedMonteCarloAnalyzer,  # Now this will work!
+    AdvancedMonteCarloAnalyzer,
     AdvancedMonteCarloMetrics
-   )
+)
+
+# ✅ ADD THESE MISSING IMPORTS:
+from data import DataLoader
+from optimization import MultiTimeframeOptimizer, PerformanceMetrics
+from trading import AlpacaLiveTrader, ALPACA_AVAILABLE
 
 class MainWindow(QMainWindow):
     """Main application window"""
