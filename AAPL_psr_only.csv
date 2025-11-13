@@ -1,2 +1,2 @@
-On_hourly,Off_hourly,Start_hourly,MN1_hourly,MN2_hourly,Entry_hourly,Exit_hourly,Final_Equity_$,Percent_Gain_%,Sortino_Ratio,Max_Drawdown_%,Profit_Factor,Trade_Count,PSR,Sharpe_Ratio,Curve_Optimized
-79,60,245,16,5,44.0,69.0,1501.42,50.14,9.063,-9.35,1.191,38,0.5861879083650283,1.3787516312514412,False
+On_daily,Off_daily,Start_daily,MN1_daily,MN2_daily,Entry_daily,Exit_daily,Final_Equity_$,Percent_Gain_%,Sortino_Ratio,Max_Drawdown_%,Profit_Factor,Trade_Count,PSR,Sharpe_Ratio,Curve_Optimized
+145,87,122,6,4,44.5,74.5,3542.88,254.29,13.319,-28.42,1.214,60,0.6415893016951085,0.746306144397727,False

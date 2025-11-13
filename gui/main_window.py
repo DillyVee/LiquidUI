@@ -1837,7 +1837,7 @@ Add this as a method to MainWindow and call it before running walk-forward
             print(f"  Max RSI: {np.nanmax(rsi_smooth):.1f}")
 
     def run_monte_carlo(self):
-        """Run Monte Carlo simulation on trade results"""
+        """Run comprehensive quantitative Monte Carlo analysis"""
         if not self.last_trade_log or len(self.last_trade_log) < 10:
             QMessageBox.warning(
                 self, "Insufficient Data",
@@ -1853,69 +1853,356 @@ Add this as a method to MainWindow and call it before running walk-forward
         self.monte_carlo_btn.setText("Running Monte Carlo...")
         
         try:
-            print(f"\n{'='*60}")
-            print(f"MONTE CARLO SIMULATION")
-            print(f"{'='*60}")
+            print(f"\n{'='*70}")
+            print(f"QUANTITATIVE MONTE CARLO ANALYSIS")
+            print(f"{'='*70}")
             print(f"Trades: {len(self.last_trade_log)}")
-            print(f"Simulations: {n_simulations}")
-            print(f"Method: Trade Randomization")
+            print(f"Simulations per method: {n_simulations}")
             
-            # Run Monte Carlo simulation
-            results = MonteCarloSimulator.simulate_trade_randomization(
-                trades=self.last_trade_log,
-                n_simulations=n_simulations,
-                initial_equity=1000.0
+            # Extract returns from trade log
+            if isinstance(self.last_trade_log[0], dict):
+                returns = np.array([trade['Percent_Change'] / 100.0 for trade in self.last_trade_log])
+            else:
+                returns = np.array([r / 100.0 if abs(r) > 1 else r for r in self.last_trade_log])
+            
+            initial_equity = 1000.0
+            
+            print(f"\nTrade Statistics:")
+            print(f"  Number of trades: {len(returns)}")
+            print(f"  Mean return: {np.mean(returns)*100:.2f}%")
+            print(f"  Std dev: {np.std(returns)*100:.2f}%")
+            
+            # Calculate skewness
+            from scipy import stats
+            skewness = stats.skew(returns)
+            print(f"  Skewness: {skewness:.2f}")
+            
+            print(f"  Min return: {min(returns)*100:.2f}%")
+            print(f"  Max return: {max(returns)*100:.2f}%")
+            print(f"  Win rate: {np.sum(returns > 0) / len(returns) * 100:.1f}%")
+            
+            # Calculate original result
+            original_equity = initial_equity * np.prod(1 + returns)
+            print(f"\nOriginal Equity: ${original_equity:,.2f} ({(original_equity/initial_equity-1)*100:+.2f}%)")
+            
+            # ===================================================================
+            # METHOD 1: TRADE RANDOMIZATION (tests path dependence)
+            # ===================================================================
+            print(f"\n{'─'*70}")
+            print(f"METHOD 1: TRADE RANDOMIZATION")
+            print(f"{'─'*70}")
+            print(f"Tests if trade order affects results (path dependence)")
+            
+            randomization_results = []
+            for i in range(n_simulations):
+                shuffled = np.random.permutation(returns)
+                equity = initial_equity * np.prod(1 + shuffled)
+                randomization_results.append(equity)
+            
+            randomization_results = np.array(randomization_results)
+            
+            print(f"  Mean: ${np.mean(randomization_results):,.2f}")
+            print(f"  Std: ${np.std(randomization_results):,.2f}")
+            print(f"  95% CI: [${np.percentile(randomization_results, 2.5):,.0f}, ${np.percentile(randomization_results, 97.5):,.0f}]")
+            print(f"  Original in CI: {'✅ YES' if np.percentile(randomization_results, 2.5) <= original_equity <= np.percentile(randomization_results, 97.5) else '❌ NO'}")
+            
+            # ===================================================================
+            # METHOD 2: BOOTSTRAP RESAMPLING (tests sample robustness)
+            # ===================================================================
+            print(f"\n{'─'*70}")
+            print(f"METHOD 2: BOOTSTRAP RESAMPLING")
+            print(f"{'─'*70}")
+            print(f"Tests robustness to different trade samples (with replacement)")
+            
+            bootstrap_results = []
+            for i in range(n_simulations):
+                # Sample with replacement
+                sampled = np.random.choice(returns, size=len(returns), replace=True)
+                equity = initial_equity * np.prod(1 + sampled)
+                bootstrap_results.append(equity)
+            
+            bootstrap_results = np.array(bootstrap_results)
+            
+            print(f"  Mean: ${np.mean(bootstrap_results):,.2f}")
+            print(f"  Std: ${np.std(bootstrap_results):,.2f}")
+            print(f"  95% CI: [${np.percentile(bootstrap_results, 2.5):,.0f}, ${np.percentile(bootstrap_results, 97.5):,.0f}]")
+            print(f"  Original in CI: {'✅ YES' if np.percentile(bootstrap_results, 2.5) <= original_equity <= np.percentile(bootstrap_results, 97.5) else '❌ NO'}")
+            
+            # ===================================================================
+            # METHOD 3: PARAMETRIC MONTE CARLO (assumes normal distribution)
+            # ===================================================================
+            print(f"\n{'─'*70}")
+            print(f"METHOD 3: PARAMETRIC (NORMAL) SIMULATION")
+            print(f"{'─'*70}")
+            print(f"Tests assuming returns follow normal distribution")
+            
+            mean_return = np.mean(returns)
+            std_return = np.std(returns)
+            
+            parametric_results = []
+            for i in range(n_simulations):
+                # Generate synthetic returns from normal distribution
+                synthetic = np.random.normal(mean_return, std_return, len(returns))
+                equity = initial_equity * np.prod(1 + synthetic)
+                parametric_results.append(equity)
+            
+            parametric_results = np.array(parametric_results)
+            
+            print(f"  Mean: ${np.mean(parametric_results):,.2f}")
+            print(f"  Std: ${np.std(parametric_results):,.2f}")
+            print(f"  95% CI: [${np.percentile(parametric_results, 2.5):,.0f}, ${np.percentile(parametric_results, 97.5):,.0f}]")
+            print(f"  Original in CI: {'✅ YES' if np.percentile(parametric_results, 2.5) <= original_equity <= np.percentile(parametric_results, 97.5) else '❌ NO'}")
+            
+            # ===================================================================
+            # METHOD 4: BLOCK BOOTSTRAP (preserves time structure)
+            # ===================================================================
+            print(f"\n{'─'*70}")
+            print(f"METHOD 4: BLOCK BOOTSTRAP")
+            print(f"{'─'*70}")
+            print(f"Tests robustness while preserving sequential trade patterns")
+            
+            block_size = max(2, len(returns) // 10)  # ~10% of trades per block
+            print(f"  Block size: {block_size} trades")
+            
+            block_bootstrap_results = []
+            for i in range(n_simulations):
+                # Create blocks
+                resampled = []
+                while len(resampled) < len(returns):
+                    start_idx = np.random.randint(0, len(returns) - block_size + 1)
+                    block = returns[start_idx:start_idx + block_size]
+                    resampled.extend(block)
+                
+                resampled = np.array(resampled[:len(returns)])  # Trim to exact length
+                equity = initial_equity * np.prod(1 + resampled)
+                block_bootstrap_results.append(equity)
+            
+            block_bootstrap_results = np.array(block_bootstrap_results)
+            
+            print(f"  Mean: ${np.mean(block_bootstrap_results):,.2f}")
+            print(f"  Std: ${np.std(block_bootstrap_results):,.2f}")
+            print(f"  95% CI: [${np.percentile(block_bootstrap_results, 2.5):,.0f}, ${np.percentile(block_bootstrap_results, 97.5):,.0f}]")
+            print(f"  Original in CI: {'✅ YES' if np.percentile(block_bootstrap_results, 2.5) <= original_equity <= np.percentile(block_bootstrap_results, 97.5) else '❌ NO'}")
+            
+            # ===================================================================
+            # AGGREGATE STATISTICS
+            # ===================================================================
+            print(f"\n{'='*70}")
+            print(f"AGGREGATE MONTE CARLO STATISTICS")
+            print(f"{'='*70}")
+            
+            all_methods = {
+                'Randomization': randomization_results,
+                'Bootstrap': bootstrap_results,
+                'Parametric': parametric_results,
+                'Block Bootstrap': block_bootstrap_results
+            }
+            
+            for method_name, results in all_methods.items():
+                prob_profit = np.sum(results > initial_equity) / len(results)
+                prob_beats_original = np.sum(results > original_equity) / len(results)
+                
+                print(f"\n{method_name}:")
+                print(f"  Probability of profit: {prob_profit*100:.1f}%")
+                print(f"  Probability beats original: {prob_beats_original*100:.1f}%")
+                print(f"  Risk of ruin (<$500): {np.sum(results < 500) / len(results) * 100:.2f}%")
+            
+            # ===================================================================
+            # COMPREHENSIVE VISUALIZATION
+            # ===================================================================
+            import matplotlib.pyplot as plt
+            
+            fig = plt.figure(figsize=(16, 12), facecolor='#121212')
+            gs = fig.add_gridspec(3, 3, hspace=0.3, wspace=0.3)
+            
+            fig.suptitle(
+                f'Quantitative Monte Carlo Analysis - {self.current_ticker}\n'
+                f'{n_simulations} simulations per method | {len(returns)} trades',
+                color='white', fontsize=14, fontweight='bold'
             )
             
-            # Generate and display report
-            report = MonteCarloSimulator.generate_monte_carlo_report(results, initial_equity=1000.0)
-            print(report)
+            # Plot 1: Distributions comparison
+            ax1 = fig.add_subplot(gs[0, :])
             
-            # Create plot
-            fig = MonteCarloSimulator.plot_monte_carlo_results(
-                results,
-                title=f"Monte Carlo Simulation - {self.current_ticker} ({n_simulations} runs)",
-                max_paths=100
-            )
+            for method_name, results in all_methods.items():
+                unique_vals = np.unique(results)
+                n_unique = len(unique_vals)
+                
+                if n_unique == 1:
+                    # Single value - plot vertical line
+                    ax1.axvline(unique_vals[0], linewidth=3, alpha=0.7, label=method_name)
+                elif n_unique < 10:
+                    # Very few unique values - use scatter plot with size based on frequency
+                    from collections import Counter
+                    counts = Counter(results)
+                    values = list(counts.keys())
+                    frequencies = list(counts.values())
+                    max_freq = max(frequencies)
+                    sizes = [f / max_freq * 200 for f in frequencies]
+                    ax1.scatter(values, [0.1] * len(values), s=sizes, alpha=0.6, label=method_name)
+                else:
+                    # Enough unique values - use KDE
+                    try:
+                        from scipy import stats
+                        kde = stats.gaussian_kde(results)
+                        x_range = np.linspace(results.min(), results.max(), 200)
+                        ax1.plot(x_range, kde(x_range), label=method_name, linewidth=2, alpha=0.8)
+                    except:
+                        # Fallback to histogram with explicit bins
+                        n_bins = min(20, n_unique)
+                        bin_edges = np.linspace(results.min(), results.max(), n_bins + 1)
+                        ax1.hist(results, bins=bin_edges, alpha=0.3, label=method_name, density=True)
+            
+            ax1.axvline(original_equity, color='#ff4444', linewidth=2, linestyle='--', 
+                    label=f'Original: ${original_equity:.0f}', zorder=10)
+            ax1.axvline(initial_equity, color='#888888', linewidth=1, linestyle=':', 
+                    label=f'Break-even: ${initial_equity:.0f}', zorder=10)
+            
+            ax1.set_xlabel('Final Equity ($)', color='white', fontsize=11)
+            ax1.set_ylabel('Density / Frequency', color='white', fontsize=11)
+            ax1.set_title('Distribution Comparison Across Methods', color='white', fontweight='bold')
+            ax1.legend(loc='upper right', fontsize=9, framealpha=0.9)
+            ax1.set_facecolor('#1a1a1a')
+            ax1.tick_params(colors='white')
+            ax1.grid(True, alpha=0.2)
+            
+            # Remove y-axis ticks if we have mixed plot types
+            if any(len(np.unique(results)) < 10 for results in all_methods.values()):
+                ax1.set_yticks([])
+            
+            # Plot 2-5: Individual method details
+            positions = [(1, 0), (1, 1), (1, 2), (2, 0)]
+            
+            for idx, (method_name, results) in enumerate(all_methods.items()):
+                ax = fig.add_subplot(gs[positions[idx]])
+                
+                # Box plot
+                bp = ax.boxplot([results], vert=True, widths=0.6,
+                            patch_artist=True, showmeans=True)
+                bp['boxes'][0].set_facecolor('#2979ff')
+                bp['boxes'][0].set_alpha(0.6)
+                bp['medians'][0].set_color('#00ff88')
+                bp['medians'][0].set_linewidth(2)
+                bp['means'][0].set_marker('D')
+                bp['means'][0].set_markerfacecolor('#ffaa00')
+                
+                # Add original line
+                ax.axhline(original_equity, color='#ff4444', linewidth=2, 
+                        linestyle='--', alpha=0.8)
+                
+                # Add statistics text
+                prob_profit = np.sum(results > initial_equity) / len(results)
+                stats_text = (
+                    f'Mean: ${np.mean(results):,.0f}\n'
+                    f'Median: ${np.median(results):,.0f}\n'
+                    f'Prob Profit: {prob_profit*100:.0f}%'
+                )
+                
+                ax.text(0.5, 0.02, stats_text, transform=ax.transAxes,
+                    fontsize=8, color='white', ha='center', va='bottom',
+                    bbox=dict(boxstyle='round', facecolor='#1a1a1a', alpha=0.8))
+                
+                ax.set_ylabel('Final Equity ($)', color='white', fontsize=9)
+                ax.set_title(method_name, color='white', fontweight='bold', fontsize=10)
+                ax.set_facecolor('#1a1a1a')
+                ax.tick_params(colors='white')
+                ax.grid(True, alpha=0.2, axis='y')
+                ax.set_xticks([])
+            
+            # Plot 6: Risk metrics comparison
+            ax6 = fig.add_subplot(gs[2, 1:])
+            
+            metrics_data = []
+            methods_list = list(all_methods.keys())
+            
+            for method_name, results in all_methods.items():
+                prob_profit = np.sum(results > initial_equity) / len(results)
+                prob_beats_orig = np.sum(results > original_equity) / len(results)
+                risk_of_ruin = np.sum(results < initial_equity * 0.5) / len(results)
+                
+                metrics_data.append([prob_profit * 100, prob_beats_orig * 100, risk_of_ruin * 100])
+            
+            metrics_data = np.array(metrics_data).T
+            
+            x = np.arange(len(methods_list))
+            width = 0.25
+            
+            ax6.bar(x - width, metrics_data[0], width, label='Prob. Profit', color='#00ff88', alpha=0.7)
+            ax6.bar(x, metrics_data[1], width, label='Beats Original', color='#2979ff', alpha=0.7)
+            ax6.bar(x + width, metrics_data[2], width, label='Risk of Ruin', color='#ff4444', alpha=0.7)
+            
+            ax6.set_ylabel('Percentage (%)', color='white', fontsize=11)
+            ax6.set_title('Risk Metrics Comparison', color='white', fontweight='bold')
+            ax6.set_xticks(x)
+            ax6.set_xticklabels(methods_list, rotation=15, ha='right')
+            ax6.legend(fontsize=9)
+            ax6.set_facecolor('#1a1a1a')
+            ax6.tick_params(colors='white')
+            ax6.grid(True, alpha=0.2, axis='y')
+            ax6.axhline(50, color='white', linewidth=0.5, linestyle=':', alpha=0.5)
+            
+            plt.tight_layout()
             
             # Save plot
-            filename = f"{self.current_ticker}_monte_carlo.png"
+            filename = f"{self.current_ticker}_quant_monte_carlo.png"
             fig.savefig(filename, dpi=150, facecolor='#121212', edgecolor='none')
-            print(f"✓ Saved Monte Carlo plot to {filename}")
+            print(f"\n✓ Saved quantitative Monte Carlo plot to {filename}")
             
-            # Show results in message box
-            original_return = (results.original_equity / 1000.0 - 1) * 100
-            mean_return = (results.mean_equity / 1000.0 - 1) * 100
+            # ===================================================================
+            # SUMMARY REPORT & INTERPRETATION
+            # ===================================================================
+            print(f"\n{'='*70}")
+            print(f"MONTE CARLO INTERPRETATION")
+            print(f"{'='*70}")
             
-            message = (
-                f"Monte Carlo Simulation Complete!\n\n"
-                f"📊 Original Return: {original_return:+.1f}%\n"
-                f"📈 Mean Return: {mean_return:+.1f}%\n"
-                f"📉 Median Return: {(results.median_equity/1000-1)*100:+.1f}%\n\n"
-                f"🎯 95% Confidence Interval:\n"
-                f"   ${results.percentile_5:,.0f} to ${results.percentile_95:,.0f}\n\n"
-                f"⚠️  Worst Case: ${results.min_equity:,.0f}\n"
-                f"🎉 Best Case: ${results.max_equity:,.0f}\n\n"
-                f"✅ Probability of Profit: {results.probability_profit*100:.1f}%\n\n"
-            )
+            # Check consistency across methods
+            all_results_flat = np.concatenate([r for r in all_methods.values()])
+            overall_prob_profit = np.sum(all_results_flat > initial_equity) / len(all_results_flat)
             
-            if results.probability_profit < 0.5:
-                message += "❌ WARNING: Strategy more likely to lose!\n"
-                icon = QMessageBox.Icon.Warning
-            elif results.probability_profit < 0.7:
-                message += "⚠️  Moderate confidence in strategy\n"
+            # Count how many methods have original in CI
+            in_ci_count = sum([
+                np.percentile(r, 2.5) <= original_equity <= np.percentile(r, 97.5)
+                for r in all_methods.values()
+            ])
+            
+            print(f"\nOverall Assessment:")
+            print(f"  Methods with original in 95% CI: {in_ci_count}/4")
+            print(f"  Overall probability of profit: {overall_prob_profit*100:.1f}%")
+            
+            if in_ci_count >= 3 and overall_prob_profit > 0.7:
+                verdict = "✅ ROBUST - Strategy shows consistency across multiple tests"
+                icon = QMessageBox.Icon.Information
+            elif in_ci_count >= 2 and overall_prob_profit > 0.5:
+                verdict = "⚠️  MODERATE - Strategy shows some robustness but watch closely"
                 icon = QMessageBox.Icon.Information
             else:
-                message += "✅ Strategy appears robust!\n"
-                icon = QMessageBox.Icon.Information
+                verdict = "❌ FRAGILE - Results may be due to luck or overfitting"
+                icon = QMessageBox.Icon.Warning
             
-            message += f"\nPlot saved to: {filename}\nSee console for full report."
+            print(f"\n{verdict}")
             
             # Display plot
             plt.show()
             
             # Show message box
-            QMessageBox(icon, "Monte Carlo Results", message, QMessageBox.StandardButton.Ok, self).exec()
+            message = (
+                f"Quantitative Monte Carlo Analysis Complete!\n\n"
+                f"📊 Original Return: {(original_equity/initial_equity-1)*100:+.1f}%\n\n"
+                f"🎲 Methods Tested:\n"
+                f"  • Trade Randomization (path dependence)\n"
+                f"  • Bootstrap Resampling (sample robustness)\n"
+                f"  • Parametric Normal (distributional)\n"
+                f"  • Block Bootstrap (time structure)\n\n"
+                f"📈 Results:\n"
+                f"  • Original in 95% CI: {in_ci_count}/4 methods\n"
+                f"  • Overall Prob. Profit: {overall_prob_profit*100:.1f}%\n\n"
+                f"{verdict}\n\n"
+                f"See console for detailed analysis.\n"
+                f"Plot saved to: {filename}"
+            )
+            
+            QMessageBox(icon, "Quantitative Monte Carlo Results", message, 
+                    QMessageBox.StandardButton.Ok, self).exec()
             
         except Exception as e:
             QMessageBox.critical(
@@ -1929,6 +2216,13 @@ Add this as a method to MainWindow and call it before running walk-forward
             # Re-enable button
             self.monte_carlo_btn.setEnabled(True)
             self.monte_carlo_btn.setText("🎲 Run Monte Carlo Simulation")
+
+    def _calculate_skewness(self, returns):
+        """Calculate skewness of returns"""
+        mean = np.mean(returns)
+        std = np.std(returns)
+        n = len(returns)
+        return (n / ((n-1) * (n-2))) * np.sum(((returns - mean) / std) ** 3)
 
     def closeEvent(self, event):
         """Handle window close"""
