@@ -1,0 +1,2 @@
+On_hourly,Off_hourly,Start_hourly,MN1_hourly,MN2_hourly,Entry_hourly,Exit_hourly,Final_Equity_$,Percent_Gain_%,Sortino_Ratio,Max_Drawdown_%,Profit_Factor,Trade_Count,PSR,Sharpe_Ratio,Curve_Optimized
+145,0,347,5,4,23.0,63.0,1203.56,20.36,15.808,-5.1,1.374,25,0.6207877098285803,2.4254822257138726,False

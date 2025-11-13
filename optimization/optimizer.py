@@ -1,19 +1,20 @@
 """
-Multi-Timeframe Optimization Engine - FIXED
+Multi-Timeframe Optimization Engine - COMPLETE WITH ORGANIZED STORAGE
 PSR calculation NO LONGER includes walk-forward analysis
 Walk-forward is now a separate button/function
 """
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, TYPE_CHECKING
 import numpy as np
 import pandas as pd
 from PyQt6.QtCore import QThread, pyqtSignal
 import optuna
 
 from optimization.metrics import PerformanceMetrics
-from config.settings import RETRACEMENT_ZONES
-
-# Import the SIMPLIFIED PSR composite (no WFA)
+from config.settings import RETRACEMENT_ZONES, Paths
 from optimization.psr_composite import PSRCalculator
+
+if TYPE_CHECKING:
+    from config.settings import TransactionCosts
 
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
@@ -38,7 +39,6 @@ class MultiTimeframeOptimizer(QThread):
         exit_range: Tuple[float, float],
         ticker: str = "",
         timeframes: Optional[List[str]] = None,
-        optimize_equity_curve: bool = False,
         batch_size: int = 500,
         transaction_costs: Optional['TransactionCosts'] = None,
     ):
@@ -53,7 +53,6 @@ class MultiTimeframeOptimizer(QThread):
         self.entry_range = entry_range
         self.exit_range = exit_range
         self.ticker = ticker
-        self.optimize_equity_curve = optimize_equity_curve
         self.all_results = []
         self.best_params_per_tf = {}
         self.base_eq_curve = None
@@ -66,7 +65,9 @@ class MultiTimeframeOptimizer(QThread):
         else:
             self.transaction_costs = transaction_costs
         
-        # Create Optuna study (no composite optimizer needed)
+        # Create Optuna study with organized storage
+        storage_path = Paths.get_optuna_path(ticker) if ticker else None
+        
         self.study = optuna.create_study(
             direction="maximize",
             sampler=optuna.samplers.TPESampler(
@@ -74,8 +75,11 @@ class MultiTimeframeOptimizer(QThread):
                 multivariate=False,
                 warn_independent_sampling=False
             ),
-            study_name=f"{ticker}_psr_opt" if ticker else "psr_opt"
+            study_name=f"{ticker}_psr_opt" if ticker else "psr_opt",
+            storage=storage_path,
+            load_if_exists=True if storage_path else False
         )
+        
         # Pre-process data
         self._preprocess_data()
         self._align_timeframes()
@@ -173,10 +177,10 @@ class MultiTimeframeOptimizer(QThread):
         
         # Calculate PSR (with trade-count awareness for realistic confidence)
         psr = PSRCalculator.calculate_psr(
-        returns,
-        benchmark_sharpe=0.0,
-        annualization_factor=ann_factor,
-        trade_count=trade_count  # ← ADD THIS LINE
+            returns,
+            benchmark_sharpe=0.0,
+            annualization_factor=ann_factor,
+            trade_count=trade_count
         )
         
         # Calculate Sharpe Ratio
@@ -284,7 +288,7 @@ class MultiTimeframeOptimizer(QThread):
                     exit_cost_pct = self.transaction_costs.TOTAL_PCT
                     exit_price_with_costs = exit_price * (1 - exit_cost_pct)
                     
-                    # ✅ CRITICAL FIX: Calculate actual percent change
+                    # Calculate actual percent change
                     pct_change = (exit_price_with_costs / entry_price - 1) * 100
                     
                     # Update equity
@@ -294,14 +298,14 @@ class MultiTimeframeOptimizer(QThread):
                     if self.transaction_costs.COMMISSION_FIXED > 0:
                         equity -= self.transaction_costs.COMMISSION_FIXED
                     
-                    # ✅ CRITICAL: Store trades with ACTUAL returns
+                    # Store trades with ACTUAL returns
                     if return_trades:
                         trades.append({
                             'Entry_Date': datetime_finest[entry_idx],
                             'Entry_Price': entry_price,
                             'Exit_Date': datetime_finest[exit_idx],
                             'Exit_Price': exit_price_with_costs,
-                            'Percent_Change': pct_change,  # ✅ This is the key field
+                            'Percent_Change': pct_change,
                             'Equity_Before': equity_before,
                             'Equity_After': equity,
                             'Transaction_Cost_Entry': entry_cost_pct * 100,
@@ -343,13 +347,6 @@ class MultiTimeframeOptimizer(QThread):
                 equity_curve[-1] = equity
 
             if return_trades:
-                # ✅ DIAGNOSTIC: Print trade log
-                print(f"\n🔍 Trade Log Created: {len(trades)} trades")
-                if trades:
-                    print(f"Sample trades:")
-                    for i, trade in enumerate(trades[:5]):
-                        print(f"  Trade {i+1}: {trade['Percent_Change']:+.2f}%")
-                
                 return equity_curve, trade_count, trades
             
             return equity_curve, trade_count
@@ -370,7 +367,6 @@ class MultiTimeframeOptimizer(QThread):
             print(f"Total trials: {self.n_trials}")
             print(f"{'='*60}\n")
             
-            # ✅ NEW - PSR composite doesn't need to print weights
             print("📊 Using PSR Composite Optimization")
             print(f"   (Walk-Forward: SEPARATE - not in optimization)")
             print()
@@ -525,7 +521,7 @@ class MultiTimeframeOptimizer(QThread):
                         params[f'Off_{future_tf}'] = off_range[0]
                         params[f'Start_{future_tf}'] = 0
                     
-                    # ✅ CORRECT: Calculate PSR only
+                    # Calculate PSR only
                     psr, sharpe = self.calculate_psr(params)
                     
                     trial.set_user_attr('psr', psr)
@@ -535,7 +531,7 @@ class MultiTimeframeOptimizer(QThread):
                     phase_pct = (trial_count[0] / trials_per_phase) * (100 / total_phases)
                     self.progress.emit(int(progress_pct + phase_pct))
                     
-                    return psr  # ✅ Return PSR as the optimization objective
+                    return psr
                 
                 rsi_study.optimize(objective_rsi, n_trials=trials_per_phase, n_jobs=1,
                                 catch=(Exception,), show_progress_bar=False)
@@ -572,21 +568,24 @@ class MultiTimeframeOptimizer(QThread):
 
             base_metrics['Trade_Count'] = base_trade_count
 
-            # ✅ Calculate PSR and Sharpe (NO COMPOSITE)
+            # Calculate PSR and Sharpe
             psr, sharpe = self.calculate_psr(base_params)
             base_metrics['PSR'] = psr
             base_metrics['Sharpe_Ratio'] = sharpe
 
             print(f"✓ Calculated PSR: {psr:.3f}, Sharpe: {sharpe:.2f}")
 
-            # Save results
+            # Save results with organized paths
             final_result = {**base_params, **base_metrics, 'Curve_Optimized': False}
             self.all_results.append(final_result)
             self.new_best.emit(final_result)
 
             df_results = pd.DataFrame([final_result])
-            filename = f"{self.ticker}_psr_only.csv"
-            df_results.to_csv(filename, index=False)
+            
+            # Save to organized data folder
+            results_path = Paths.get_results_path(self.ticker, suffix="_psr_only")
+            df_results.to_csv(results_path, index=False)
+            print(f"\n✅ Results saved to: {results_path}")
 
             print(f"\n{'='*60}")
             print(f"OPTIMIZATION COMPLETE")

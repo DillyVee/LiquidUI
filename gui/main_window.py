@@ -324,14 +324,6 @@ Add this as a method to MainWindow and call it before running walk-forward
         for cb in self.tf_checkboxes.values():
             tf_layout.addWidget(cb)
         
-        self.equity_curve_check = QCheckBox("Optimize on Equity Curve")
-        self.equity_curve_check.setToolTip("Optimize trades on equity curve retracement zones")
-        tf_layout.addWidget(self.equity_curve_check)
-        
-        self.show_base_curve_check = QCheckBox("Show Base Strategy")
-        self.show_base_curve_check.setChecked(True)
-        tf_layout.addWidget(self.show_base_curve_check)
-        
         tf_group.setLayout(tf_layout)
         layout.addWidget(tf_group)
 
@@ -428,8 +420,6 @@ Add this as a method to MainWindow and call it before running walk-forward
             (0, self.on_max.value() + self.off_max.value())
         )
 
-        optimize_equity_curve = self.equity_curve_check.isChecked()
-
         # Create optimizer (no objective_type parameter needed)
         self.worker = MultiTimeframeOptimizer(
             self.df_dict, 
@@ -438,7 +428,6 @@ Add this as a method to MainWindow and call it before running walk-forward
             mn1_range, mn2_range, entry_range, exit_range,
             ticker=self.current_ticker,
             timeframes=selected_tfs, 
-            optimize_equity_curve=optimize_equity_curve,
             batch_size=self.batch_spin.value(),
             transaction_costs=self.transaction_costs
         )
@@ -885,7 +874,6 @@ Add this as a method to MainWindow and call it before running walk-forward
                 'exit_range': exit_range,
                 'ticker': self.current_ticker,
                 'timeframes': selected_tfs,
-                'optimize_equity_curve': self.equity_curve_check.isChecked(),
                 'batch_size': self.batch_spin.value(),
                 'transaction_costs': self.transaction_costs
 }
