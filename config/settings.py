@@ -437,13 +437,6 @@ QCheckBox::indicator:checked {
     image: none;
 }
 
-QCheckBox::indicator:checked:after {
-    content: "✓";
-    color: white;
-    font-size: 14px;
-    font-weight: bold;
-}
-
 QCheckBox::indicator:disabled {
     background-color: #161b22;
     border: 2px solid #21262d;

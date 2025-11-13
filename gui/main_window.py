@@ -1342,8 +1342,6 @@ Add this as a method to MainWindow and call it before running walk-forward
             (0, self.on_max.value() + self.off_max.value())
         )
 
-        optimize_equity_curve = self.equity_curve_check.isChecked()
-
         # Create optimizer with PSR composite (no objective_type parameter)
         self.worker = MultiTimeframeOptimizer(
             self.df_dict, 
@@ -1352,7 +1350,6 @@ Add this as a method to MainWindow and call it before running walk-forward
             mn1_range, mn2_range, entry_range, exit_range,
             ticker=self.current_ticker,
             timeframes=selected_tfs, 
-            optimize_equity_curve=optimize_equity_curve,
             batch_size=self.batch_spin.value(),
             transaction_costs=self.transaction_costs
         )
