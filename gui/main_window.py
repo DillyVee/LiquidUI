@@ -1600,7 +1600,7 @@ Add this as a method to MainWindow and call it before running walk-forward
         self._plot_results(best)
     
     def _plot_results(self, best):
-        """Plot optimization results on chart"""
+        """Plot optimization results and GET TRADE LOG"""
         # Get optimized timeframes
         optimized_tfs = []
         best_dict = best.to_dict() if isinstance(best, pd.Series) else best
@@ -1629,23 +1629,40 @@ Add this as a method to MainWindow and call it before running walk-forward
             linewidth=2, alpha=0.7
         )
         
-        # Strategy curve - STORE TRADE LOG
+        # ✅ CRITICAL: Get strategy curve WITH TRADES
+        print("\n🔍 Generating trade log for Monte Carlo...")
         final_eq_curve, final_trades, trade_log = self.worker.simulate_multi_tf(
             best_dict, return_trades=True
         )
         
+        # ✅ DIAGNOSTIC: Verify trade log
+        print(f"\n📊 Trade Log Verification:")
+        print(f"   Total trades: {len(trade_log)}")
+        
+        if trade_log:
+            returns = [t['Percent_Change'] for t in trade_log]
+            print(f"   Return range: [{min(returns):.2f}%, {max(returns):.2f}%]")
+            print(f"   Mean return: {np.mean(returns):.2f}%")
+            print(f"   Std dev: {np.std(returns):.2f}%")
+            print(f"   Unique returns: {len(set(returns))}")
+            
+            print(f"\n   Sample trades:")
+            for i, trade in enumerate(trade_log[:5]):
+                print(f"     Trade {i+1}: {trade['Percent_Change']:+.2f}%")
+        
         # Store trade log for Monte Carlo
         self.last_trade_log = trade_log
         
-        # ✅ FIX: Check if monte_carlo_btn exists before enabling
+        # Enable Monte Carlo if enough trades
         if hasattr(self, 'monte_carlo_btn'):
-            if len(trade_log) > 10:  # Need at least 10 trades for meaningful MC
+            if len(trade_log) > 10:
                 self.monte_carlo_btn.setEnabled(True)
-                print(f"✓ {len(trade_log)} trades available for Monte Carlo simulation")
+                print(f"\n✅ Monte Carlo button enabled ({len(trade_log)} trades)")
             else:
                 self.monte_carlo_btn.setEnabled(False)
-                print(f"⚠ Only {len(trade_log)} trades - need >10 for Monte Carlo")
+                print(f"\n⚠️  Monte Carlo disabled: only {len(trade_log)} trades (need >10)")
         
+        # Plot strategy curve
         if final_eq_curve is not None:
             label = (
                 f"Strategy ({best['Percent_Gain_%']:+.1f}%, "

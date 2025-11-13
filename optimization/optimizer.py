@@ -191,8 +191,12 @@ class MultiTimeframeOptimizer(QThread):
         
         return float(psr), float(sharpe)
 
+    
+
     def simulate_multi_tf(self, params: Dict, return_trades: bool = False):
-        """Heavily optimized backtest using pre-computed numpy arrays"""
+        """
+        FIXED VERSION - Now properly returns trade log with actual returns
+        """
         if self.stopped:
             return (None, 0, []) if return_trades else (None, 0)
 
@@ -203,7 +207,7 @@ class MultiTimeframeOptimizer(QThread):
             datetime_finest = self.np_data[self.finest_tf]['datetime']
             n_bars = len(close_finest)
             
-            # Pre-allocate all signal arrays
+            # Pre-allocate signal arrays
             enter_signal = np.ones(n_bars, dtype=bool)
             exit_signal = np.zeros(n_bars, dtype=bool)
             
@@ -214,20 +218,19 @@ class MultiTimeframeOptimizer(QThread):
                 entry = params[f'Entry_{tf}']
                 exit_val = params[f'Exit_{tf}']
                 
-                # Use cached numpy arrays
                 close_tf = self.np_data[tf]['close']
                 
-                # Vectorized RSI calculation
+                # Vectorized RSI
                 rsi = PerformanceMetrics.compute_rsi_vectorized(close_tf, mn1)
                 rsi_smooth = PerformanceMetrics.smooth_vectorized(rsi, mn2)
                 
-                # Vectorized cycle calculation
+                # Vectorized cycle
                 on = int(params[f'On_{tf}'])
                 off = int(params[f'Off_{tf}'])
                 start = int(params[f'Start_{tf}'])
                 cycle = ((np.arange(len(close_tf)) - start) % (on + off)) < on
                 
-                # Map to finest timeframe if needed
+                # Map to finest timeframe
                 if tf != self.finest_tf:
                     indices = self.tf_indices[tf]
                     valid_mask = indices >= 0
@@ -240,11 +243,11 @@ class MultiTimeframeOptimizer(QThread):
                     rsi_smooth_mapped = rsi_smooth
                     cycle_mapped = cycle
                 
-                # Vectorized signal logic
+                # Signals
                 enter_signal &= (rsi_smooth_mapped < entry) & cycle_mapped
                 exit_signal |= (rsi_smooth_mapped > exit_val) | (~cycle_mapped)
             
-            # Vectorized backtest simulation
+            # Backtest simulation
             equity_curve = np.zeros(n_bars)
             equity = 1000.0
             position = False
@@ -259,6 +262,7 @@ class MultiTimeframeOptimizer(QThread):
                         entry_price = open_finest[i + 1]
                         entry_idx = i + 1
                         
+                        # Apply costs
                         entry_cost_pct = self.transaction_costs.TOTAL_PCT
                         entry_price_with_costs = entry_price * (1 + entry_cost_pct)
                         
@@ -280,20 +284,26 @@ class MultiTimeframeOptimizer(QThread):
                     exit_cost_pct = self.transaction_costs.TOTAL_PCT
                     exit_price_with_costs = exit_price * (1 - exit_cost_pct)
                     
+                    # ✅ CRITICAL FIX: Calculate actual percent change
                     pct_change = (exit_price_with_costs / entry_price - 1) * 100
+                    
+                    # Update equity
+                    equity_before = equity
                     equity *= exit_price_with_costs / entry_price
                     
                     if self.transaction_costs.COMMISSION_FIXED > 0:
                         equity -= self.transaction_costs.COMMISSION_FIXED
                     
+                    # ✅ CRITICAL: Store trades with ACTUAL returns
                     if return_trades:
                         trades.append({
                             'Entry_Date': datetime_finest[entry_idx],
                             'Entry_Price': entry_price,
                             'Exit_Date': datetime_finest[exit_idx],
                             'Exit_Price': exit_price_with_costs,
-                            'Percent_Change': pct_change,
-                            'Equity_Value': equity,
+                            'Percent_Change': pct_change,  # ✅ This is the key field
+                            'Equity_Before': equity_before,
+                            'Equity_After': equity,
                             'Transaction_Cost_Entry': entry_cost_pct * 100,
                             'Transaction_Cost_Exit': exit_cost_pct * 100,
                             'Total_Cost_PCT': (entry_cost_pct + exit_cost_pct) * 100
@@ -303,13 +313,14 @@ class MultiTimeframeOptimizer(QThread):
                     
                 equity_curve[i] = equity * (open_finest[i] / entry_price) if position else equity
 
-            # Close any open position at end
+            # Close final position
             if position:
                 exit_price = open_finest[-1]
                 exit_cost_pct = self.transaction_costs.TOTAL_PCT
                 exit_price_with_costs = exit_price * (1 - exit_cost_pct)
                 
                 pct_change = (exit_price_with_costs / entry_price - 1) * 100
+                equity_before = equity
                 equity *= exit_price_with_costs / entry_price
                 
                 if self.transaction_costs.COMMISSION_FIXED > 0:
@@ -322,7 +333,8 @@ class MultiTimeframeOptimizer(QThread):
                         'Exit_Date': datetime_finest[-1],
                         'Exit_Price': exit_price_with_costs,
                         'Percent_Change': pct_change,
-                        'Equity_Value': equity,
+                        'Equity_Before': equity_before,
+                        'Equity_After': equity,
                         'Transaction_Cost_Entry': entry_cost_pct * 100,
                         'Transaction_Cost_Exit': exit_cost_pct * 100,
                         'Total_Cost_PCT': (entry_cost_pct + exit_cost_pct) * 100
@@ -331,11 +343,21 @@ class MultiTimeframeOptimizer(QThread):
                 equity_curve[-1] = equity
 
             if return_trades:
+                # ✅ DIAGNOSTIC: Print trade log
+                print(f"\n🔍 Trade Log Created: {len(trades)} trades")
+                if trades:
+                    print(f"Sample trades:")
+                    for i, trade in enumerate(trades[:5]):
+                        print(f"  Trade {i+1}: {trade['Percent_Change']:+.2f}%")
+                
                 return equity_curve, trade_count, trades
+            
             return equity_curve, trade_count
             
         except Exception as e:
             print(f"Simulation error: {e}")
+            import traceback
+            traceback.print_exc()
             return (None, 0, []) if return_trades else (None, 0)
 
     def run(self):

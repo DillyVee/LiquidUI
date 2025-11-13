@@ -67,15 +67,6 @@ Apply these fixes:
         if not trades or len(trades) == 0:
             raise ValueError("No trades provided for Monte Carlo simulation")
 
-        returns = np.array([trade['Percent_Change'] / 100.0 for trade in trades], dtype=np.float64)
-
-        print("\n=== Monte Carlo Diagnostics ===")
-        print(f"Number of trades: {len(returns)}")
-        print(f"Unique returns: {np.unique(returns)}")
-        print(f"Min: {returns.min()*100:.2f}%, Max: {returns.max()*100:.2f}%, Mean: {returns.mean()*100:.2f}%")
-        print("First 10 returns:", returns[:10])
-        print("================================\n")
-
         # Extract returns as numpy array
         returns = np.array([trade['Percent_Change'] / 100.0 for trade in trades], dtype=np.float64)
         
@@ -92,10 +83,15 @@ Apply these fixes:
         # ⚠️ Check for problematic scenarios
         if len(np.unique(returns)) == 1:
             print(f"\n⚠️  WARNING: All returns are identical ({returns[0]*100:.2f}%)")
-            print(f"Monte Carlo will show no variation. This is expected if:")
+            print(f"Monte Carlo will show no variation. This indicates:")
             print(f"  - All trades hit same profit target")
             print(f"  - All trades have same hold time")
             print(f"  - Strategy has very tight parameters")
+        
+        # Show first few returns
+        print(f"\nFirst 10 returns:")
+        for i, ret in enumerate(returns[:10]):
+            print(f"  Trade {i+1}: {ret*100:+.2f}%")
         
         # Original equity curve (trades in actual order)
         original_equity_curve = MonteCarloSimulator._calculate_equity_curve(
@@ -161,6 +157,7 @@ Apply these fixes:
             probability_profit=np.mean(final_equities > initial_equity),
             simulations=all_curves
         )
+
     
     @staticmethod
     def simulate_bootstrap(
