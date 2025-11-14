@@ -58,14 +58,12 @@ class MultiTimeframeOptimizer(QThread):
         self.base_eq_curve = None
         self.stopped = False
         
-        # Transaction costs
         if transaction_costs is None:
             from config.settings import TransactionCosts
             self.transaction_costs = TransactionCosts()
         else:
             self.transaction_costs = transaction_costs
         
-        # Create Optuna study with organized storage
         storage_path = Paths.get_optuna_path(ticker) if ticker else None
         
         self.study = optuna.create_study(
@@ -80,11 +78,9 @@ class MultiTimeframeOptimizer(QThread):
             load_if_exists=True if storage_path else False
         )
         
-        # Pre-process data
         self._preprocess_data()
         self._align_timeframes()
 
- 
     def _preprocess_data(self):
         """Convert all DataFrames to numpy arrays once for speed"""
         print("🚀 Pre-processing data to numpy arrays...")
@@ -357,107 +353,215 @@ class MultiTimeframeOptimizer(QThread):
             traceback.print_exc()
             return (None, 0, []) if return_trades else (None, 0)
 
-    def run(self):
-        """Sequential optimization using SIMPLIFIED PSR (no WFA)"""
-        try:
-            print(f"\n{'='*60}")
-            print(f"PSR COMPOSITE OPTIMIZATION (NO WALK-FORWARD)")
-            print(f"Ticker: {self.ticker}")
-            print(f"Timeframes: {self.timeframes}")
-            print(f"Total trials: {self.n_trials}")
-            print(f"{'='*60}\n")
-            
-            print("📊 Using PSR Composite Optimization")
-            print(f"   (Walk-Forward: SEPARATE - not in optimization)")
-            print()
-            
-            on_range, off_range, start_range = self.time_cycle_ranges
-            
-            phases_per_tf = 2
-            total_phases = len(self.timeframes) * phases_per_tf
-            trials_per_phase = max(50, self.n_trials // (len(self.timeframes) * phases_per_tf))
-            
-            phase_counter = 0
+def run(self):
+    """Sequential optimization with parallel batching and dual CSV saves"""
+    try:
+        import multiprocessing
+        import gc
+        from joblib import parallel_backend
+        
+        # Determine optimal CPU usage
+        n_cpus = multiprocessing.cpu_count()
+        n_jobs = max(1, n_cpus - 1)
+        
+        print(f"\n{'='*60}")
+        print(f"PSR COMPOSITE OPTIMIZATION (PARALLEL BATCHED)")
+        print(f"{'='*60}")
+        print(f"Ticker: {self.ticker}")
+        print(f"Timeframes: {self.timeframes}")
+        print(f"Total trials: {self.n_trials}")
+        print(f"Batch size: {self.batch_size}")
+        print(f"CPU cores: {n_cpus} (using {n_jobs} threads)")
+        print(f"{'='*60}\n")
+        
+        print("📊 Using PSR Composite Optimization")
+        print(f"   Parallel Processing: {n_jobs} threads per batch")
+        print(f"   Memory Management: Clear after each batch")
+        print(f"   Incremental Saves: Append to CSV after each batch")
+        print()
+        
+        on_range, off_range, start_range = self.time_cycle_ranges
+        
+        phases_per_tf = 2
+        total_phases = len(self.timeframes) * phases_per_tf
+        trials_per_phase = max(50, self.n_trials // (len(self.timeframes) * phases_per_tf))
+        
+        # Calculate batches per phase
+        batches_per_phase = max(1, trials_per_phase // self.batch_size)
+        trials_per_batch = trials_per_phase // batches_per_phase
+        
+        print(f"📦 Batch Configuration:")
+        print(f"   Trials per phase: {trials_per_phase}")
+        print(f"   Batches per phase: {batches_per_phase}")
+        print(f"   Trials per batch: {trials_per_batch}")
+        print()
+        
+        phase_counter = 0
+        
+        # Initialize TWO CSV files
+        results_path = Paths.get_results_path(self.ticker, suffix="_psr_results")
+        trades_path = Paths.get_results_path(self.ticker, suffix="_psr_trades")
+        
+        results_csv_initialized = False
+        trades_csv_initialized = False
+        
+        print(f"💾 CSV Output Files:")
+        print(f"   Results: {results_path}")
+        print(f"   Trades:  {trades_path}")
+        print()
+        
+        # ✅ USE THREADING BACKEND (works with QThread)
+        with parallel_backend('threading', n_jobs=n_jobs):
             
             # Optimize each timeframe sequentially
             for tf_idx, tf in enumerate(self.timeframes):
                 if self.stopped:
                     break
                 
-                # PHASE: Optimize Cycle
+                # ===================================================================
+                # PHASE: Optimize Cycle (with batching)
+                # ===================================================================
                 phase_counter += 1
                 phase_msg = f"Phase {phase_counter}/{total_phases}: {tf.upper()} Time Cycle..."
                 self.phase_update.emit(phase_msg)
                 print(f"\n{'='*60}")
-                print(f"PHASE {phase_counter}: {tf.upper()} TIME CYCLE")
+                print(f"PHASE {phase_counter}: {tf.upper()} TIME CYCLE (BATCHED)")
                 print(f"{'='*60}")
                 
                 cycle_study = optuna.create_study(
                     direction="maximize",
                     sampler=optuna.samplers.TPESampler(
-                        n_startup_trials=10,
+                        n_startup_trials=min(10, trials_per_batch),
                         multivariate=False,
                         warn_independent_sampling=False
                     )
                 )
                 
-                trial_count = [0]
-                
-                def objective_cycle(trial):
+                # Run cycle optimization in batches
+                for batch_idx in range(batches_per_phase):
                     if self.stopped:
-                        raise optuna.exceptions.OptunaError("Stopped by user")
+                        break
                     
-                    trial_count[0] += 1
+                    print(f"\n📦 Batch {batch_idx + 1}/{batches_per_phase}")
                     
-                    if trial_count[0] % 50 == 0:
-                        print(f"  Phase {phase_counter} - Trial {trial_count[0]}/{trials_per_phase}")
+                    batch_trial_count = [0]
+                    batch_results = []
                     
-                    # Build params
-                    params = {}
+                    def objective_cycle(trial):
+                        if self.stopped:
+                            raise optuna.exceptions.OptunaError("Stopped by user")
+                        
+                        batch_trial_count[0] += 1
+                        
+                        # Progress update every 10 trials
+                        if batch_trial_count[0] % 10 == 0:
+                            batch_progress = (batch_idx / batches_per_phase)
+                            phase_progress = ((phase_counter - 1) / total_phases)
+                            batch_trial_progress = (batch_trial_count[0] / trials_per_batch) * (1 / batches_per_phase)
+                            total_progress = (phase_progress + batch_progress / total_phases + 
+                                            batch_trial_progress / total_phases) * 100
+                            self.progress.emit(int(total_progress))
+                            print(f"      Trial {batch_trial_count[0]}/{trials_per_batch}: {total_progress:.1f}%")
+                        
+                        # Build params
+                        params = {}
+                        
+                        for prev_tf in self.timeframes[:tf_idx]:
+                            params.update(self.best_params_per_tf[prev_tf])
+                        
+                        mn1_default = (self.mn1_range[0] + self.mn1_range[1]) // 2
+                        mn2_default = (self.mn2_range[0] + self.mn2_range[1]) // 2
+                        entry_default = (self.entry_range[0] + self.entry_range[1]) / 2
+                        exit_default = (self.exit_range[0] + self.exit_range[1]) / 2
+                        
+                        params[f'MN1_{tf}'] = mn1_default
+                        params[f'MN2_{tf}'] = mn2_default
+                        params[f'Entry_{tf}'] = entry_default
+                        params[f'Exit_{tf}'] = exit_default
+                        
+                        params[f'On_{tf}'] = trial.suggest_int(f"On_{tf}", *on_range)
+                        params[f'Off_{tf}'] = trial.suggest_int(f"Off_{tf}", *off_range)
+                        params[f'Start_{tf}'] = trial.suggest_int(f"Start_{tf}", 0, on_range[1] + off_range[1])
+                        
+                        for future_tf in self.timeframes[tf_idx+1:]:
+                            params[f'MN1_{future_tf}'] = mn1_default
+                            params[f'MN2_{future_tf}'] = mn2_default
+                            params[f'Entry_{future_tf}'] = entry_default
+                            params[f'Exit_{future_tf}'] = exit_default
+                            params[f'On_{future_tf}'] = on_range[0]
+                            params[f'Off_{future_tf}'] = off_range[0]
+                            params[f'Start_{future_tf}'] = 0
+                        
+                        eq_curve, trades = self.simulate_multi_tf(params)
+                        
+                        if eq_curve is None or len(eq_curve) < 50:
+                            return 0.0
+                        
+                        sharpe = PSRCalculator.calculate_sharpe_from_equity(eq_curve)
+                        trade_penalty = min(trades / 50.0, 1.0)
+                        score = sharpe - trade_penalty
+                        
+                        # Store for batch saving
+                        trial.set_user_attr('params', params)
+                        trial.set_user_attr('score', score)
+                        
+                        return score
                     
-                    for prev_tf in self.timeframes[:tf_idx]:
-                        params.update(self.best_params_per_tf[prev_tf])
+                    # Run batch with threading (n_jobs handled by parallel_backend)
+                    print(f"   Running {trials_per_batch} trials...")
+                    cycle_study.optimize(
+                        objective_cycle, 
+                        n_trials=trials_per_batch, 
+                        n_jobs=n_jobs,  # Now uses threading backend
+                        catch=(Exception,), 
+                        show_progress_bar=False
+                    )
                     
-                    mn1_default = (self.mn1_range[0] + self.mn1_range[1]) // 2
-                    mn2_default = (self.mn2_range[0] + self.mn2_range[1]) // 2
-                    entry_default = (self.entry_range[0] + self.entry_range[1]) / 2
-                    exit_default = (self.exit_range[0] + self.exit_range[1]) / 2
+                    # Save batch results
+                    print(f"   💾 Saving batch results...")
                     
-                    params[f'MN1_{tf}'] = mn1_default
-                    params[f'MN2_{tf}'] = mn2_default
-                    params[f'Entry_{tf}'] = entry_default
-                    params[f'Exit_{tf}'] = exit_default
+                    batch_trials = sorted(
+                        [t for t in cycle_study.trials if t.state == optuna.trial.TrialState.COMPLETE],
+                        key=lambda t: t.value,
+                        reverse=True
+                    )[:3]
                     
-                    params[f'On_{tf}'] = trial.suggest_int(f"On_{tf}", *on_range)
-                    params[f'Off_{tf}'] = trial.suggest_int(f"Off_{tf}", *off_range)
-                    params[f'Start_{tf}'] = trial.suggest_int(f"Start_{tf}", 0, on_range[1] + off_range[1])
+                    for trial in batch_trials:
+                        params = trial.user_attrs.get('params', {})
+                        if not params:
+                            continue
+                        
+                        eq_curve, trades = self.simulate_multi_tf(params)
+                        if eq_curve is None:
+                            continue
+                        
+                        metrics = PerformanceMetrics.calculate_metrics(eq_curve)
+                        if metrics is None:
+                            continue
+                        
+                        metrics['Trade_Count'] = trades
+                        metrics['Batch'] = batch_idx + 1
+                        metrics['Phase'] = f"{phase_counter}_cycle"
+                        metrics['Timeframe'] = tf
+                        
+                        result = {**params, **metrics}
+                        batch_results.append(result)
                     
-                    for future_tf in self.timeframes[tf_idx+1:]:
-                        params[f'MN1_{future_tf}'] = mn1_default
-                        params[f'MN2_{future_tf}'] = mn2_default
-                        params[f'Entry_{future_tf}'] = entry_default
-                        params[f'Exit_{future_tf}'] = exit_default
-                        params[f'On_{future_tf}'] = on_range[0]
-                        params[f'Off_{future_tf}'] = off_range[0]
-                        params[f'Start_{future_tf}'] = 0
+                    if batch_results:
+                        df_batch = pd.DataFrame(batch_results)
+                        
+                        if not results_csv_initialized:
+                            df_batch.to_csv(results_path, index=False, mode='w')
+                            results_csv_initialized = True
+                            print(f"   ✓ Created results CSV")
+                        else:
+                            df_batch.to_csv(results_path, index=False, mode='a', header=False)
+                            print(f"   ✓ Appended {len(batch_results)} results")
                     
-                    eq_curve, trades = self.simulate_multi_tf(params)
+                    print(f"   ✓ Batch {batch_idx + 1} complete")
                     
-                    if eq_curve is None or len(eq_curve) < 50:
-                        return 0.0
-                    
-                    sharpe = PSRCalculator.calculate_sharpe_from_equity(eq_curve)
-                    trade_penalty = min(trades / 50.0, 1.0)
-                    score = sharpe - trade_penalty
-                    
-                    progress_pct = ((phase_counter - 1) / total_phases) * 100
-                    phase_pct = (trial_count[0] / trials_per_phase) * (100 / total_phases)
-                    self.progress.emit(int(progress_pct + phase_pct))
-                    
-                    return score
-                
-                cycle_study.optimize(objective_cycle, n_trials=trials_per_phase, n_jobs=1,
-                                catch=(Exception,), show_progress_bar=False)
+                    batch_results.clear()
+                    gc.collect()
                 
                 best_cycle = {
                     f'On_{tf}': cycle_study.best_params[f'On_{tf}'],
@@ -469,72 +573,157 @@ class MultiTimeframeOptimizer(QThread):
                     self.best_params_per_tf[tf] = {}
                 self.best_params_per_tf[tf].update(best_cycle)
                 
-                print(f"✓ Phase {phase_counter} Complete - Cycle params optimized")
+                print(f"✓ Phase {phase_counter} Complete")
                 
-                # PHASE: Optimize RSI
+                # ===================================================================
+                # PHASE: Optimize RSI (with batching + DUAL CSV saves)
+                # ===================================================================
                 phase_counter += 1
                 self.phase_update.emit(f"Phase {phase_counter}/{total_phases}: {tf.upper()} RSI...")
-                print(f"\nPHASE {phase_counter}: {tf.upper()} RSI (COMPOSITE - NO WFA)")
+                print(f"\nPHASE {phase_counter}: {tf.upper()} RSI (BATCHED PSR)")
                 
                 rsi_study = optuna.create_study(
                     direction="maximize",
                     sampler=optuna.samplers.TPESampler(
-                        n_startup_trials=10,
+                        n_startup_trials=min(10, trials_per_batch),
                         multivariate=False,
                         warn_independent_sampling=False
                     )
                 )
                 
-                trial_count = [0]
-                
-                def objective_rsi(trial):
+                for batch_idx in range(batches_per_phase):
                     if self.stopped:
-                        raise optuna.exceptions.OptunaError("Stopped by user")
+                        break
                     
-                    trial_count[0] += 1
+                    print(f"\n📦 Batch {batch_idx + 1}/{batches_per_phase}")
                     
-                    if trial_count[0] % 50 == 0:
-                        print(f"  Trial {trial_count[0]}/{trials_per_phase}")
+                    batch_trial_count = [0]
+                    batch_results = []
                     
-                    params = {}
-                    for prev_tf in self.timeframes[:tf_idx]:
-                        params.update(self.best_params_per_tf[prev_tf])
-                    
-                    params.update(best_cycle)
-                    
-                    params[f'MN1_{tf}'] = trial.suggest_int(f"MN1_{tf}", *self.mn1_range)
-                    params[f'MN2_{tf}'] = trial.suggest_int(f"MN2_{tf}", *self.mn2_range)
-                    params[f'Entry_{tf}'] = trial.suggest_float(f"Entry_{tf}", *self.entry_range, step=0.5)
-                    params[f'Exit_{tf}'] = trial.suggest_float(f"Exit_{tf}", *self.exit_range, step=0.5)
-                    
-                    for future_tf in self.timeframes[tf_idx+1:]:
-                        mn1_default = (self.mn1_range[0] + self.mn1_range[1]) // 2
-                        mn2_default = (self.mn2_range[0] + self.mn2_range[1]) // 2
-                        entry_default = (self.entry_range[0] + self.entry_range[1]) / 2
-                        exit_default = (self.exit_range[0] + self.exit_range[1]) / 2
+                    def objective_rsi(trial):
+                        if self.stopped:
+                            raise optuna.exceptions.OptunaError("Stopped by user")
                         
-                        params[f'MN1_{future_tf}'] = mn1_default
-                        params[f'MN2_{future_tf}'] = mn2_default
-                        params[f'Entry_{future_tf}'] = entry_default
-                        params[f'Exit_{future_tf}'] = exit_default
-                        params[f'On_{future_tf}'] = on_range[0]
-                        params[f'Off_{future_tf}'] = off_range[0]
-                        params[f'Start_{future_tf}'] = 0
+                        batch_trial_count[0] += 1
+                        
+                        # Progress update every 10 trials
+                        if batch_trial_count[0] % 10 == 0:
+                            batch_progress = (batch_idx / batches_per_phase)
+                            phase_progress = ((phase_counter - 1) / total_phases)
+                            batch_trial_progress = (batch_trial_count[0] / trials_per_batch) * (1 / batches_per_phase)
+                            total_progress = (phase_progress + batch_progress / total_phases + 
+                                            batch_trial_progress / total_phases) * 100
+                            self.progress.emit(int(total_progress))
+                            print(f"      Trial {batch_trial_count[0]}/{trials_per_batch}: {total_progress:.1f}%")
+                        
+                        params = {}
+                        for prev_tf in self.timeframes[:tf_idx]:
+                            params.update(self.best_params_per_tf[prev_tf])
+                        
+                        params.update(best_cycle)
+                        
+                        params[f'MN1_{tf}'] = trial.suggest_int(f"MN1_{tf}", *self.mn1_range)
+                        params[f'MN2_{tf}'] = trial.suggest_int(f"MN2_{tf}", *self.mn2_range)
+                        params[f'Entry_{tf}'] = trial.suggest_float(f"Entry_{tf}", *self.entry_range, step=0.5)
+                        params[f'Exit_{tf}'] = trial.suggest_float(f"Exit_{tf}", *self.exit_range, step=0.5)
+                        
+                        for future_tf in self.timeframes[tf_idx+1:]:
+                            mn1_default = (self.mn1_range[0] + self.mn1_range[1]) // 2
+                            mn2_default = (self.mn2_range[0] + self.mn2_range[1]) // 2
+                            entry_default = (self.entry_range[0] + self.entry_range[1]) / 2
+                            exit_default = (self.exit_range[0] + self.exit_range[1]) / 2
+                            
+                            params[f'MN1_{future_tf}'] = mn1_default
+                            params[f'MN2_{future_tf}'] = mn2_default
+                            params[f'Entry_{future_tf}'] = entry_default
+                            params[f'Exit_{future_tf}'] = exit_default
+                            params[f'On_{future_tf}'] = on_range[0]
+                            params[f'Off_{future_tf}'] = off_range[0]
+                            params[f'Start_{future_tf}'] = 0
+                        
+                        psr, sharpe = self.calculate_psr(params)
+                        
+                        trial.set_user_attr('params', params)
+                        trial.set_user_attr('psr', psr)
+                        trial.set_user_attr('sharpe', sharpe)
+                        
+                        return psr
                     
-                    # Calculate PSR only
-                    psr, sharpe = self.calculate_psr(params)
+                    print(f"   Running {trials_per_batch} trials...")
+                    rsi_study.optimize(
+                        objective_rsi, 
+                        n_trials=trials_per_batch, 
+                        n_jobs=n_jobs,
+                        catch=(Exception,), 
+                        show_progress_bar=False
+                    )
                     
-                    trial.set_user_attr('psr', psr)
-                    trial.set_user_attr('sharpe', sharpe)
+                    print(f"   💾 Saving batch results to CSVs...")
                     
-                    progress_pct = ((phase_counter - 1) / total_phases) * 100
-                    phase_pct = (trial_count[0] / trials_per_phase) * (100 / total_phases)
-                    self.progress.emit(int(progress_pct + phase_pct))
+                    batch_trials = sorted(
+                        [t for t in rsi_study.trials if t.state == optuna.trial.TrialState.COMPLETE],
+                        key=lambda t: t.value,
+                        reverse=True
+                    )[:5]
                     
-                    return psr
-                
-                rsi_study.optimize(objective_rsi, n_trials=trials_per_phase, n_jobs=1,
-                                catch=(Exception,), show_progress_bar=False)
+                    for trial in batch_trials:
+                        params = trial.user_attrs.get('params', {})
+                        if not params:
+                            continue
+                        
+                        eq_curve, trades_count, trade_log = self.simulate_multi_tf(params, return_trades=True)
+                        if eq_curve is None:
+                            continue
+                        
+                        metrics = PerformanceMetrics.calculate_metrics(eq_curve)
+                        if metrics is None:
+                            continue
+                        
+                        metrics['Trade_Count'] = trades_count
+                        metrics['PSR'] = trial.user_attrs.get('psr', 0.0)
+                        metrics['Sharpe_Ratio'] = trial.user_attrs.get('sharpe', 0.0)
+                        metrics['Batch'] = batch_idx + 1
+                        metrics['Phase'] = f"{phase_counter}_rsi"
+                        metrics['Timeframe'] = tf
+                        
+                        result = {**params, **metrics}
+                        batch_results.append(result)
+                        
+                        # Save trade log
+                        if trade_log:
+                            df_trades = pd.DataFrame(trade_log)
+                            df_trades['Batch'] = batch_idx + 1
+                            df_trades['Phase'] = f"{phase_counter}_rsi"
+                            df_trades['Timeframe'] = tf
+                            
+                            for key in ['MN1_hourly', 'MN2_hourly', 'Entry_hourly', 'Exit_hourly', 
+                                       'On_hourly', 'Off_hourly', 'Start_hourly']:
+                                if key in params:
+                                    df_trades[key] = params[key]
+                            
+                            if not trades_csv_initialized:
+                                df_trades.to_csv(trades_path, index=False, mode='w')
+                                trades_csv_initialized = True
+                                print(f"   ✓ Created trades CSV")
+                            else:
+                                df_trades.to_csv(trades_path, index=False, mode='a', header=False)
+                            print(f"   ✓ Appended {len(trade_log)} trades")
+                    
+                    if batch_results:
+                        df_batch = pd.DataFrame(batch_results)
+                        
+                        if not results_csv_initialized:
+                            df_batch.to_csv(results_path, index=False, mode='w')
+                            results_csv_initialized = True
+                            print(f"   ✓ Created results CSV")
+                        else:
+                            df_batch.to_csv(results_path, index=False, mode='a', header=False)
+                            print(f"   ✓ Appended {len(batch_results)} results")
+                    
+                    print(f"   ✓ Batch {batch_idx + 1} complete")
+                    
+                    batch_results.clear()
+                    gc.collect()
                 
                 best_rsi = {
                     f'MN1_{tf}': rsi_study.best_params[f'MN1_{tf}'],
@@ -544,83 +733,79 @@ class MultiTimeframeOptimizer(QThread):
                 }
                 
                 self.best_params_per_tf[tf].update(best_rsi)
-                
-                print(f"✓ Phase {phase_counter} Complete - RSI optimized")
+                print(f"✓ Phase {phase_counter} Complete")
+        
+        # Final result (outside threading context)
+        print(f"\n{'='*60}")
+        print(f"Compiling final best result...")
+
+        base_params = {}
+        for tf in self.timeframes:
+            if tf in self.best_params_per_tf:
+                base_params.update(self.best_params_per_tf[tf])
+
+        base_eq_curve, base_trade_count, final_trade_log = self.simulate_multi_tf(
+            base_params, return_trades=True
+        )
+
+        if base_eq_curve is None:
+            raise ValueError("Final simulation failed")
+
+        base_metrics = PerformanceMetrics.calculate_metrics(base_eq_curve)
+        if base_metrics is None:
+            raise ValueError("Failed to calculate metrics")
+
+        base_metrics['Trade_Count'] = base_trade_count
+        psr, sharpe = self.calculate_psr(base_params)
+        base_metrics['PSR'] = psr
+        base_metrics['Sharpe_Ratio'] = sharpe
+        base_metrics['Batch'] = 'FINAL'
+        base_metrics['Phase'] = 'FINAL'
+        base_metrics['Timeframe'] = 'ALL'
+
+        print(f"✓ PSR: {psr:.3f}, Sharpe: {sharpe:.2f}")
+
+        final_result = {**base_params, **base_metrics}
+        self.all_results.append(final_result)
+        self.new_best.emit(final_result)
+
+        df_final = pd.DataFrame([final_result])
+        df_final.to_csv(results_path, index=False, mode='a', header=False)
+
+        if final_trade_log:
+            df_final_trades = pd.DataFrame(final_trade_log)
+            df_final_trades['Batch'] = 'FINAL'
+            df_final_trades['Phase'] = 'FINAL'
+            df_final_trades['Timeframe'] = 'ALL'
             
-            # Compile final results
-            print(f"\n{'='*60}")
-            print(f"Compiling final results...")
-
-            base_params = {}
-            for tf in self.timeframes:
-                if tf in self.best_params_per_tf:
-                    base_params.update(self.best_params_per_tf[tf])
-
-            base_eq_curve, base_trade_count = self.simulate_multi_tf(base_params)
-
-            if base_eq_curve is None:
-                raise ValueError("Final simulation failed")
-
-            base_metrics = PerformanceMetrics.calculate_metrics(base_eq_curve)
-
-            if base_metrics is None:
-                raise ValueError("Failed to calculate performance metrics")
-
-            base_metrics['Trade_Count'] = base_trade_count
-
-            # Calculate PSR and Sharpe
-            psr, sharpe = self.calculate_psr(base_params)
-            base_metrics['PSR'] = psr
-            base_metrics['Sharpe_Ratio'] = sharpe
-
-            print(f"✓ Calculated PSR: {psr:.3f}, Sharpe: {sharpe:.2f}")
-
-            # Save results with organized paths
-            final_result = {**base_params, **base_metrics, 'Curve_Optimized': False}
-            self.all_results.append(final_result)
-            self.new_best.emit(final_result)
-
-            df_results = pd.DataFrame([final_result])
+            for key in base_params.keys():
+                if any(x in key for x in ['MN1', 'MN2', 'Entry', 'Exit', 'On', 'Off', 'Start']):
+                    df_final_trades[key] = base_params[key]
             
-            # Save to organized data folder
-            results_path = Paths.get_results_path(self.ticker, suffix="_psr_only")
-            df_results.to_csv(results_path, index=False)
-            print(f"\n✅ Results saved to: {results_path}")
+            df_final_trades.to_csv(trades_path, index=False, mode='a', header=False)
 
-            print(f"\n{'='*60}")
-            print(f"OPTIMIZATION COMPLETE")
-            print(f"{'='*60}")
-            print(f"PSR: {psr:.3f} ({psr*100:.1f}%)")
-            print(f"Sharpe Ratio: {sharpe:.2f}")
+        print(f"\n✅ Complete!")
+        print(f"   Results: {results_path}")
+        print(f"   Trades:  {trades_path}")
 
-            print(f"\n📊 Traditional Metrics:")
-            print(f"  Return: {final_result['Percent_Gain_%']:.2f}%")
-            print(f"  Sortino: {final_result['Sortino_Ratio']:.2f}")
-            print(f"  Max Drawdown: {final_result['Max_Drawdown_%']:.2f}%")
-            print(f"  Profit Factor: {final_result['Profit_Factor']:.2f}")
-            print(f"  Trades: {final_result['Trade_Count']}")
+        df_results = pd.read_csv(results_path)
+        
+        print(f"\n{'='*60}")
+        print(f"OPTIMIZATION COMPLETE")
+        print(f"{'='*60}")
+        print(f"Results saved: {len(df_results)}")
+        print(f"Best PSR: {psr:.3f}")
+        print(f"Best Sharpe: {sharpe:.2f}")
+        print(f"Return: {final_result['Percent_Gain_%']:.2f}%")
+        print(f"Trades: {final_result['Trade_Count']}")
+        print(f"{'='*60}\n")
 
-            print(f"\n⚙️  Optimized Parameters:")
-            for tf in self.timeframes:
-                if tf in self.best_params_per_tf:
-                    params = self.best_params_per_tf[tf]
-                    print(f"\n  {tf.upper()}:")
-                    
-                    if f'On_{tf}' in params:
-                        print(f"    Time Cycle: ON={params[f'On_{tf}']}, OFF={params[f'Off_{tf}']}, START={params[f'Start_{tf}']}")
-                    
-                    if f'MN1_{tf}' in params:
-                        print(f"    RSI: MN1={params[f'MN1_{tf}']}, MN2={params[f'MN2_{tf}']}")
-                        print(f"    Thresholds: ENTRY<{params[f'Entry_{tf}']:.1f}, EXIT>{params[f'Exit_{tf}']:.1f}")
+        self.finished.emit(df_results)
 
-            print(f"{'='*60}\n")
-
-            self.finished.emit(df_results)
-
-        except Exception as e:
-            if not self.stopped:
-                error_msg = f"Optimization error: {e}"
-                print(f"\n✗ {error_msg}")
-                self.error.emit(error_msg)
-                import traceback
-                traceback.print_exc()
+    except Exception as e:
+        if not self.stopped:
+            error_msg = f"Optimization error: {e}"
+            print(f"\n✗ {error_msg}")
+            self.error.emit(error_msg)
+            import traceback
+            traceback.print_exc()

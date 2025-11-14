@@ -228,7 +228,9 @@ Add this as a method to MainWindow and call it before running walk-forward
         self.setStyleSheet(MAIN_STYLESHEET)
         
         main_layout = QVBoxLayout()
-        
+        main_layout.setSpacing(4)  # ✅ ADD THIS - Reduced spacing between widgets
+        main_layout.setContentsMargins(6, 6, 6, 6)  # ✅ ADD THIS - Reduced margins
+
         self.setMinimumSize(1000, 800)
 
         # Data source controls
@@ -260,6 +262,8 @@ Add this as a method to MainWindow and call it before running walk-forward
         
         # Transaction costs
         self._add_transaction_cost_controls(main_layout)
+
+        main_layout.addStretch(10)
         
         # Progress bar
         self.progress_bar = QProgressBar()
@@ -268,8 +272,9 @@ Add this as a method to MainWindow and call it before running walk-forward
         # Chart
         self.figure = plt.figure(facecolor="#121212")
         self.canvas = FigureCanvas(self.figure)
-        main_layout.addWidget(self.canvas)
-
+        self.canvas.setMinimumHeight(400)  # ✅ ADD THIS - Ensure minimum chart height
+        main_layout.addWidget(self.canvas, stretch=10)  # ✅ MODIFIED - Add stretch factor
+        
         # Best parameters display
         self.best_params_label = QLabel("Best Parameters: N/A")
         self.best_params_label.setWordWrap(True)
