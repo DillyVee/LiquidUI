@@ -292,11 +292,30 @@ Add this as a method to MainWindow and call it before running walk-forward
         
         self.ticker_input = QLineEdit()
         self.ticker_input.setPlaceholderText("Enter ticker (e.g., AAPL, SPY, BTC-USD)")
+        
         self.load_yf_btn = QPushButton("Load from Yahoo Finance")
         self.load_yf_btn.clicked.connect(self.load_yfinance)
         
+        # ✅ NEW: Batch ticker button
+        self.batch_ticker_btn = QPushButton("📋 Load Ticker List")
+        self.batch_ticker_btn.clicked.connect(self.load_ticker_list)
+        self.batch_ticker_btn.setToolTip(
+            "Load multiple tickers from text file (one per line)\n"
+            "Will optimize each ticker sequentially"
+        )
+        self.batch_ticker_btn.setStyleSheet("""
+            QPushButton { 
+                background-color: #2196F3; 
+                font-weight: bold;
+            }
+            QPushButton:hover { 
+                background-color: #42A5F5; 
+            }
+        """)
+        
         source_layout.addWidget(self.ticker_input)
         source_layout.addWidget(self.load_yf_btn)
+        source_layout.addWidget(self.batch_ticker_btn)
         layout.addLayout(source_layout)
 
     def _add_date_range_display(self, layout: QVBoxLayout):
@@ -1314,6 +1333,246 @@ Add this as a method to MainWindow and call it before running walk-forward
         finally:
             self.load_yf_btn.setEnabled(True)
 
+    def load_ticker_list(self):
+        """Load multiple tickers from text file and optimize sequentially"""
+        from PyQt6.QtWidgets import QFileDialog
+        
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, "Select Ticker List File", "", "Text Files (*.txt);;All Files (*)"
+        )
+        
+        if not file_path:
+            return
+        
+        try:
+            with open(file_path, 'r') as f:
+                tickers = [line.strip().upper() for line in f if line.strip()]
+            
+            if not tickers:
+                QMessageBox.warning(self, "Empty File", "No tickers found in file")
+                return
+            
+            # Confirm batch processing
+            reply = QMessageBox.question(
+                self, "Confirm Batch Processing",
+                f"Process {len(tickers)} tickers?\n\n"
+                f"Preview: {', '.join(tickers[:5])}{'...' if len(tickers) > 5 else ''}\n\n"
+                f"This may take several hours.\n"
+                f"Continue?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+            
+            print(f"\n{'='*70}")
+            print(f"BATCH TICKER OPTIMIZATION")
+            print(f"{'='*70}")
+            print(f"Loaded {len(tickers)} tickers from: {file_path}")
+            print(f"Tickers: {', '.join(tickers)}")
+            print(f"{'='*70}\n")
+            
+            # Create summary file
+            summary_file = f"batch_summary_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.txt"
+            
+            self.load_yf_btn.setEnabled(False)
+            self.start_btn.setEnabled(False)
+            self.stop_btn.setEnabled(True)
+            self.stopped = False
+            
+            successful = []
+            failed = []
+            
+            start_time = pd.Timestamp.now()
+            
+            for idx, ticker in enumerate(tickers):
+                if self.stopped:
+                    print(f"\n⚠️  Batch processing stopped by user at ticker {idx + 1}/{len(tickers)}")
+                    break
+                
+                print(f"\n{'─'*70}")
+                print(f"TICKER {idx + 1}/{len(tickers)}: {ticker}")
+                print(f"{'─'*70}")
+                
+                # Update main status
+                self.phase_label.setText(
+                    f"Batch: {idx + 1}/{len(tickers)} - {ticker}"
+                )
+                
+                # Estimate time remaining
+                if idx > 0:
+                    elapsed = (pd.Timestamp.now() - start_time).total_seconds()
+                    avg_time = elapsed / idx
+                    remaining = avg_time * (len(tickers) - idx)
+                    eta = pd.Timestamp.now() + pd.Timedelta(seconds=remaining)
+                    print(f"⏱️  ETA: {eta.strftime('%H:%M:%S')} ({remaining/60:.1f} min remaining)")
+                
+                success = self._load_and_optimize_ticker(ticker)
+                
+                if success:
+                    successful.append(ticker)
+                    print(f"✅ {ticker} completed successfully")
+                else:
+                    failed.append(ticker)
+                    print(f"❌ {ticker} failed - skipping")
+            
+            # Save summary
+            end_time = pd.Timestamp.now()
+            duration = (end_time - start_time).total_seconds() / 60
+            
+            summary = f"""
+    ╔═══════════════════════════════════════════════════════════════╗
+    ║              BATCH OPTIMIZATION SUMMARY                       ║
+    ╚═══════════════════════════════════════════════════════════════╝
+
+    Started:  {start_time.strftime('%Y-%m-%d %H:%M:%S')}
+    Finished: {end_time.strftime('%Y-%m-%d %H:%M:%S')}
+    Duration: {duration:.1f} minutes
+
+    Total Tickers: {len(tickers)}
+    ✅ Successful: {len(successful)}
+    ❌ Failed: {len(failed)}
+
+    SUCCESSFUL TICKERS:
+    {chr(10).join(f"  ✅ {t}" for t in successful) if successful else "  None"}
+
+    FAILED TICKERS:
+    {chr(10).join(f"  ❌ {t}" for t in failed) if failed else "  None"}
+
+    Results saved to: data_output/{self.current_ticker}_psr_results.csv
+    """
+            
+            print(summary)
+            
+            # Save to file
+            with open(summary_file, 'w') as f:
+                f.write(summary)
+            
+            print(f"📄 Summary saved to: {summary_file}")
+            
+            # Show dialog
+            QMessageBox.information(
+                self, "Batch Complete",
+                f"Processed {len(tickers)} tickers in {duration:.1f} minutes\n\n"
+                f"✅ Successful: {len(successful)}\n"
+                f"❌ Failed: {len(failed)}\n\n"
+                f"Summary saved to: {summary_file}"
+            )
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Batch processing error:\n{str(e)}")
+            import traceback
+            traceback.print_exc()
+        
+        finally:
+            self.load_yf_btn.setEnabled(True)
+            self.start_btn.setEnabled(True)
+            self.stop_btn.setEnabled(False)
+            self.stopped = False
+            self.phase_label.setText("Status: Ready")
+
+    def _load_and_optimize_ticker(self, ticker: str) -> bool:
+        """Load and optimize a single ticker (returns True on success)"""
+        try:
+            # Normalize ticker
+            ticker = DataLoader.normalize_ticker(ticker)
+            
+            # Try to load data
+            print(f"📊 Loading data for {ticker}...")
+            df_dict, error_msg = DataLoader.load_yfinance_data(ticker)
+            
+            if error_msg or not df_dict:
+                print(f"   ⚠️  Failed to load {ticker}: {error_msg}")
+                return False
+            
+            # Check if data is valid
+            if 'hourly' not in df_dict or len(df_dict['hourly']) < 500:
+                print(f"   ⚠️  Insufficient data for {ticker} (need 500+ hourly bars)")
+                return False
+            
+            # Set data
+            self.df_dict_full = df_dict
+            self.df_dict = df_dict.copy()
+            self.current_ticker = ticker
+            self.data_source = "yfinance"
+            
+            # Update display
+            self.on_timeframe_changed()
+            
+            # Update ticker display
+            tf_counts = f"{len(df_dict['daily'])}d, {len(df_dict['hourly'])}h"
+            if '5min' in df_dict:
+                tf_counts += f", {len(df_dict['5min'])}x5m"
+            self.ticker_input.setText(f"{ticker} ({tf_counts})")
+            
+            print(f"   ✅ Loaded {ticker}: {tf_counts}")
+            
+            # Run optimization
+            print(f"🚀 Starting optimization for {ticker}...")
+            
+            # Get selected timeframes
+            selected_tfs = [
+                tf for tf, cb in self.tf_checkboxes.items() 
+                if cb.isChecked() and tf in self.df_dict
+            ]
+            
+            if not selected_tfs:
+                print(f"   ⚠️  No timeframes selected for {ticker}")
+                return False
+            
+            # Gather parameters
+            mn1_range = (self.mn1_min.value(), self.mn1_max.value())
+            mn2_range = (self.mn2_min.value(), self.mn2_max.value())
+            entry_range = (self.entry_min.value(), self.entry_max.value())
+            exit_range = (self.exit_min.value(), self.exit_max.value())
+            
+            time_cycle_ranges = (
+                (self.on_min.value(), self.on_max.value()),
+                (self.off_min.value(), self.off_max.value()),
+                (0, self.on_max.value() + self.off_max.value())
+            )
+            
+            # Create optimizer
+            self.worker = MultiTimeframeOptimizer(
+                self.df_dict, 
+                self.trials_spin.value(), 
+                time_cycle_ranges, 
+                mn1_range, mn2_range, entry_range, exit_range,
+                ticker=ticker,
+                timeframes=selected_tfs, 
+                batch_size=self.batch_spin.value(),
+                transaction_costs=self.transaction_costs
+            )
+            
+            # Connect signals
+            self.worker.progress.connect(self.progress_bar.setValue)
+            self.worker.new_best.connect(self.update_best_label)
+            self.worker.phase_update.connect(self.update_phase_label)
+            self.worker.stopped = False
+            
+            # Run synchronously (wait for completion)
+            self.worker.run()
+            self.worker.wait()
+            
+            # Check if stopped
+            if self.worker.stopped:
+                print(f"   ⚠️  Optimization stopped for {ticker}")
+                return False
+            
+            # Check if results exist
+            if not self.worker.all_results or len(self.worker.all_results) == 0:
+                print(f"   ⚠️  No valid results for {ticker}")
+                return False
+            
+            print(f"✅ Optimization complete for {ticker}")
+            return True
+            
+        except Exception as e:
+            print(f"   ❌ Error processing {ticker}: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
     def start_optimization(self):
         """Start the optimization process"""
         if not self.df_dict:
@@ -1371,10 +1630,13 @@ Add this as a method to MainWindow and call it before running walk-forward
 
     def stop_optimization(self):
         """Stop the optimization"""
+        self.stopped = True  # ✅ ADD THIS
         if self.worker:
             self.worker.stopped = True
             self.stop_btn.setEnabled(False)
             self.phase_label.setText("Stopping...")
+       
+
 
     def show_error(self, error_msg: str):
         """Display error message"""
@@ -1389,7 +1651,7 @@ Add this as a method to MainWindow and call it before running walk-forward
         self.phase_info_label.setText(f"Current: {phase_text}")
 
     def update_best_label(self, best_params: Dict):
-        """Update best result display with PSR"""
+        """Update best result display with PSR and ALL parameters"""
         self.best_params = best_params
         
         # PSR score (prominent)
@@ -1424,7 +1686,7 @@ Add this as a method to MainWindow and call it before running walk-forward
             self.sharpe_label.setStyleSheet(f"color: {sharpe_color}; font-size: 10pt;")
         
         # Traditional metrics
-        metrics_text = f"Return: {best_params['Percent_Gain_%']:.2f}%"
+        metrics_text = f"Return: {best_params.get('Percent_Gain_%', 0):.2f}%"
         if 'Sortino_Ratio' in best_params:
             metrics_text += f" | Sortino: {best_params['Sortino_Ratio']:.2f}"
         if 'Max_Drawdown_%' in best_params:
@@ -1436,17 +1698,36 @@ Add this as a method to MainWindow and call it before running walk-forward
         
         self.best_label.setText(metrics_text)
         
-        # Build parameter text
+        # ✅ BUILD PARAMETER TEXT WITH CYCLES
         param_lines = []
         for tf in ['daily', 'hourly', '5min']:
+            tf_params = []
+            
+            # ✅ ADD: Time Cycle parameters
+            if f'On_{tf}' in best_params:
+                on = best_params[f'On_{tf}']
+                off = best_params[f'Off_{tf}']
+                start = best_params[f'Start_{tf}']
+                tf_params.append(f"Cycle(ON:{on}, OFF:{off}, START:{start})")
+            
+            # RSI parameters
             if f'MN1_{tf}' in best_params:
-                param_lines.append(
-                    f"{tf.upper()}: RSI({best_params[f'MN1_{tf}']},{best_params[f'MN2_{tf}']}) "
-                    f"Entry<{best_params[f'Entry_{tf}']:.1f} "
-                    f"Exit>{best_params[f'Exit_{tf}']:.1f}"
-                )
+                mn1 = best_params[f'MN1_{tf}']
+                mn2 = best_params[f'MN2_{tf}']
+                entry = best_params[f'Entry_{tf}']
+                exit_val = best_params[f'Exit_{tf}']
+                tf_params.append(f"RSI({mn1},{mn2}) Entry<{entry:.1f} Exit>{exit_val:.1f}")
+            
+            if tf_params:
+                param_lines.append(f"{tf.upper()}: {' | '.join(tf_params)}")
         
-        self.best_params_label.setText(" | ".join(param_lines))
+        # ✅ Display parameters across multiple lines for better readability
+        if param_lines:
+            params_text = "\n".join(param_lines)
+        else:
+            params_text = "Parameters: N/A"
+        
+        self.best_params_label.setText(params_text)
 
     def _add_psr_tooltips(self):
         """Add helpful tooltips explaining PSR metrics"""
@@ -1483,7 +1764,8 @@ Add this as a method to MainWindow and call it before running walk-forward
         self.data_source = "yfinance"
         self.buyhold_pct = 0.0
         self.best_params = None
-    
+        self.stopped = False
+
         # Risk management settings
         self.position_size_pct = RiskConfig.DEFAULT_POSITION_SIZE
         self.max_positions = RiskConfig.DEFAULT_MAX_POSITIONS

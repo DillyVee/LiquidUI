@@ -353,65 +353,53 @@ class MultiTimeframeOptimizer(QThread):
             traceback.print_exc()
             return (None, 0, []) if return_trades else (None, 0)
 
-def run(self):
-    """Sequential optimization with parallel batching and dual CSV saves"""
-    try:
-        import multiprocessing
-        import gc
-        from joblib import parallel_backend
-        
-        # Determine optimal CPU usage
-        n_cpus = multiprocessing.cpu_count()
-        n_jobs = max(1, n_cpus - 1)
-        
-        print(f"\n{'='*60}")
-        print(f"PSR COMPOSITE OPTIMIZATION (PARALLEL BATCHED)")
-        print(f"{'='*60}")
-        print(f"Ticker: {self.ticker}")
-        print(f"Timeframes: {self.timeframes}")
-        print(f"Total trials: {self.n_trials}")
-        print(f"Batch size: {self.batch_size}")
-        print(f"CPU cores: {n_cpus} (using {n_jobs} threads)")
-        print(f"{'='*60}\n")
-        
-        print("📊 Using PSR Composite Optimization")
-        print(f"   Parallel Processing: {n_jobs} threads per batch")
-        print(f"   Memory Management: Clear after each batch")
-        print(f"   Incremental Saves: Append to CSV after each batch")
-        print()
-        
-        on_range, off_range, start_range = self.time_cycle_ranges
-        
-        phases_per_tf = 2
-        total_phases = len(self.timeframes) * phases_per_tf
-        trials_per_phase = max(50, self.n_trials // (len(self.timeframes) * phases_per_tf))
-        
-        # Calculate batches per phase
-        batches_per_phase = max(1, trials_per_phase // self.batch_size)
-        trials_per_batch = trials_per_phase // batches_per_phase
-        
-        print(f"📦 Batch Configuration:")
-        print(f"   Trials per phase: {trials_per_phase}")
-        print(f"   Batches per phase: {batches_per_phase}")
-        print(f"   Trials per batch: {trials_per_batch}")
-        print()
-        
-        phase_counter = 0
-        
-        # Initialize TWO CSV files
-        results_path = Paths.get_results_path(self.ticker, suffix="_psr_results")
-        trades_path = Paths.get_results_path(self.ticker, suffix="_psr_trades")
-        
-        results_csv_initialized = False
-        trades_csv_initialized = False
-        
-        print(f"💾 CSV Output Files:")
-        print(f"   Results: {results_path}")
-        print(f"   Trades:  {trades_path}")
-        print()
-        
-        # ✅ USE THREADING BACKEND (works with QThread)
-        with parallel_backend('threading', n_jobs=n_jobs):
+    def run(self):
+        """Sequential optimization with parallel batching and incremental CSV saves"""
+        try:
+            import multiprocessing
+            import gc
+            
+            # Determine optimal CPU usage
+            n_cpus = multiprocessing.cpu_count()
+            n_jobs = max(1, n_cpus - 1)  # Leave 1 core for OS
+            
+            print(f"\n{'='*60}")
+            print(f"PSR COMPOSITE OPTIMIZATION (PARALLEL BATCHED)")
+            print(f"{'='*60}")
+            print(f"Ticker: {self.ticker}")
+            print(f"Timeframes: {self.timeframes}")
+            print(f"Total trials: {self.n_trials}")
+            print(f"Batch size: {self.batch_size}")
+            print(f"CPU cores: {n_cpus} (using {n_jobs} for optimization)")
+            print(f"{'='*60}\n")
+            
+            print("📊 Using PSR Composite Optimization")
+            print(f"   Parallel Processing: {n_jobs} workers per batch")
+            print(f"   Memory Management: Clear after each batch")
+            print(f"   Incremental Saves: Append to CSV after each batch")
+            print()
+            
+            on_range, off_range, start_range = self.time_cycle_ranges
+            
+            phases_per_tf = 2
+            total_phases = len(self.timeframes) * phases_per_tf
+            trials_per_phase = max(50, self.n_trials // (len(self.timeframes) * phases_per_tf))
+            
+            # Calculate batches per phase
+            batches_per_phase = max(1, trials_per_phase // self.batch_size)
+            trials_per_batch = trials_per_phase // batches_per_phase
+            
+            print(f"📦 Batch Configuration:")
+            print(f"   Trials per phase: {trials_per_phase}")
+            print(f"   Batches per phase: {batches_per_phase}")
+            print(f"   Trials per batch: {trials_per_batch}")
+            print()
+            
+            phase_counter = 0
+            
+            # Initialize results CSV
+            results_path = Paths.get_results_path(self.ticker, suffix="_psr_batched")
+            csv_initialized = False
             
             # Optimize each timeframe sequentially
             for tf_idx, tf in enumerate(self.timeframes):
@@ -444,24 +432,13 @@ def run(self):
                     
                     print(f"\n📦 Batch {batch_idx + 1}/{batches_per_phase}")
                     
-                    batch_trial_count = [0]
-                    batch_results = []
+                    trial_count = [0]
                     
                     def objective_cycle(trial):
                         if self.stopped:
                             raise optuna.exceptions.OptunaError("Stopped by user")
                         
-                        batch_trial_count[0] += 1
-                        
-                        # Progress update every 10 trials
-                        if batch_trial_count[0] % 10 == 0:
-                            batch_progress = (batch_idx / batches_per_phase)
-                            phase_progress = ((phase_counter - 1) / total_phases)
-                            batch_trial_progress = (batch_trial_count[0] / trials_per_batch) * (1 / batches_per_phase)
-                            total_progress = (phase_progress + batch_progress / total_phases + 
-                                            batch_trial_progress / total_phases) * 100
-                            self.progress.emit(int(total_progress))
-                            print(f"      Trial {batch_trial_count[0]}/{trials_per_batch}: {total_progress:.1f}%")
+                        trial_count[0] += 1
                         
                         # Build params
                         params = {}
@@ -501,66 +478,28 @@ def run(self):
                         trade_penalty = min(trades / 50.0, 1.0)
                         score = sharpe - trade_penalty
                         
-                        # Store for batch saving
-                        trial.set_user_attr('params', params)
-                        trial.set_user_attr('score', score)
+                        # Update progress
+                        batch_progress = (batch_idx / batches_per_phase)
+                        phase_progress = ((phase_counter - 1) / total_phases)
+                        batch_trial_progress = (trial_count[0] / trials_per_batch) * (1 / batches_per_phase)
+                        total_progress = (phase_progress + batch_progress / total_phases + 
+                                        batch_trial_progress / total_phases) * 100
+                        self.progress.emit(int(total_progress))
                         
                         return score
                     
-                    # Run batch with threading (n_jobs handled by parallel_backend)
-                    print(f"   Running {trials_per_batch} trials...")
+                    # Run batch with parallel processing
                     cycle_study.optimize(
                         objective_cycle, 
                         n_trials=trials_per_batch, 
-                        n_jobs=n_jobs,  # Now uses threading backend
+                        n_jobs=n_jobs,  # ✅ PARALLEL PROCESSING
                         catch=(Exception,), 
                         show_progress_bar=False
                     )
                     
-                    # Save batch results
-                    print(f"   💾 Saving batch results...")
-                    
-                    batch_trials = sorted(
-                        [t for t in cycle_study.trials if t.state == optuna.trial.TrialState.COMPLETE],
-                        key=lambda t: t.value,
-                        reverse=True
-                    )[:3]
-                    
-                    for trial in batch_trials:
-                        params = trial.user_attrs.get('params', {})
-                        if not params:
-                            continue
-                        
-                        eq_curve, trades = self.simulate_multi_tf(params)
-                        if eq_curve is None:
-                            continue
-                        
-                        metrics = PerformanceMetrics.calculate_metrics(eq_curve)
-                        if metrics is None:
-                            continue
-                        
-                        metrics['Trade_Count'] = trades
-                        metrics['Batch'] = batch_idx + 1
-                        metrics['Phase'] = f"{phase_counter}_cycle"
-                        metrics['Timeframe'] = tf
-                        
-                        result = {**params, **metrics}
-                        batch_results.append(result)
-                    
-                    if batch_results:
-                        df_batch = pd.DataFrame(batch_results)
-                        
-                        if not results_csv_initialized:
-                            df_batch.to_csv(results_path, index=False, mode='w')
-                            results_csv_initialized = True
-                            print(f"   ✓ Created results CSV")
-                        else:
-                            df_batch.to_csv(results_path, index=False, mode='a', header=False)
-                            print(f"   ✓ Appended {len(batch_results)} results")
-                    
                     print(f"   ✓ Batch {batch_idx + 1} complete")
                     
-                    batch_results.clear()
+                    # Memory cleanup after batch
                     gc.collect()
                 
                 best_cycle = {
@@ -573,10 +512,10 @@ def run(self):
                     self.best_params_per_tf[tf] = {}
                 self.best_params_per_tf[tf].update(best_cycle)
                 
-                print(f"✓ Phase {phase_counter} Complete")
+                print(f"✓ Phase {phase_counter} Complete - Cycle params optimized")
                 
                 # ===================================================================
-                # PHASE: Optimize RSI (with batching + DUAL CSV saves)
+                # PHASE: Optimize RSI (with batching + CSV saves)
                 # ===================================================================
                 phase_counter += 1
                 self.phase_update.emit(f"Phase {phase_counter}/{total_phases}: {tf.upper()} RSI...")
@@ -591,30 +530,21 @@ def run(self):
                     )
                 )
                 
+                # Run RSI optimization in batches with CSV saves
                 for batch_idx in range(batches_per_phase):
                     if self.stopped:
                         break
                     
                     print(f"\n📦 Batch {batch_idx + 1}/{batches_per_phase}")
                     
-                    batch_trial_count = [0]
+                    trial_count = [0]
                     batch_results = []
                     
                     def objective_rsi(trial):
                         if self.stopped:
                             raise optuna.exceptions.OptunaError("Stopped by user")
                         
-                        batch_trial_count[0] += 1
-                        
-                        # Progress update every 10 trials
-                        if batch_trial_count[0] % 10 == 0:
-                            batch_progress = (batch_idx / batches_per_phase)
-                            phase_progress = ((phase_counter - 1) / total_phases)
-                            batch_trial_progress = (batch_trial_count[0] / trials_per_batch) * (1 / batches_per_phase)
-                            total_progress = (phase_progress + batch_progress / total_phases + 
-                                            batch_trial_progress / total_phases) * 100
-                            self.progress.emit(int(total_progress))
-                            print(f"      Trial {batch_trial_count[0]}/{trials_per_batch}: {total_progress:.1f}%")
+                        trial_count[0] += 1
                         
                         params = {}
                         for prev_tf in self.timeframes[:tf_idx]:
@@ -641,25 +571,37 @@ def run(self):
                             params[f'Off_{future_tf}'] = off_range[0]
                             params[f'Start_{future_tf}'] = 0
                         
+                        # Calculate PSR
                         psr, sharpe = self.calculate_psr(params)
                         
+                        # Store for batch saving
                         trial.set_user_attr('params', params)
                         trial.set_user_attr('psr', psr)
                         trial.set_user_attr('sharpe', sharpe)
                         
+                        # Update progress
+                        batch_progress = (batch_idx / batches_per_phase)
+                        phase_progress = ((phase_counter - 1) / total_phases)
+                        batch_trial_progress = (trial_count[0] / trials_per_batch) * (1 / batches_per_phase)
+                        total_progress = (phase_progress + batch_progress / total_phases + 
+                                        batch_trial_progress / total_phases) * 100
+                        self.progress.emit(int(total_progress))
+                        
                         return psr
                     
-                    print(f"   Running {trials_per_batch} trials...")
+                    # Run batch with parallel processing
                     rsi_study.optimize(
                         objective_rsi, 
                         n_trials=trials_per_batch, 
-                        n_jobs=n_jobs,
+                        n_jobs=n_jobs,  # ✅ PARALLEL PROCESSING
                         catch=(Exception,), 
                         show_progress_bar=False
                     )
                     
-                    print(f"   💾 Saving batch results to CSVs...")
+                    # ✅ SAVE BATCH RESULTS TO CSV
+                    print(f"   💾 Saving batch results to CSV...")
                     
+                    # Get top 5 results from this batch
                     batch_trials = sorted(
                         [t for t in rsi_study.trials if t.state == optuna.trial.TrialState.COMPLETE],
                         key=lambda t: t.value,
@@ -671,7 +613,8 @@ def run(self):
                         if not params:
                             continue
                         
-                        eq_curve, trades_count, trade_log = self.simulate_multi_tf(params, return_trades=True)
+                        # Run full backtest for metrics
+                        eq_curve, trades = self.simulate_multi_tf(params)
                         if eq_curve is None:
                             continue
                         
@@ -679,49 +622,32 @@ def run(self):
                         if metrics is None:
                             continue
                         
-                        metrics['Trade_Count'] = trades_count
+                        metrics['Trade_Count'] = trades
                         metrics['PSR'] = trial.user_attrs.get('psr', 0.0)
                         metrics['Sharpe_Ratio'] = trial.user_attrs.get('sharpe', 0.0)
                         metrics['Batch'] = batch_idx + 1
-                        metrics['Phase'] = f"{phase_counter}_rsi"
-                        metrics['Timeframe'] = tf
+                        metrics['Phase'] = phase_counter
                         
-                        result = {**params, **metrics}
+                        result = {**params, **metrics, 'Curve_Optimized': False}
                         batch_results.append(result)
-                        
-                        # Save trade log
-                        if trade_log:
-                            df_trades = pd.DataFrame(trade_log)
-                            df_trades['Batch'] = batch_idx + 1
-                            df_trades['Phase'] = f"{phase_counter}_rsi"
-                            df_trades['Timeframe'] = tf
-                            
-                            for key in ['MN1_hourly', 'MN2_hourly', 'Entry_hourly', 'Exit_hourly', 
-                                       'On_hourly', 'Off_hourly', 'Start_hourly']:
-                                if key in params:
-                                    df_trades[key] = params[key]
-                            
-                            if not trades_csv_initialized:
-                                df_trades.to_csv(trades_path, index=False, mode='w')
-                                trades_csv_initialized = True
-                                print(f"   ✓ Created trades CSV")
-                            else:
-                                df_trades.to_csv(trades_path, index=False, mode='a', header=False)
-                            print(f"   ✓ Appended {len(trade_log)} trades")
                     
+                    # Append to CSV
                     if batch_results:
                         df_batch = pd.DataFrame(batch_results)
                         
-                        if not results_csv_initialized:
+                        if not csv_initialized:
+                            # First batch - create new file
                             df_batch.to_csv(results_path, index=False, mode='w')
-                            results_csv_initialized = True
-                            print(f"   ✓ Created results CSV")
+                            csv_initialized = True
+                            print(f"   ✓ Created CSV: {results_path}")
                         else:
+                            # Append to existing file
                             df_batch.to_csv(results_path, index=False, mode='a', header=False)
-                            print(f"   ✓ Appended {len(batch_results)} results")
+                            print(f"   ✓ Appended {len(batch_results)} results to CSV")
                     
                     print(f"   ✓ Batch {batch_idx + 1} complete")
                     
+                    # Memory cleanup after batch
                     batch_results.clear()
                     gc.collect()
                 
@@ -733,79 +659,90 @@ def run(self):
                 }
                 
                 self.best_params_per_tf[tf].update(best_rsi)
-                print(f"✓ Phase {phase_counter} Complete")
-        
-        # Final result (outside threading context)
-        print(f"\n{'='*60}")
-        print(f"Compiling final best result...")
-
-        base_params = {}
-        for tf in self.timeframes:
-            if tf in self.best_params_per_tf:
-                base_params.update(self.best_params_per_tf[tf])
-
-        base_eq_curve, base_trade_count, final_trade_log = self.simulate_multi_tf(
-            base_params, return_trades=True
-        )
-
-        if base_eq_curve is None:
-            raise ValueError("Final simulation failed")
-
-        base_metrics = PerformanceMetrics.calculate_metrics(base_eq_curve)
-        if base_metrics is None:
-            raise ValueError("Failed to calculate metrics")
-
-        base_metrics['Trade_Count'] = base_trade_count
-        psr, sharpe = self.calculate_psr(base_params)
-        base_metrics['PSR'] = psr
-        base_metrics['Sharpe_Ratio'] = sharpe
-        base_metrics['Batch'] = 'FINAL'
-        base_metrics['Phase'] = 'FINAL'
-        base_metrics['Timeframe'] = 'ALL'
-
-        print(f"✓ PSR: {psr:.3f}, Sharpe: {sharpe:.2f}")
-
-        final_result = {**base_params, **base_metrics}
-        self.all_results.append(final_result)
-        self.new_best.emit(final_result)
-
-        df_final = pd.DataFrame([final_result])
-        df_final.to_csv(results_path, index=False, mode='a', header=False)
-
-        if final_trade_log:
-            df_final_trades = pd.DataFrame(final_trade_log)
-            df_final_trades['Batch'] = 'FINAL'
-            df_final_trades['Phase'] = 'FINAL'
-            df_final_trades['Timeframe'] = 'ALL'
+                
+                print(f"✓ Phase {phase_counter} Complete - RSI optimized")
             
-            for key in base_params.keys():
-                if any(x in key for x in ['MN1', 'MN2', 'Entry', 'Exit', 'On', 'Off', 'Start']):
-                    df_final_trades[key] = base_params[key]
+            # ===================================================================
+            # Compile final best result
+            # ===================================================================
+            print(f"\n{'='*60}")
+            print(f"Compiling final best result...")
+
+            base_params = {}
+            for tf in self.timeframes:
+                if tf in self.best_params_per_tf:
+                    base_params.update(self.best_params_per_tf[tf])
+
+            base_eq_curve, base_trade_count = self.simulate_multi_tf(base_params)
+
+            if base_eq_curve is None:
+                raise ValueError("Final simulation failed")
+
+            base_metrics = PerformanceMetrics.calculate_metrics(base_eq_curve)
+
+            if base_metrics is None:
+                raise ValueError("Failed to calculate performance metrics")
+
+            base_metrics['Trade_Count'] = base_trade_count
+
+            # Calculate PSR and Sharpe
+            psr, sharpe = self.calculate_psr(base_params)
+            base_metrics['PSR'] = psr
+            base_metrics['Sharpe_Ratio'] = sharpe
+            base_metrics['Batch'] = 'FINAL'
+            base_metrics['Phase'] = 'FINAL'
+
+            print(f"✓ Calculated PSR: {psr:.3f}, Sharpe: {sharpe:.2f}")
+
+            # Append final result to CSV
+            final_result = {**base_params, **base_metrics, 'Curve_Optimized': False}
+            self.all_results.append(final_result)
+            self.new_best.emit(final_result)
+
+            df_final = pd.DataFrame([final_result])
+            df_final.to_csv(results_path, index=False, mode='a', header=False)
+            print(f"✓ Appended FINAL result to CSV")
+
+            print(f"\n✅ Complete results saved to: {results_path}")
+
+            # Load all results for display
+            df_results = pd.read_csv(results_path)
             
-            df_final_trades.to_csv(trades_path, index=False, mode='a', header=False)
+            print(f"\n{'='*60}")
+            print(f"OPTIMIZATION COMPLETE")
+            print(f"{'='*60}")
+            print(f"Total saved results: {len(df_results)}")
+            print(f"Best PSR: {psr:.3f} ({psr*100:.1f}%)")
+            print(f"Best Sharpe Ratio: {sharpe:.2f}")
 
-        print(f"\n✅ Complete!")
-        print(f"   Results: {results_path}")
-        print(f"   Trades:  {trades_path}")
+            print(f"\n📊 Traditional Metrics:")
+            print(f"  Return: {final_result['Percent_Gain_%']:.2f}%")
+            print(f"  Sortino: {final_result['Sortino_Ratio']:.2f}")
+            print(f"  Max Drawdown: {final_result['Max_Drawdown_%']:.2f}%")
+            print(f"  Profit Factor: {final_result['Profit_Factor']:.2f}")
+            print(f"  Trades: {final_result['Trade_Count']}")
 
-        df_results = pd.read_csv(results_path)
-        
-        print(f"\n{'='*60}")
-        print(f"OPTIMIZATION COMPLETE")
-        print(f"{'='*60}")
-        print(f"Results saved: {len(df_results)}")
-        print(f"Best PSR: {psr:.3f}")
-        print(f"Best Sharpe: {sharpe:.2f}")
-        print(f"Return: {final_result['Percent_Gain_%']:.2f}%")
-        print(f"Trades: {final_result['Trade_Count']}")
-        print(f"{'='*60}\n")
+            print(f"\n⚙️  Optimized Parameters:")
+            for tf in self.timeframes:
+                if tf in self.best_params_per_tf:
+                    params = self.best_params_per_tf[tf]
+                    print(f"\n  {tf.upper()}:")
+                    
+                    if f'On_{tf}' in params:
+                        print(f"    Time Cycle: ON={params[f'On_{tf}']}, OFF={params[f'Off_{tf}']}, START={params[f'Start_{tf}']}")
+                    
+                    if f'MN1_{tf}' in params:
+                        print(f"    RSI: MN1={params[f'MN1_{tf}']}, MN2={params[f'MN2_{tf}']}")
+                        print(f"    Thresholds: ENTRY<{params[f'Entry_{tf}']:.1f}, EXIT>{params[f'Exit_{tf}']:.1f}")
 
-        self.finished.emit(df_results)
+            print(f"{'='*60}\n")
 
-    except Exception as e:
-        if not self.stopped:
-            error_msg = f"Optimization error: {e}"
-            print(f"\n✗ {error_msg}")
-            self.error.emit(error_msg)
-            import traceback
-            traceback.print_exc()
+            self.finished.emit(df_results)
+
+        except Exception as e:
+            if not self.stopped:
+                error_msg = f"Optimization error: {e}"
+                print(f"\n✗ {error_msg}")
+                self.error.emit(error_msg)
+                import traceback
+                traceback.print_exc()
