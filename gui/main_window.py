@@ -3071,13 +3071,19 @@ Add this as a method to MainWindow and call it before running walk-forward
 
             pred_color = regime_color_map.get(prediction.predicted_regime, "#ffffff")
 
+            # Extract top 3 features from features_importance dict
+            top_features = sorted(
+                prediction.features_importance.items(), key=lambda x: x[1], reverse=True
+            )[:3]
+            top_feature_names = [f[0] for f in top_features]
+
             display_text = (
                 f"<b>Predicted Regime ({horizon} days):</b> "
                 f"<span style='color: {pred_color}; font-size: 14pt;'>"
                 f"{prediction.predicted_regime.value.upper()}</span><br>"
                 f"<b>Confidence:</b> {prediction.confidence:.1%} | "
                 f"<b>Model Accuracy:</b> {prediction.model_accuracy:.1%}<br>"
-                f"<b>Top Features:</b> {', '.join(prediction.top_features[:3])}"
+                f"<b>Top Features:</b> {', '.join(top_feature_names)}"
             )
 
             self.prediction_display.setText(display_text)
