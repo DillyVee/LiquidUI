@@ -3815,8 +3815,10 @@ Add this as a method to MainWindow and call it before running walk-forward
 
             # Extract results
             wrc_result = results.get("whites_rc")
-            sharpe_val = results.get("sharpe_ratio", 0.0)
-            sharpe_ci = results.get("sharpe_ci", (0.0, 0.0))
+            sharpe_ci_dict = results.get("sharpe_ci", {})
+            sharpe_val = sharpe_ci_dict.get("point_estimate", 0.0)
+            sharpe_lower = sharpe_ci_dict.get("lower_bound", 0.0)
+            sharpe_upper = sharpe_ci_dict.get("upper_bound", 0.0)
 
             # Determine overall assessment
             if wrc_result and wrc_result.is_significant:
@@ -3841,7 +3843,7 @@ Add this as a method to MainWindow and call it before running walk-forward
 
             display_text += (
                 f"<b>Sharpe Ratio:</b> {sharpe_val:.2f}<br>"
-                f"<b>95% CI:</b> [{sharpe_ci[0]:.2f}, {sharpe_ci[1]:.2f}]<br>"
+                f"<b>95% CI:</b> [{sharpe_lower:.2f}, {sharpe_upper:.2f}]<br>"
                 f"<small>{assessment}</small>"
             )
 
@@ -3856,7 +3858,7 @@ Add this as a method to MainWindow and call it before running walk-forward
                 )
 
             print(f"\n   Sharpe Ratio: {sharpe_val:.2f}")
-            print(f"   95% CI: [{sharpe_ci[0]:.2f}, {sharpe_ci[1]:.2f}]")
+            print(f"   95% CI: [{sharpe_lower:.2f}, {sharpe_upper:.2f}]")
 
             print(f"\n💡 ASSESSMENT:")
             print(f"   {assessment}")
@@ -3869,7 +3871,7 @@ Add this as a method to MainWindow and call it before running walk-forward
                 f"Robustness Testing Results\n\n"
                 f"Status: {status}\n"
                 f"Sharpe: {sharpe_val:.2f}\n"
-                f"95% CI: [{sharpe_ci[0]:.2f}, {sharpe_ci[1]:.2f}]\n\n"
+                f"95% CI: [{sharpe_lower:.2f}, {sharpe_upper:.2f}]\n\n"
                 f"{assessment}",
             )
 
@@ -4025,83 +4027,120 @@ Add this as a method to MainWindow and call it before running walk-forward
         """Run cross-asset global regime analysis"""
         try:
             self.cross_asset_btn.setEnabled(False)
-            self.cross_asset_btn.setText("🌐 Analyzing...")
+            self.cross_asset_btn.setText("🌐 Loading...")
 
             print(f"\n{'='*80}")
             print(f"CROSS-ASSET REGIME ANALYSIS")
             print(f"{'='*80}")
 
-            # Note: In production, you'd load real multi-asset data
-            # For now, we'll use a simplified version with just the main asset
+            # Define required tickers for cross-asset analysis
+            required_tickers = {
+                "SPY": "equity",       # S&P 500 ETF
+                "TLT": "bond",         # 20+ Year Treasury Bond ETF
+                "GLD": "commodity",    # Gold ETF
+                "BTC-USD": "crypto",   # Bitcoin
+            }
 
-            print(f"\n⚠️  NOTE: Full cross-asset analysis requires data for:")
-            print(f"   • Equities (SPY)")
-            print(f"   • Bonds (TLT)")
-            print(f"   • Commodities (GLD)")
-            print(f"   • Crypto (BTC)")
+            print(f"\n🔄 Loading required tickers for cross-asset analysis...")
+            print(f"   Tickers: {', '.join(required_tickers.keys())}")
 
-            if not hasattr(self, "df_dict_full") or not self.df_dict_full:
+            # Load multi-asset data
+            loaded_data = load_multi_asset_data(required_tickers)
+
+            if len(loaded_data) < 2:
                 QMessageBox.warning(
                     self,
-                    "No Data",
-                    "Cross-asset analysis requires loading multi-asset data.\n\n"
-                    "Currently only single-asset mode is supported in GUI.\n"
-                    "Use load_multi_asset_data() for full functionality.",
+                    "Insufficient Data",
+                    f"Cross-asset analysis requires at least 2 assets.\n"
+                    f"Only {len(loaded_data)} asset(s) loaded successfully.\n\n"
+                    f"Please check your internet connection and try again.",
                 )
                 return
 
-            # Get data from the appropriate timeframe
-            if "daily" in self.df_dict_full:
-                df = self.df_dict_full["daily"]
-            elif "hourly" in self.df_dict_full:
-                df = self.df_dict_full["hourly"]
-            elif "5min" in self.df_dict_full:
-                df = self.df_dict_full["5min"]
-            else:
-                QMessageBox.warning(self, "Error", "No timeframe data available")
-                return
+            print(f"\n✅ Successfully loaded {len(loaded_data)} assets")
 
-            # Extract prices and returns
-            if "Datetime" in df.columns:
-                df = df.set_index("Datetime")
+            # Update button text
+            self.cross_asset_btn.setText("🌐 Analyzing...")
 
-            prices = df["Close"]
-            returns = prices.pct_change().dropna()
+            # Create cross-asset analyzer
+            analyzer = CrossAssetRegimeAnalyzer()
 
-            # Detect regime for current asset
-            current_state = self.regime_detector.detect_regime(prices, returns)
+            # Add all loaded assets
+            spy_returns = None
+            for ticker, data in loaded_data.items():
+                analyzer.add_asset(
+                    ticker,
+                    data["asset_class"],
+                    data["prices"],
+                    data["returns"]
+                )
 
-            # Simplified display (single asset)
+                # Save SPY returns for correlation calculation
+                if ticker == "SPY":
+                    spy_returns = data["returns"]
+
+            # Run analysis
+            analysis = analyzer.analyze_global_regime(spy_returns)
+
+            # Generate report
+            report = analyzer.generate_cross_asset_report(analysis)
+            print(report)
+
+            # Create display text
+            regime_color_map = {
+                "risk_on": "#00ff88",
+                "risk_off": "#ff4444",
+                "mixed": "#FFA500",
+                "crisis": "#ff0000",
+                "recovery": "#00aaff",
+            }
+            regime_color = regime_color_map.get(analysis.global_regime.value, "#FFFFFF")
+
             display_text = (
-                f"<b style='color: #E67E22'>Cross-Asset Analysis</b><br>"
-                f"<b>Mode:</b> Single Asset (Limited)<br>"
-                f"<b>Current Asset Regime:</b> {current_state.current_regime.value.upper()}<br>"
-                f"<b>Confidence:</b> {current_state.confidence:.1%}<br>"
-                f"<small>Note: Load multi-asset data for full global regime analysis</small>"
+                f"<b style='color: {regime_color}'>Global Regime: {analysis.global_regime.value.upper()}</b><br>"
+                f"<b>Confidence:</b> {analysis.confidence:.1%}<br>"
+                f"<b>Risk-On Score:</b> {analysis.risk_on_score:+.2f}<br>"
+                f"<b>Synchronization:</b> {analysis.regime_synchronization:.1%}<br>"
+                f"<br><b>Asset Breakdown:</b><br>"
             )
+
+            # Add asset regimes
+            for asset_name, asset_state in sorted(analysis.asset_regimes.items()):
+                regime = asset_state.regime_state.current_regime.value
+                conf = asset_state.regime_state.confidence
+                display_text += (
+                    f"• {asset_name}: <b>{regime.upper()}</b> "
+                    f"({conf:.0%})<br>"
+                )
+
+            # Add divergences if any
+            if analysis.divergence_pairs:
+                display_text += f"<br><b>⚠️ Divergences:</b> {len(analysis.divergence_pairs)}<br>"
+
+            display_text += f"<br><small>{analysis.interpretation[:100]}...</small>"
 
             self.institutional_display.setText(display_text)
 
-            print(f"\n📊 CURRENT ASSET ANALYSIS:")
-            print(f"   Regime: {current_state.current_regime.value.upper()}")
-            print(f"   Confidence: {current_state.confidence:.1%}")
+            # Show summary dialog
+            summary_lines = [
+                f"Global Regime: {analysis.global_regime.value.upper()}",
+                f"Confidence: {analysis.confidence:.1%}",
+                f"Risk-On Score: {analysis.risk_on_score:+.2f}",
+                f"",
+                "Asset Regimes:",
+            ]
 
-            print(f"\n💡 For full cross-asset analysis:")
-            print(f"   1. Load data for SPY, TLT, GLD, BTC")
-            print(f"   2. Use CrossAssetRegimeAnalyzer directly")
-            print(f"   3. See examples/04_institutional_regime_analysis.py")
+            for asset_name, asset_state in sorted(analysis.asset_regimes.items()):
+                regime = asset_state.regime_state.current_regime.value
+                summary_lines.append(f"  • {asset_name}: {regime.upper()}")
 
-            print(f"\n{'='*80}\n")
+            if analysis.divergence_pairs:
+                summary_lines.append(f"\n⚠️ {len(analysis.divergence_pairs)} divergence(s) detected")
 
             QMessageBox.information(
                 self,
-                "Cross-Asset Analysis",
-                f"Single-Asset Regime Analysis\n\n"
-                f"Regime: {current_state.current_regime.value.upper()}\n"
-                f"Confidence: {current_state.confidence:.1%}\n\n"
-                f"Note: Multi-asset analysis requires loading\n"
-                f"data for SPY, TLT, GLD, and BTC.\n\n"
-                f"See examples/04_institutional_regime_analysis.py",
+                "Cross-Asset Analysis Complete",
+                "\n".join(summary_lines),
             )
 
         except Exception as e:
