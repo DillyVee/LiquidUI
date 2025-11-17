@@ -3697,7 +3697,7 @@ Add this as a method to MainWindow and call it before running walk-forward
                 f"<b>Consensus Regime:</b> {agreement_result.consensus_regime.value.upper()}<br>"
                 f"<b>Agreement Index:</b> {agreement_result.agreement_index:.1%}<br>"
                 f"<b>Signal Quality:</b> {agreement_result.signal_quality.upper()}<br>"
-                f"<b>Recommendation:</b> {agreement_result.trading_recommendation}"
+                f"<b>Recommendation:</b> {agreement_result.recommendation}"
             )
 
             self.institutional_display.setText(display_text)
@@ -3718,7 +3718,7 @@ Add this as a method to MainWindow and call it before running walk-forward
                 )
 
             print(f"\n💡 RECOMMENDATION:")
-            print(f"   {agreement_result.trading_recommendation}")
+            print(f"   {agreement_result.recommendation}")
 
             print(f"\n{'='*80}\n")
 
@@ -3766,7 +3766,7 @@ Add this as a method to MainWindow and call it before running walk-forward
             # Get strategy returns (from backtest results)
             # For demonstration, we'll use simulated returns based on Sharpe ratio
             sharpe = self.best_params.get("Sharpe_Ratio", 0.0)
-            n_trades = self.best_params.get("Trade_Count", 100)
+            n_trades = self.best_params.get("Trade_Count", 0)
 
             # Ensure minimum sample size
             if n_trades < 10:
@@ -3776,6 +3776,17 @@ Add this as a method to MainWindow and call it before running walk-forward
                     f"Not enough trades for robustness testing.\n"
                     f"Found {n_trades} trades, need at least 10.\n\n"
                     f"Please run optimization with more data or longer timeframe.",
+                )
+                return
+
+            # Ensure Sharpe is reasonable
+            if abs(sharpe) < 0.01:
+                QMessageBox.warning(
+                    self,
+                    "Insufficient Performance",
+                    f"Strategy Sharpe ratio is too low for meaningful robustness testing.\n"
+                    f"Sharpe: {sharpe:.3f}\n\n"
+                    f"Please optimize parameters to achieve better performance first.",
                 )
                 return
 
