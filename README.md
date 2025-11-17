@@ -477,7 +477,7 @@ Proprietary - All Rights Reserved
 ## 📞 Support
 
 For questions or issues:
-- Email: support@example.com
+- Email: dylan.v.lewis@gmail.com
 - Slack: #quant-trading
 - Issues: https://github.com/yourorg/LiquidUI/issues
 
