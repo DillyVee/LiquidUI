@@ -3674,7 +3674,7 @@ Add this as a method to MainWindow and call it before running walk-forward
                         horizon_days=horizon,
                         predicted_regime=prediction.predicted_regime,
                         confidence=prediction.confidence,
-                        regime_probabilities=prediction.regime_probabilities,
+                        probabilities=prediction.regime_probabilities,
                     )
                 )
 
@@ -3766,7 +3766,20 @@ Add this as a method to MainWindow and call it before running walk-forward
             # Get strategy returns (from backtest results)
             # For demonstration, we'll use simulated returns based on Sharpe ratio
             sharpe = self.best_params.get("Sharpe_Ratio", 0.0)
-            n_days = self.best_params.get("Trade_Count", 100) * 2  # Approximate
+            n_trades = self.best_params.get("Trade_Count", 100)
+
+            # Ensure minimum sample size
+            if n_trades < 10:
+                QMessageBox.warning(
+                    self,
+                    "Insufficient Data",
+                    f"Not enough trades for robustness testing.\n"
+                    f"Found {n_trades} trades, need at least 10.\n\n"
+                    f"Please run optimization with more data or longer timeframe.",
+                )
+                return
+
+            n_days = n_trades * 2  # Approximate daily returns
 
             # Simulate strategy returns
             np.random.seed(42)
