@@ -44,9 +44,10 @@ LIVE_TRADING_BUTTON_STOPPED = """
 """
 
 # Color constants
-COLOR_SUCCESS = "#3fb950"  # GitHub green
-COLOR_ERROR = "#f85149"  # GitHub red
-COLOR_WARNING = "#d29922"  # GitHub yellow
-COLOR_PRIMARY = "#58a6ff"  # GitHub blue
+COLOR_SUCCESS = "#4CAF50"  # Material Green
+COLOR_ERROR = "#F44336"  # Material Red
+COLOR_DANGER = "#F44336"  # Material Red (alias for ERROR)
+COLOR_WARNING = "#FFA726"  # Material Orange
+COLOR_PRIMARY = "#2196F3"  # Material Blue
 COLOR_BACKGROUND = "#0d1117"  # GitHub dark background
 COLOR_TEXT = "#c9d1d9"  # GitHub text
