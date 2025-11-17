@@ -219,6 +219,7 @@ jobs:
           file: ./infrastructure/docker/Dockerfile
           target: production
           push: false
+          load: true  # Load image to local Docker daemon
           tags: liquidui:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
