@@ -3578,7 +3578,7 @@ Add this as a method to MainWindow and call it before running walk-forward
             print(f"\n✅ Generated {len(predicted_probs)} validation predictions")
 
             # Fit calibrator
-            self.regime_calibrator.fit_all_regimes(predicted_probs, true_labels)
+            self.regime_calibrator.fit(predicted_probs, true_labels)
 
             # Update display
             display_text = (
