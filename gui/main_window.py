@@ -714,10 +714,13 @@ Add this as a method to MainWindow and call it before running walk-forward
             "🌍 Market Regime Detection & Adaptive Position Sizing"
         )
         regime_layout = QVBoxLayout()
+        regime_layout.setSpacing(8)  # Add consistent spacing
 
-        # Row 1: Detect current regime
-        detect_layout = QHBoxLayout()
-        self.detect_regime_btn = QPushButton("🔍 Detect Current Market Regime")
+        # Buttons row - all in one line for compact layout
+        buttons_layout = QHBoxLayout()
+
+        # Detect regime button
+        self.detect_regime_btn = QPushButton("🔍 Detect Regime")
         self.detect_regime_btn.setEnabled(False)
         self.detect_regime_btn.setToolTip(
             "Identify current market regime:\n"
@@ -733,18 +736,25 @@ Add this as a method to MainWindow and call it before running walk-forward
                 background-color: #FF6B35;
                 font-weight: bold;
                 padding: 8px;
+                min-width: 120px;
             }
             QPushButton:hover { background-color: #FF8555; }
             QPushButton:disabled { background-color: #0a0a0a; color: #555; }
         """
         )
-        detect_layout.addWidget(self.detect_regime_btn)
-        detect_layout.addStretch()
-        regime_layout.addLayout(detect_layout)
+        buttons_layout.addWidget(self.detect_regime_btn)
 
-        # Row 2: Train regime predictor
-        train_layout = QHBoxLayout()
-        self.train_predictor_btn = QPushButton("🤖 Train Regime Predictor (ML)")
+        # Prediction horizon controls
+        buttons_layout.addWidget(QLabel("Horizon:"))
+        self.regime_horizon_spin = QSpinBox()
+        self.regime_horizon_spin.setRange(1, 20)
+        self.regime_horizon_spin.setValue(5)
+        self.regime_horizon_spin.setSuffix(" days")
+        self.regime_horizon_spin.setMaximumWidth(100)
+        buttons_layout.addWidget(self.regime_horizon_spin)
+
+        # Train predictor button
+        self.train_predictor_btn = QPushButton("🤖 Train ML Predictor")
         self.train_predictor_btn.setEnabled(False)
         self.train_predictor_btn.setToolTip(
             "Train ML model to predict future regimes:\n"
@@ -760,25 +770,16 @@ Add this as a method to MainWindow and call it before running walk-forward
                 background-color: #4ECDC4;
                 font-weight: bold;
                 padding: 8px;
+                min-width: 140px;
             }
             QPushButton:hover { background-color: #6EDED4; }
             QPushButton:disabled { background-color: #0a0a0a; color: #555; }
         """
         )
+        buttons_layout.addWidget(self.train_predictor_btn)
 
-        train_layout.addWidget(QLabel("Prediction Horizon (days):"))
-        self.regime_horizon_spin = QSpinBox()
-        self.regime_horizon_spin.setRange(1, 20)
-        self.regime_horizon_spin.setValue(5)
-        train_layout.addWidget(self.regime_horizon_spin)
-
-        train_layout.addWidget(self.train_predictor_btn)
-        train_layout.addStretch()
-        regime_layout.addLayout(train_layout)
-
-        # Row 3: Calculate PBR
-        pbr_layout = QHBoxLayout()
-        self.calc_pbr_btn = QPushButton("📊 Calculate PBR (Backtest Reliability)")
+        # Calculate PBR button
+        self.calc_pbr_btn = QPushButton("📊 Calculate PBR")
         self.calc_pbr_btn.setEnabled(False)
         self.calc_pbr_btn.setToolTip(
             "Probability of Backtested Returns:\n"
@@ -794,47 +795,60 @@ Add this as a method to MainWindow and call it before running walk-forward
                 background-color: #F7B731;
                 font-weight: bold;
                 padding: 8px;
+                min-width: 120px;
             }
             QPushButton:hover { background-color: #F9C851; }
             QPushButton:disabled { background-color: #0a0a0a; color: #555; }
         """
         )
-        pbr_layout.addWidget(self.calc_pbr_btn)
-        pbr_layout.addStretch()
-        regime_layout.addLayout(pbr_layout)
+        buttons_layout.addWidget(self.calc_pbr_btn)
+        buttons_layout.addStretch()
 
-        # Row 4: Display current regime status
-        self.regime_display = QLabel(
-            "Regime: Not detected | Click 'Detect Current Market Regime' to analyze"
-        )
+        regime_layout.addLayout(buttons_layout)
+
+        # Display panels in a grid for better organization
+        from PyQt6.QtWidgets import QGridLayout
+
+        display_grid = QGridLayout()
+        display_grid.setSpacing(6)
+
+        # Regime display
+        self.regime_display = QLabel("Regime: Not detected")
         self.regime_display.setStyleSheet(
-            "color: #aaa; font-size: 11pt; padding: 8px; "
-            "background-color: #1a1a1a; border-radius: 4px;"
+            "color: #aaa; font-size: 10pt; padding: 6px; "
+            "background-color: #1a1a1a; border-radius: 3px;"
         )
         self.regime_display.setWordWrap(True)
-        regime_layout.addWidget(self.regime_display)
+        self.regime_display.setMinimumHeight(30)
+        display_grid.addWidget(QLabel("Current:"), 0, 0)
+        display_grid.addWidget(self.regime_display, 0, 1)
 
-        # Row 5: Display prediction status
-        self.prediction_display = QLabel(
-            "Prediction: Not trained | Train ML model to forecast future regime"
-        )
+        # Prediction display
+        self.prediction_display = QLabel("Prediction: Not trained")
         self.prediction_display.setStyleSheet(
-            "color: #aaa; font-size: 11pt; padding: 8px; "
-            "background-color: #1a1a1a; border-radius: 4px;"
+            "color: #aaa; font-size: 10pt; padding: 6px; "
+            "background-color: #1a1a1a; border-radius: 3px;"
         )
         self.prediction_display.setWordWrap(True)
-        regime_layout.addWidget(self.prediction_display)
+        self.prediction_display.setMinimumHeight(30)
+        display_grid.addWidget(QLabel("Forecast:"), 1, 0)
+        display_grid.addWidget(self.prediction_display, 1, 1)
 
-        # Row 6: Display PBR score
-        self.pbr_display = QLabel(
-            "PBR: Not calculated | Run optimization first, then calculate PBR"
-        )
+        # PBR display
+        self.pbr_display = QLabel("PBR: Not calculated")
         self.pbr_display.setStyleSheet(
-            "color: #aaa; font-size: 11pt; padding: 8px; "
-            "background-color: #1a1a1a; border-radius: 4px;"
+            "color: #aaa; font-size: 10pt; padding: 6px; "
+            "background-color: #1a1a1a; border-radius: 3px;"
         )
         self.pbr_display.setWordWrap(True)
-        regime_layout.addWidget(self.pbr_display)
+        self.pbr_display.setMinimumHeight(30)
+        display_grid.addWidget(QLabel("Reliability:"), 2, 0)
+        display_grid.addWidget(self.pbr_display, 2, 1)
+
+        # Set column stretch to make the display panels expand
+        display_grid.setColumnStretch(1, 1)
+
+        regime_layout.addLayout(display_grid)
 
         regime_group.setLayout(regime_layout)
         layout.addWidget(regime_group)
