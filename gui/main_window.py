@@ -3792,18 +3792,30 @@ Add this as a method to MainWindow and call it before running walk-forward
 
             n_days = n_trades * 2  # Approximate daily returns
 
-            # Simulate strategy returns
+            # ⚠️ CRITICAL WARNING: Using simulated returns for demonstration
+            # In production, you MUST use actual strategy returns from backtest
+            print(f"\n{'='*80}")
+            print(f"⚠️  CRITICAL WARNING: USING SIMULATED RETURNS")
+            print(f"{'='*80}")
+            print(f"This is a DEMONSTRATION using synthetic data.")
+            print(f"For real trading, you MUST:")
+            print(f"  1. Replace this with actual strategy returns from backtest")
+            print(f"  2. Use real benchmark returns (e.g., buy-and-hold)")
+            print(f"  3. Ensure returns are aligned by date/time")
+            print(f"{'='*80}\n")
+
+            # Simulate strategy returns (DEMONSTRATION ONLY)
             np.random.seed(42)
             strategy_returns = np.random.normal(
                 sharpe * 0.16 / np.sqrt(252), 0.01, n_days  # Daily return  # Daily vol
             )
 
-            # Benchmark returns (assume 0)
+            # Benchmark returns (assume 0) (DEMONSTRATION ONLY)
             benchmark_returns = np.zeros(n_days)
 
             print(f"\n🔧 Running robustness tests (this may take a minute)...")
             print(f"   Strategy Sharpe: {sharpe:.2f}")
-            print(f"   Sample size: {n_days} days")
+            print(f"   Sample size: {n_days} days (SIMULATED)")
 
             # Run full robustness suite
             results = run_full_robustness_suite(

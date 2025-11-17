@@ -71,6 +71,26 @@ class WhiteRealityCheck:
         Returns:
             RobustnessTestResults with p-value and interpretation
         """
+        # Input validation
+        if len(strategy_returns) != len(benchmark_returns):
+            raise ValueError(
+                f"Strategy and benchmark returns must have same length. "
+                f"Got {len(strategy_returns)} vs {len(benchmark_returns)}"
+            )
+
+        if len(strategy_returns) < 30:
+            raise ValueError(
+                f"Insufficient data for robustness testing. "
+                f"Need at least 30 observations, got {len(strategy_returns)}"
+            )
+
+        # Check for NaN/inf values
+        if not np.isfinite(strategy_returns).all():
+            raise ValueError("Strategy returns contain NaN or inf values")
+
+        if not np.isfinite(benchmark_returns).all():
+            raise ValueError("Benchmark returns contain NaN or inf values")
+
         # Calculate excess returns over benchmark
         excess_returns = strategy_returns - benchmark_returns
 
@@ -223,6 +243,26 @@ class HansenSPATest:
         Returns:
             RobustnessTestResults
         """
+        # Input validation
+        if len(all_strategies) == 0:
+            raise ValueError("Must provide at least one strategy for SPA test")
+
+        if len(strategy_returns) != len(benchmark_returns):
+            raise ValueError(
+                f"Strategy and benchmark returns must have same length. "
+                f"Got {len(strategy_returns)} vs {len(benchmark_returns)}"
+            )
+
+        # Validate all strategies have same length
+        for i, strat in enumerate(all_strategies):
+            if len(strat) != len(benchmark_returns):
+                raise ValueError(
+                    f"Strategy {i} has length {len(strat)}, "
+                    f"expected {len(benchmark_returns)}"
+                )
+            if not np.isfinite(strat).all():
+                raise ValueError(f"Strategy {i} contains NaN or inf values")
+
         # Performance relative to benchmark for all strategies
         n_strategies = len(all_strategies)
         relative_performance = np.array(
@@ -407,7 +447,11 @@ class BlockBootstrapValidator:
         def sharpe_func(rets):
             if len(rets) < 2:
                 return 0.0
-            return np.mean(rets) / np.std(rets) * np.sqrt(252)
+            # Use ddof=1 for unbiased sample standard deviation
+            std_rets = np.std(rets, ddof=1)
+            if std_rets == 0:
+                return 0.0
+            return np.mean(rets) / std_rets * np.sqrt(252)
 
         return self.confidence_interval(returns, sharpe_func, confidence_level)
 

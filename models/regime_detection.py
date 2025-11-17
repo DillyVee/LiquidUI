@@ -176,43 +176,78 @@ class MarketRegimeDetector:
         # 1. VOLATILITY FEATURES
         # Realized volatility (annualized)
         recent_returns = returns.tail(self.vol_window)
-        features["realized_vol"] = recent_returns.std() * np.sqrt(252)
+        # Ensure minimum data for volatility calculation
+        if len(recent_returns) < 5:
+            features["realized_vol"] = 0.0
+        else:
+            # Use ddof=1 for unbiased sample std (pandas default)
+            features["realized_vol"] = recent_returns.std(ddof=1) * np.sqrt(252)
 
         # Volatility trend (is vol increasing?)
         if len(returns) >= self.vol_window * 2:
-            vol_recent = returns.tail(self.vol_window).std()
-            vol_older = returns.tail(self.vol_window * 2).head(self.vol_window).std()
-            features["vol_trend"] = (
-                (vol_recent - vol_older) / (vol_older + 1e-10) if vol_older > 0 else 0
-            )
+            vol_recent = returns.tail(self.vol_window).std(ddof=1)
+            vol_older = returns.tail(self.vol_window * 2).head(self.vol_window).std(ddof=1)
+            # Use safer division with minimum threshold
+            if vol_older > 1e-6:
+                features["vol_trend"] = (vol_recent - vol_older) / vol_older
+            else:
+                features["vol_trend"] = 0.0
         else:
-            features["vol_trend"] = 0
+            features["vol_trend"] = 0.0
 
         # Parkinson volatility (high-low range, if available)
         # For now, use realized vol as proxy
 
         # 2. TREND FEATURES
-        # Moving average trends
-        ma_fast = prices.rolling(self.trend_fast).mean().iloc[-1]
-        ma_slow = prices.rolling(self.trend_slow).mean().iloc[-1]
+        # Moving average trends - with bounds checking
         current_price = prices.iloc[-1]
 
-        features["ma_trend"] = (ma_fast - ma_slow) / ma_slow if ma_slow > 0 else 0
-        features["price_vs_ma_fast"] = (
-            (current_price - ma_fast) / ma_fast if ma_fast > 0 else 0
-        )
-        features["price_vs_ma_slow"] = (
-            (current_price - ma_slow) / ma_slow if ma_slow > 0 else 0
-        )
+        if len(prices) >= self.trend_fast:
+            ma_fast = prices.rolling(self.trend_fast).mean().iloc[-1]
+            if ma_fast > 1e-6:
+                features["price_vs_ma_fast"] = (current_price - ma_fast) / ma_fast
+            else:
+                features["price_vs_ma_fast"] = 0.0
+        else:
+            ma_fast = current_price
+            features["price_vs_ma_fast"] = 0.0
+
+        if len(prices) >= self.trend_slow:
+            ma_slow = prices.rolling(self.trend_slow).mean().iloc[-1]
+            if ma_slow > 1e-6:
+                features["price_vs_ma_slow"] = (current_price - ma_slow) / ma_slow
+                if len(prices) >= self.trend_fast:
+                    features["ma_trend"] = (ma_fast - ma_slow) / ma_slow
+                else:
+                    features["ma_trend"] = 0.0
+            else:
+                features["price_vs_ma_slow"] = 0.0
+                features["ma_trend"] = 0.0
+        else:
+            ma_slow = current_price
+            features["price_vs_ma_slow"] = 0.0
+            features["ma_trend"] = 0.0
 
         # 3. RETURN FEATURES
-        # Recent returns (annualized)
-        recent_ret_20 = (
-            (1 + returns.tail(20)).prod() ** (252 / 20) - 1 if len(returns) >= 20 else 0
-        )
-        recent_ret_60 = (
-            (1 + returns.tail(60)).prod() ** (252 / 60) - 1 if len(returns) >= 60 else 0
-        )
+        # Recent returns (annualized) - use log returns to avoid overflow
+        if len(returns) >= 20:
+            # Clip extreme returns to prevent overflow
+            ret_20 = np.clip(returns.tail(20).values, -0.5, 2.0)
+            # Use log returns for safer compounding
+            log_ret_20 = np.log1p(ret_20).sum()
+            recent_ret_20 = (np.exp(log_ret_20) ** (252 / 20)) - 1
+            # Clip final result to reasonable range
+            recent_ret_20 = np.clip(recent_ret_20, -1.0, 10.0)
+        else:
+            recent_ret_20 = 0.0
+
+        if len(returns) >= 60:
+            ret_60 = np.clip(returns.tail(60).values, -0.5, 2.0)
+            log_ret_60 = np.log1p(ret_60).sum()
+            recent_ret_60 = (np.exp(log_ret_60) ** (252 / 60)) - 1
+            recent_ret_60 = np.clip(recent_ret_60, -1.0, 10.0)
+        else:
+            recent_ret_60 = 0.0
 
         features["return_20d_ann"] = recent_ret_20
         features["return_60d_ann"] = recent_ret_60
@@ -226,10 +261,14 @@ class MarketRegimeDetector:
 
         # Rate of change
         if len(prices) >= 20:
-            roc = (prices.iloc[-1] - prices.iloc[-20]) / prices.iloc[-20]
-            features["roc_20"] = roc
+            price_20_ago = prices.iloc[-20]
+            if price_20_ago > 1e-6:
+                roc = (prices.iloc[-1] - price_20_ago) / price_20_ago
+                features["roc_20"] = np.clip(roc, -1.0, 10.0)  # Clip extreme values
+            else:
+                features["roc_20"] = 0.0
         else:
-            features["roc_20"] = 0
+            features["roc_20"] = 0.0
 
         # 5. DISTRIBUTION FEATURES
         # Skewness (tail risk)
