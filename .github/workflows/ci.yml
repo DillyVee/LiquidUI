@@ -120,6 +120,7 @@ jobs:
       - name: Run unit tests with pytest
         run: |
           pytest tests/ -v --tb=short --color=yes \
+            --ignore=tests/integration \
             --cov=. --cov-report=xml --cov-report=html \
             --junitxml=test-results.xml
 

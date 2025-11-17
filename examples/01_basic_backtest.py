@@ -2,16 +2,18 @@
 Example 1: Basic Backtesting
 Simple RSI mean reversion strategy with realistic transaction costs
 """
+
+import sys
+from pathlib import Path
+
 import pandas as pd
 import yfinance as yf
-from pathlib import Path
-import sys
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from data_layer.feature_engineering import FeaturePipeline, RSI, ATR
 from backtest.engine import BacktestEngine, OrderSide
+from data_layer.feature_engineering import ATR, RSI, FeaturePipeline
 
 
 def main():

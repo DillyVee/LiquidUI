@@ -3,30 +3,33 @@ Data Validation Framework
 Automated quality checks, schema validation, and anomaly detection
 Inspired by Great Expectations
 """
-import pandas as pd
-import numpy as np
-from typing import List, Dict, Any, Optional, Callable
-from dataclasses import dataclass, asdict
+
+import json
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from enum import Enum
-import json
+from typing import Any, Callable, Dict, List, Optional
+
+import numpy as np
+import pandas as pd
 
 from infrastructure.logger import quant_logger
 
-
-logger = quant_logger.get_logger('data_validation')
+logger = quant_logger.get_logger("data_validation")
 
 
 class ValidationSeverity(Enum):
     """Validation check severity levels"""
+
     CRITICAL = "critical"  # Blocks pipeline
-    ERROR = "error"        # Logged but may continue
-    WARNING = "warning"    # Informational
+    ERROR = "error"  # Logged but may continue
+    WARNING = "warning"  # Informational
 
 
 @dataclass
 class ValidationResult:
     """Result of a validation check"""
+
     check_name: str
     passed: bool
     severity: ValidationSeverity
@@ -36,7 +39,7 @@ class ValidationResult:
 
     def to_dict(self) -> Dict[str, Any]:
         result = asdict(self)
-        result['severity'] = self.severity.value
+        result["severity"] = self.severity.value
         return result
 
 
@@ -50,7 +53,9 @@ class DataValidator:
         self.checks: List[Callable] = []
         self.results: List[ValidationResult] = []
 
-    def validate(self, df: pd.DataFrame, symbol: str, **context) -> List[ValidationResult]:
+    def validate(
+        self, df: pd.DataFrame, symbol: str, **context
+    ) -> List[ValidationResult]:
         """
         Run all validation checks on the DataFrame
 
@@ -73,15 +78,27 @@ class DataValidator:
         self._check_no_nulls_in_critical_columns(df, symbol)
         self._check_price_sanity(df, symbol)
         self._check_volume_sanity(df, symbol)
-        self._check_no_gaps(df, symbol, context.get('expected_frequency'))
+        self._check_no_gaps(df, symbol, context.get("expected_frequency"))
         self._check_timezone(df, symbol)
         self._check_ohlc_consistency(df, symbol)
         self._check_statistical_anomalies(df, symbol)
 
         # Log results
-        critical_failures = sum(1 for r in self.results if not r.passed and r.severity == ValidationSeverity.CRITICAL)
-        errors = sum(1 for r in self.results if not r.passed and r.severity == ValidationSeverity.ERROR)
-        warnings = sum(1 for r in self.results if not r.passed and r.severity == ValidationSeverity.WARNING)
+        critical_failures = sum(
+            1
+            for r in self.results
+            if not r.passed and r.severity == ValidationSeverity.CRITICAL
+        )
+        errors = sum(
+            1
+            for r in self.results
+            if not r.passed and r.severity == ValidationSeverity.ERROR
+        )
+        warnings = sum(
+            1
+            for r in self.results
+            if not r.passed and r.severity == ValidationSeverity.WARNING
+        )
 
         logger.info(
             f"Validation complete for {symbol}: "
@@ -92,7 +109,11 @@ class DataValidator:
 
     def get_critical_failures(self) -> List[ValidationResult]:
         """Get all critical validation failures"""
-        return [r for r in self.results if not r.passed and r.severity == ValidationSeverity.CRITICAL]
+        return [
+            r
+            for r in self.results
+            if not r.passed and r.severity == ValidationSeverity.CRITICAL
+        ]
 
     def has_critical_failures(self) -> bool:
         """Check if there are any critical failures"""
@@ -104,7 +125,7 @@ class DataValidator:
         passed: bool,
         severity: ValidationSeverity,
         message: str,
-        details: Optional[Dict[str, Any]] = None
+        details: Optional[Dict[str, Any]] = None,
     ):
         """Add a validation result"""
         result = ValidationResult(
@@ -113,14 +134,20 @@ class DataValidator:
             severity=severity,
             message=message,
             details=details or {},
-            timestamp=datetime.utcnow().isoformat()
+            timestamp=datetime.utcnow().isoformat(),
         )
         self.results.append(result)
 
         if not passed:
-            log_func = logger.critical if severity == ValidationSeverity.CRITICAL else \
-                       logger.error if severity == ValidationSeverity.ERROR else \
-                       logger.warning
+            log_func = (
+                logger.critical
+                if severity == ValidationSeverity.CRITICAL
+                else (
+                    logger.error
+                    if severity == ValidationSeverity.ERROR
+                    else logger.warning
+                )
+            )
             log_func(f"Validation {check_name}: {message}")
 
     def _check_not_empty(self, df: pd.DataFrame, symbol: str):
@@ -131,7 +158,7 @@ class DataValidator:
             passed,
             ValidationSeverity.CRITICAL,
             f"DataFrame has {len(df)} records" if passed else "DataFrame is empty",
-            {"record_count": len(df)}
+            {"record_count": len(df)},
         )
 
     def _check_index_sorted(self, df: pd.DataFrame, symbol: str):
@@ -142,7 +169,7 @@ class DataValidator:
                 False,
                 ValidationSeverity.CRITICAL,
                 f"Index is not DatetimeIndex, got {type(df.index)}",
-                {"index_type": str(type(df.index))}
+                {"index_type": str(type(df.index))},
             )
             return
 
@@ -151,8 +178,12 @@ class DataValidator:
             "index_sorted",
             is_sorted,
             ValidationSeverity.CRITICAL,
-            "Index is properly sorted" if is_sorted else "Index is not sorted chronologically",
-            {"is_sorted": is_sorted}
+            (
+                "Index is properly sorted"
+                if is_sorted
+                else "Index is not sorted chronologically"
+            ),
+            {"is_sorted": is_sorted},
         )
 
     def _check_no_duplicates(self, df: pd.DataFrame, symbol: str):
@@ -163,13 +194,17 @@ class DataValidator:
             "no_duplicate_timestamps",
             passed,
             ValidationSeverity.ERROR,
-            f"No duplicate timestamps" if passed else f"Found {duplicates} duplicate timestamps",
-            {"duplicate_count": int(duplicates)}
+            (
+                f"No duplicate timestamps"
+                if passed
+                else f"Found {duplicates} duplicate timestamps"
+            ),
+            {"duplicate_count": int(duplicates)},
         )
 
     def _check_no_nulls_in_critical_columns(self, df: pd.DataFrame, symbol: str):
         """Check for null values in critical price columns"""
-        critical_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+        critical_cols = ["Open", "High", "Low", "Close", "Volume"]
         existing_cols = [col for col in critical_cols if col in df.columns]
 
         for col in existing_cols:
@@ -179,13 +214,21 @@ class DataValidator:
                 f"no_nulls_{col.lower()}",
                 passed,
                 ValidationSeverity.CRITICAL,
-                f"No nulls in {col}" if passed else f"Found {null_count} nulls in {col}",
-                {"column": col, "null_count": int(null_count), "null_pct": float(null_count / len(df))}
+                (
+                    f"No nulls in {col}"
+                    if passed
+                    else f"Found {null_count} nulls in {col}"
+                ),
+                {
+                    "column": col,
+                    "null_count": int(null_count),
+                    "null_pct": float(null_count / len(df)),
+                },
             )
 
     def _check_price_sanity(self, df: pd.DataFrame, symbol: str):
         """Check for unrealistic price values"""
-        price_cols = ['Open', 'High', 'Low', 'Close']
+        price_cols = ["Open", "High", "Low", "Close"]
         existing_cols = [col for col in price_cols if col in df.columns]
 
         for col in existing_cols:
@@ -196,12 +239,16 @@ class DataValidator:
                 f"positive_prices_{col.lower()}",
                 passed,
                 ValidationSeverity.CRITICAL,
-                f"All {col} prices are positive" if passed else f"Found {invalid_prices} non-positive {col} prices",
-                {"column": col, "invalid_count": int(invalid_prices)}
+                (
+                    f"All {col} prices are positive"
+                    if passed
+                    else f"Found {invalid_prices} non-positive {col} prices"
+                ),
+                {"column": col, "invalid_count": int(invalid_prices)},
             )
 
             # Check for extreme price movements (>50% in one bar - likely data error)
-            if col == 'Close' and len(df) > 1:
+            if col == "Close" and len(df) > 1:
                 returns = df[col].pct_change().abs()
                 extreme_moves = (returns > 0.5).sum()
                 passed = extreme_moves == 0
@@ -209,39 +256,60 @@ class DataValidator:
                     f"no_extreme_moves_{col.lower()}",
                     passed,
                     ValidationSeverity.WARNING,
-                    f"No extreme price movements" if passed else f"Found {extreme_moves} extreme movements (>50%)",
-                    {"column": col, "extreme_count": int(extreme_moves), "max_move": float(returns.max())}
+                    (
+                        f"No extreme price movements"
+                        if passed
+                        else f"Found {extreme_moves} extreme movements (>50%)"
+                    ),
+                    {
+                        "column": col,
+                        "extreme_count": int(extreme_moves),
+                        "max_move": float(returns.max()),
+                    },
                 )
 
     def _check_volume_sanity(self, df: pd.DataFrame, symbol: str):
         """Check for volume anomalies"""
-        if 'Volume' not in df.columns:
+        if "Volume" not in df.columns:
             return
 
         # Check for negative volumes
-        negative_vol = (df['Volume'] < 0).sum()
+        negative_vol = (df["Volume"] < 0).sum()
         passed = negative_vol == 0
         self._add_result(
             "non_negative_volume",
             passed,
             ValidationSeverity.ERROR,
-            "All volumes are non-negative" if passed else f"Found {negative_vol} negative volumes",
-            {"negative_count": int(negative_vol)}
+            (
+                "All volumes are non-negative"
+                if passed
+                else f"Found {negative_vol} negative volumes"
+            ),
+            {"negative_count": int(negative_vol)},
         )
 
         # Check for suspiciously low volume (potential data issue)
-        zero_vol = (df['Volume'] == 0).sum()
+        zero_vol = (df["Volume"] == 0).sum()
         zero_vol_pct = zero_vol / len(df)
         passed = zero_vol_pct < 0.05  # Less than 5% zero volume
         self._add_result(
             "sufficient_volume",
             passed,
             ValidationSeverity.WARNING,
-            f"Only {zero_vol_pct:.1%} zero volume bars" if passed else f"{zero_vol_pct:.1%} bars have zero volume",
-            {"zero_volume_count": int(zero_vol), "zero_volume_pct": float(zero_vol_pct)}
+            (
+                f"Only {zero_vol_pct:.1%} zero volume bars"
+                if passed
+                else f"{zero_vol_pct:.1%} bars have zero volume"
+            ),
+            {
+                "zero_volume_count": int(zero_vol),
+                "zero_volume_pct": float(zero_vol_pct),
+            },
         )
 
-    def _check_no_gaps(self, df: pd.DataFrame, symbol: str, expected_frequency: Optional[str]):
+    def _check_no_gaps(
+        self, df: pd.DataFrame, symbol: str, expected_frequency: Optional[str]
+    ):
         """Check for unexpected time gaps"""
         if expected_frequency is None:
             return
@@ -252,10 +320,10 @@ class DataValidator:
         # Infer frequency
         try:
             freq_mapping = {
-                '1min': pd.Timedelta(minutes=1),
-                '5min': pd.Timedelta(minutes=5),
-                '1h': pd.Timedelta(hours=1),
-                '1d': pd.Timedelta(days=1)
+                "1min": pd.Timedelta(minutes=1),
+                "5min": pd.Timedelta(minutes=5),
+                "1h": pd.Timedelta(hours=1),
+                "1d": pd.Timedelta(days=1),
             }
             expected_delta = freq_mapping.get(expected_frequency)
 
@@ -265,7 +333,7 @@ class DataValidator:
             # Check gaps (excluding weekends for daily data)
             time_diffs = df.index.to_series().diff()
 
-            if expected_frequency == '1d':
+            if expected_frequency == "1d":
                 # Allow for weekends (up to 3 days gap)
                 max_allowed_gap = pd.Timedelta(days=3)
             else:
@@ -279,12 +347,16 @@ class DataValidator:
                 "no_unexpected_gaps",
                 passed,
                 ValidationSeverity.WARNING,
-                f"No unexpected time gaps" if passed else f"Found {len(gaps)} unexpected gaps",
+                (
+                    f"No unexpected time gaps"
+                    if passed
+                    else f"Found {len(gaps)} unexpected gaps"
+                ),
                 {
                     "gap_count": len(gaps),
                     "expected_frequency": expected_frequency,
-                    "largest_gap": str(gaps.max()) if len(gaps) > 0 else None
-                }
+                    "largest_gap": str(gaps.max()) if len(gaps) > 0 else None,
+                },
             )
 
         except Exception as e:
@@ -300,30 +372,38 @@ class DataValidator:
             "has_timezone",
             has_tz,
             ValidationSeverity.WARNING,
-            f"Timezone is set to {df.index.tz}" if has_tz else "No timezone information",
-            {"timezone": str(df.index.tz) if has_tz else None}
+            (
+                f"Timezone is set to {df.index.tz}"
+                if has_tz
+                else "No timezone information"
+            ),
+            {"timezone": str(df.index.tz) if has_tz else None},
         )
 
     def _check_ohlc_consistency(self, df: pd.DataFrame, symbol: str):
         """Check OHLC bar consistency (High >= Low, etc.)"""
-        required_cols = ['Open', 'High', 'Low', 'Close']
+        required_cols = ["Open", "High", "Low", "Close"]
         if not all(col in df.columns for col in required_cols):
             return
 
         # High should be >= Low
-        violations = (df['High'] < df['Low']).sum()
+        violations = (df["High"] < df["Low"]).sum()
         passed = violations == 0
         self._add_result(
             "high_gte_low",
             passed,
             ValidationSeverity.ERROR,
-            "High >= Low in all bars" if passed else f"Found {violations} bars where High < Low",
-            {"violation_count": int(violations)}
+            (
+                "High >= Low in all bars"
+                if passed
+                else f"Found {violations} bars where High < Low"
+            ),
+            {"violation_count": int(violations)},
         )
 
         # High should be >= Open and Close
-        violations_open = (df['High'] < df['Open']).sum()
-        violations_close = (df['High'] < df['Close']).sum()
+        violations_open = (df["High"] < df["Open"]).sum()
+        violations_close = (df["High"] < df["Close"]).sum()
         total_violations = violations_open + violations_close
         passed = total_violations == 0
         self._add_result(
@@ -331,12 +411,15 @@ class DataValidator:
             passed,
             ValidationSeverity.ERROR,
             "High >= Open/Close" if passed else f"Found {total_violations} violations",
-            {"violations_vs_open": int(violations_open), "violations_vs_close": int(violations_close)}
+            {
+                "violations_vs_open": int(violations_open),
+                "violations_vs_close": int(violations_close),
+            },
         )
 
         # Low should be <= Open and Close
-        violations_open = (df['Low'] > df['Open']).sum()
-        violations_close = (df['Low'] > df['Close']).sum()
+        violations_open = (df["Low"] > df["Open"]).sum()
+        violations_close = (df["Low"] > df["Close"]).sum()
         total_violations = violations_open + violations_close
         passed = total_violations == 0
         self._add_result(
@@ -344,16 +427,19 @@ class DataValidator:
             passed,
             ValidationSeverity.ERROR,
             "Low <= Open/Close" if passed else f"Found {total_violations} violations",
-            {"violations_vs_open": int(violations_open), "violations_vs_close": int(violations_close)}
+            {
+                "violations_vs_open": int(violations_open),
+                "violations_vs_close": int(violations_close),
+            },
         )
 
     def _check_statistical_anomalies(self, df: pd.DataFrame, symbol: str):
         """Check for statistical anomalies that might indicate data quality issues"""
-        if 'Close' not in df.columns or len(df) < 30:
+        if "Close" not in df.columns or len(df) < 30:
             return
 
         # Calculate returns
-        returns = df['Close'].pct_change().dropna()
+        returns = df["Close"].pct_change().dropna()
 
         # Check for outliers (returns > 5 standard deviations)
         mean_return = returns.mean()
@@ -365,13 +451,19 @@ class DataValidator:
             "no_statistical_outliers",
             passed,
             ValidationSeverity.WARNING,
-            "No statistical outliers" if passed else f"Found {outliers} statistical outliers (>5σ)",
+            (
+                "No statistical outliers"
+                if passed
+                else f"Found {outliers} statistical outliers (>5σ)"
+            ),
             {
                 "outlier_count": int(outliers),
                 "mean_return": float(mean_return),
                 "std_return": float(std_return),
-                "max_z_score": float(np.abs((returns - mean_return) / std_return).max())
-            }
+                "max_z_score": float(
+                    np.abs((returns - mean_return) / std_return).max()
+                ),
+            },
         )
 
     def generate_validation_report(self, output_path: str):
@@ -381,11 +473,15 @@ class DataValidator:
             "total_checks": len(self.results),
             "passed": sum(1 for r in self.results if r.passed),
             "failed": sum(1 for r in self.results if not r.passed),
-            "critical_failures": sum(1 for r in self.results if not r.passed and r.severity == ValidationSeverity.CRITICAL),
-            "checks": [r.to_dict() for r in self.results]
+            "critical_failures": sum(
+                1
+                for r in self.results
+                if not r.passed and r.severity == ValidationSeverity.CRITICAL
+            ),
+            "checks": [r.to_dict() for r in self.results],
         }
 
-        with open(output_path, 'w') as f:
+        with open(output_path, "w") as f:
             json.dump(report, f, indent=2)
 
         logger.info(f"Validation report written to {output_path}")
@@ -410,7 +506,7 @@ class CorporateActionsHandler:
             Adjusted DataFrame
         """
         df = df.copy()
-        price_cols = ['Open', 'High', 'Low', 'Close']
+        price_cols = ["Open", "High", "Low", "Close"]
 
         for split_date, ratio in splits.items():
             mask = df.index < split_date
@@ -418,8 +514,8 @@ class CorporateActionsHandler:
                 if col in df.columns:
                     df.loc[mask, col] = df.loc[mask, col] / ratio
 
-            if 'Volume' in df.columns:
-                df.loc[mask, 'Volume'] = df.loc[mask, 'Volume'] * ratio
+            if "Volume" in df.columns:
+                df.loc[mask, "Volume"] = df.loc[mask, "Volume"] * ratio
 
         return df
 
@@ -436,13 +532,13 @@ class CorporateActionsHandler:
             Adjusted DataFrame
         """
         df = df.copy()
-        price_cols = ['Open', 'High', 'Low', 'Close']
+        price_cols = ["Open", "High", "Low", "Close"]
 
         for div_date, div_amount in dividends.items():
             if div_date not in df.index:
                 continue
 
-            close_price = df.loc[div_date, 'Close']
+            close_price = df.loc[div_date, "Close"]
             adjustment_factor = 1 - (div_amount / close_price)
 
             mask = df.index < div_date

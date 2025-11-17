@@ -2,20 +2,22 @@
 Transaction Cost Models
 Almgren-Chriss market impact, slippage models, and capacity analysis
 """
-import pandas as pd
-import numpy as np
-from typing import Dict, Optional, Tuple
+
 from dataclasses import dataclass
+from typing import Dict, Optional, Tuple
+
+import numpy as np
+import pandas as pd
 
 from infrastructure.logger import quant_logger
 
-
-logger = quant_logger.get_logger('transaction_costs')
+logger = quant_logger.get_logger("transaction_costs")
 
 
 @dataclass
 class MarketImpactParams:
     """Parameters for market impact model"""
+
     # Permanent impact coefficient
     permanent_impact: float = 0.1
 
@@ -41,10 +43,7 @@ class AlmgrenChrissModel:
         self.params = params or MarketImpactParams()
 
     def permanent_impact(
-        self,
-        trade_size: float,
-        avg_daily_volume: float,
-        volatility: float
+        self, trade_size: float, avg_daily_volume: float, volatility: float
     ) -> float:
         """
         Calculate permanent market impact (price moves and doesn't recover)
@@ -60,11 +59,7 @@ class AlmgrenChrissModel:
         participation_rate = trade_size / avg_daily_volume
 
         # Permanent impact ~ gamma * sigma * (Q / V)^0.6
-        impact = (
-            self.params.permanent_impact *
-            volatility *
-            (participation_rate ** 0.6)
-        )
+        impact = self.params.permanent_impact * volatility * (participation_rate**0.6)
 
         return impact
 
@@ -73,7 +68,7 @@ class AlmgrenChrissModel:
         trade_size: float,
         avg_daily_volume: float,
         volatility: float,
-        trade_duration_minutes: float = 1.0
+        trade_duration_minutes: float = 1.0,
     ) -> float:
         """
         Calculate temporary market impact (reverts after trade)
@@ -93,10 +88,10 @@ class AlmgrenChrissModel:
         time_factor = 1.0 / np.sqrt(trade_duration_minutes)
 
         impact = (
-            self.params.temporary_impact *
-            volatility *
-            (participation_rate ** 0.6) *
-            time_factor
+            self.params.temporary_impact
+            * volatility
+            * (participation_rate**0.6)
+            * time_factor
         )
 
         return impact
@@ -109,7 +104,7 @@ class AlmgrenChrissModel:
         volatility: float,
         is_buy: bool = True,
         spread_bps: float = 5.0,
-        commission_bps: float = 1.0
+        commission_bps: float = 1.0,
     ) -> Dict[str, float]:
         """
         Calculate total transaction costs
@@ -127,10 +122,14 @@ class AlmgrenChrissModel:
             Dictionary with cost breakdown
         """
         # Permanent impact
-        perm_impact_pct = self.permanent_impact(trade_size, avg_daily_volume, volatility)
+        perm_impact_pct = self.permanent_impact(
+            trade_size, avg_daily_volume, volatility
+        )
 
         # Temporary impact
-        temp_impact_pct = self.temporary_impact(trade_size, avg_daily_volume, volatility)
+        temp_impact_pct = self.temporary_impact(
+            trade_size, avg_daily_volume, volatility
+        )
 
         # Spread cost (half-spread)
         spread_pct = (spread_bps / 2) / 10000
@@ -146,14 +145,14 @@ class AlmgrenChrissModel:
         total_cost_dollars = notional * total_pct
 
         return {
-            'permanent_impact_pct': perm_impact_pct,
-            'temporary_impact_pct': temp_impact_pct,
-            'spread_pct': spread_pct,
-            'commission_pct': commission_pct,
-            'total_pct': total_pct,
-            'total_bps': total_pct * 10000,
-            'total_dollars': total_cost_dollars,
-            'notional': notional
+            "permanent_impact_pct": perm_impact_pct,
+            "temporary_impact_pct": temp_impact_pct,
+            "spread_pct": spread_pct,
+            "commission_pct": commission_pct,
+            "total_pct": total_pct,
+            "total_bps": total_pct * 10000,
+            "total_dollars": total_cost_dollars,
+            "notional": notional,
         }
 
     def optimal_execution_schedule(
@@ -163,7 +162,7 @@ class AlmgrenChrissModel:
         avg_daily_volume: float,
         volatility: float,
         execution_horizon_minutes: float = 60.0,
-        risk_aversion: float = 1e-6
+        risk_aversion: float = 1e-6,
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         Calculate optimal execution schedule (Almgren-Chriss)
@@ -187,7 +186,7 @@ class AlmgrenChrissModel:
 
         # Exponential decay (simple approximation)
         # True Almgren-Chriss uses sinh/cosh functions
-        kappa = np.sqrt(risk_aversion * volatility ** 2 / self.params.temporary_impact)
+        kappa = np.sqrt(risk_aversion * volatility**2 / self.params.temporary_impact)
         tau = times / execution_horizon_minutes
 
         shares_remaining = total_shares * (1 - tau)  # Linear for simplicity
@@ -209,7 +208,7 @@ class SlippageModel:
         avg_daily_volume: float,
         volatility: float,
         spread_bps: float,
-        is_aggressive: bool = True
+        is_aggressive: bool = True,
     ) -> float:
         """
         Calculate expected slippage
@@ -230,7 +229,7 @@ class SlippageModel:
         slippage = self.base_slippage_bps
 
         # Size effect
-        slippage += 10 * (participation_rate ** 0.5) * 10000  # Convert to bps
+        slippage += 10 * (participation_rate**0.5) * 10000  # Convert to bps
 
         # Volatility effect
         slippage += volatility * 100  # Higher vol = more slippage
@@ -242,10 +241,7 @@ class SlippageModel:
         return slippage
 
     def calculate_realized_slippage(
-        self,
-        execution_price: float,
-        benchmark_price: float,
-        side: str
+        self, execution_price: float, benchmark_price: float, side: str
     ) -> float:
         """
         Calculate realized slippage after execution
@@ -258,7 +254,7 @@ class SlippageModel:
         Returns:
             Slippage in basis points (positive = cost)
         """
-        if side.lower() == 'buy':
+        if side.lower() == "buy":
             slippage_pct = (execution_price - benchmark_price) / benchmark_price
         else:
             slippage_pct = (benchmark_price - execution_price) / benchmark_price
@@ -280,7 +276,7 @@ class CapacityAnalyzer:
         avg_daily_volume: float,
         volatility: float,
         target_return_pct: float,
-        max_impact_pct: float = 0.001  # Max 10 bps impact
+        max_impact_pct: float = 0.001,  # Max 10 bps impact
     ) -> Dict[str, float]:
         """
         Estimate strategy capacity
@@ -314,10 +310,10 @@ class CapacityAnalyzer:
                 trade_size=avg_trade_size,
                 price=100,  # Normalized price
                 avg_daily_volume=avg_daily_volume,
-                volatility=volatility
+                volatility=volatility,
             )
 
-            total_annual_cost = costs['total_pct'] * turnover
+            total_annual_cost = costs["total_pct"] * turnover
 
             # Check if costs exceed threshold
             if total_annual_cost > max_impact_pct:
@@ -331,11 +327,12 @@ class CapacityAnalyzer:
         breakeven_capacity = max_capacity * (target_return_pct / max_impact_pct)
 
         return {
-            'max_capacity_dollars': max_capacity,
-            'breakeven_capacity_dollars': breakeven_capacity,
-            'annual_turnover': turnover,
-            'avg_daily_volume': avg_daily_volume,
-            'max_participation_rate': (max_capacity * turnover / 252) / avg_daily_volume
+            "max_capacity_dollars": max_capacity,
+            "breakeven_capacity_dollars": breakeven_capacity,
+            "annual_turnover": turnover,
+            "avg_daily_volume": avg_daily_volume,
+            "max_participation_rate": (max_capacity * turnover / 252)
+            / avg_daily_volume,
         }
 
     def capacity_curve(
@@ -344,7 +341,7 @@ class CapacityAnalyzer:
         turnover: float,
         avg_daily_volume: float,
         volatility: float,
-        gross_return_pct: float
+        gross_return_pct: float,
     ) -> pd.DataFrame:
         """
         Generate capacity curve showing net returns vs AUM
@@ -370,20 +367,26 @@ class CapacityAnalyzer:
                 trade_size=avg_trade_size,
                 price=100,
                 avg_daily_volume=avg_daily_volume,
-                volatility=volatility
+                volatility=volatility,
             )
 
-            annual_cost_pct = costs['total_pct'] * turnover
+            annual_cost_pct = costs["total_pct"] * turnover
             net_return_pct = gross_return_pct - annual_cost_pct
 
-            results.append({
-                'aum': aum,
-                'gross_return': gross_return_pct,
-                'transaction_costs': annual_cost_pct,
-                'net_return': net_return_pct,
-                'participation_rate': (daily_trade_volume / avg_daily_volume),
-                'cost_ratio': annual_cost_pct / gross_return_pct if gross_return_pct > 0 else np.nan
-            })
+            results.append(
+                {
+                    "aum": aum,
+                    "gross_return": gross_return_pct,
+                    "transaction_costs": annual_cost_pct,
+                    "net_return": net_return_pct,
+                    "participation_rate": (daily_trade_volume / avg_daily_volume),
+                    "cost_ratio": (
+                        annual_cost_pct / gross_return_pct
+                        if gross_return_pct > 0
+                        else np.nan
+                    ),
+                }
+            )
 
         return pd.DataFrame(results)
 
@@ -395,8 +398,7 @@ class LiquidityAnalyzer:
 
     @staticmethod
     def calculate_market_depth(
-        volume_profile: pd.Series,
-        window: int = 20
+        volume_profile: pd.Series, window: int = 20
     ) -> pd.Series:
         """
         Calculate rolling market depth
@@ -412,8 +414,7 @@ class LiquidityAnalyzer:
 
     @staticmethod
     def calculate_amihud_illiquidity(
-        returns: pd.Series,
-        dollar_volume: pd.Series
+        returns: pd.Series, dollar_volume: pd.Series
     ) -> float:
         """
         Calculate Amihud illiquidity ratio
@@ -431,10 +432,7 @@ class LiquidityAnalyzer:
         return illiquidity
 
     @staticmethod
-    def calculate_roll_spread(
-        prices: pd.Series,
-        window: int = 20
-    ) -> pd.Series:
+    def calculate_roll_spread(prices: pd.Series, window: int = 20) -> pd.Series:
         """
         Calculate Roll's spread estimator
 
@@ -462,9 +460,7 @@ class LiquidityAnalyzer:
 
     @staticmethod
     def liquidity_score(
-        avg_daily_volume: float,
-        bid_ask_spread_bps: float,
-        market_cap: float
+        avg_daily_volume: float, bid_ask_spread_bps: float, market_cap: float
     ) -> float:
         """
         Calculate composite liquidity score

@@ -274,3 +274,4 @@ dmypy.json
 # Keep README assets
 !assets/
 !README_assets/
+bandit-report.json

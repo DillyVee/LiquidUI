@@ -2,19 +2,20 @@
 Experiment Tracking and Model Registry
 MLflow integration for reproducible research and model versioning
 """
-import pandas as pd
-import numpy as np
-from typing import Dict, Any, Optional, List
-from pathlib import Path
-import json
+
 import hashlib
-from datetime import datetime
+import json
 import pickle
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
+import pandas as pd
 
 from infrastructure.logger import quant_logger
 
-
-logger = quant_logger.get_logger('experiment_tracking')
+logger = quant_logger.get_logger("experiment_tracking")
 
 
 class ExperimentTracker:
@@ -48,13 +49,13 @@ class ExperimentTracker:
 
         # Write metadata
         metadata = {
-            'experiment_id': experiment_id,
-            'name': name,
-            'description': description,
-            'created_at': datetime.now().isoformat()
+            "experiment_id": experiment_id,
+            "name": name,
+            "description": description,
+            "created_at": datetime.now().isoformat(),
         }
 
-        with open(experiment_dir / 'experiment.json', 'w') as f:
+        with open(experiment_dir / "experiment.json", "w") as f:
             json.dump(metadata, f, indent=2)
 
         self.current_experiment_id = experiment_id
@@ -67,7 +68,7 @@ class ExperimentTracker:
         self,
         run_name: str,
         experiment_id: Optional[str] = None,
-        tags: Optional[Dict[str, str]] = None
+        tags: Optional[Dict[str, str]] = None,
     ) -> str:
         """
         Start a new run
@@ -90,23 +91,23 @@ class ExperimentTracker:
         timestamp = datetime.now().isoformat()
         run_id = hashlib.sha256(f"{run_name}_{timestamp}".encode()).hexdigest()[:16]
 
-        run_dir = self.experiments_dir / experiment_id / 'runs' / run_id
+        run_dir = self.experiments_dir / experiment_id / "runs" / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
 
         # Initialize run metadata
         run_metadata = {
-            'run_id': run_id,
-            'run_name': run_name,
-            'experiment_id': experiment_id,
-            'start_time': timestamp,
-            'tags': tags or {},
-            'status': 'running',
-            'parameters': {},
-            'metrics': {},
-            'artifacts': []
+            "run_id": run_id,
+            "run_name": run_name,
+            "experiment_id": experiment_id,
+            "start_time": timestamp,
+            "tags": tags or {},
+            "status": "running",
+            "parameters": {},
+            "metrics": {},
+            "artifacts": [],
         }
 
-        with open(run_dir / 'run.json', 'w') as f:
+        with open(run_dir / "run.json", "w") as f:
             json.dump(run_metadata, f, indent=2)
 
         self.current_run_id = run_id
@@ -132,17 +133,19 @@ class ExperimentTracker:
         run_dir = self._get_run_dir(run_id)
 
         # Update run metadata
-        with open(run_dir / 'run.json', 'r') as f:
+        with open(run_dir / "run.json", "r") as f:
             run_metadata = json.load(f)
 
-        run_metadata['parameters'].update(params)
+        run_metadata["parameters"].update(params)
 
-        with open(run_dir / 'run.json', 'w') as f:
+        with open(run_dir / "run.json", "w") as f:
             json.dump(run_metadata, f, indent=2)
 
         logger.debug(f"Logged {len(params)} parameters to run {run_id}")
 
-    def log_metrics(self, metrics: Dict[str, float], step: int = 0, run_id: Optional[str] = None):
+    def log_metrics(
+        self, metrics: Dict[str, float], step: int = 0, run_id: Optional[str] = None
+    ):
         """
         Log metrics for a run
 
@@ -160,33 +163,30 @@ class ExperimentTracker:
         run_dir = self._get_run_dir(run_id)
 
         # Append metrics to metrics file
-        metrics_file = run_dir / 'metrics.jsonl'
+        metrics_file = run_dir / "metrics.jsonl"
 
         metric_entry = {
-            'timestamp': datetime.now().isoformat(),
-            'step': step,
-            'metrics': metrics
+            "timestamp": datetime.now().isoformat(),
+            "step": step,
+            "metrics": metrics,
         }
 
-        with open(metrics_file, 'a') as f:
-            f.write(json.dumps(metric_entry) + '\n')
+        with open(metrics_file, "a") as f:
+            f.write(json.dumps(metric_entry) + "\n")
 
         # Update run metadata with latest metrics
-        with open(run_dir / 'run.json', 'r') as f:
+        with open(run_dir / "run.json", "r") as f:
             run_metadata = json.load(f)
 
-        run_metadata['metrics'].update(metrics)
+        run_metadata["metrics"].update(metrics)
 
-        with open(run_dir / 'run.json', 'w') as f:
+        with open(run_dir / "run.json", "w") as f:
             json.dump(run_metadata, f, indent=2)
 
         logger.debug(f"Logged {len(metrics)} metrics to run {run_id}")
 
     def log_artifact(
-        self,
-        artifact_path: Path,
-        artifact_name: str,
-        run_id: Optional[str] = None
+        self, artifact_path: Path, artifact_name: str, run_id: Optional[str] = None
     ):
         """
         Log an artifact (file) for a run
@@ -200,20 +200,21 @@ class ExperimentTracker:
             run_id = self.current_run_id
 
         run_dir = self._get_run_dir(run_id)
-        artifacts_dir = run_dir / 'artifacts'
+        artifacts_dir = run_dir / "artifacts"
         artifacts_dir.mkdir(exist_ok=True)
 
         # Copy artifact
         import shutil
+
         shutil.copy(artifact_path, artifacts_dir / artifact_name)
 
         # Update run metadata
-        with open(run_dir / 'run.json', 'r') as f:
+        with open(run_dir / "run.json", "r") as f:
             run_metadata = json.load(f)
 
-        run_metadata['artifacts'].append(artifact_name)
+        run_metadata["artifacts"].append(artifact_name)
 
-        with open(run_dir / 'run.json', 'w') as f:
+        with open(run_dir / "run.json", "w") as f:
             json.dump(run_metadata, f, indent=2)
 
         logger.info(f"Logged artifact: {artifact_name}")
@@ -223,7 +224,7 @@ class ExperimentTracker:
         model: Any,
         model_name: str,
         metadata: Optional[Dict[str, Any]] = None,
-        run_id: Optional[str] = None
+        run_id: Optional[str] = None,
     ):
         """
         Log a model (pickling)
@@ -238,27 +239,27 @@ class ExperimentTracker:
             run_id = self.current_run_id
 
         run_dir = self._get_run_dir(run_id)
-        models_dir = run_dir / 'models'
+        models_dir = run_dir / "models"
         models_dir.mkdir(exist_ok=True)
 
         # Save model
-        model_path = models_dir / f'{model_name}.pkl'
-        with open(model_path, 'wb') as f:
+        model_path = models_dir / f"{model_name}.pkl"
+        with open(model_path, "wb") as f:
             pickle.dump(model, f)
 
         # Save model metadata
         model_metadata = {
-            'model_name': model_name,
-            'saved_at': datetime.now().isoformat(),
-            'metadata': metadata or {}
+            "model_name": model_name,
+            "saved_at": datetime.now().isoformat(),
+            "metadata": metadata or {},
         }
 
-        with open(models_dir / f'{model_name}_metadata.json', 'w') as f:
+        with open(models_dir / f"{model_name}_metadata.json", "w") as f:
             json.dump(model_metadata, f, indent=2)
 
         logger.info(f"Logged model: {model_name}")
 
-    def end_run(self, status: str = 'completed', run_id: Optional[str] = None):
+    def end_run(self, status: str = "completed", run_id: Optional[str] = None):
         """
         End a run
 
@@ -271,13 +272,13 @@ class ExperimentTracker:
 
         run_dir = self._get_run_dir(run_id)
 
-        with open(run_dir / 'run.json', 'r') as f:
+        with open(run_dir / "run.json", "r") as f:
             run_metadata = json.load(f)
 
-        run_metadata['status'] = status
-        run_metadata['end_time'] = datetime.now().isoformat()
+        run_metadata["status"] = status
+        run_metadata["end_time"] = datetime.now().isoformat()
 
-        with open(run_dir / 'run.json', 'w') as f:
+        with open(run_dir / "run.json", "w") as f:
             json.dump(run_metadata, f, indent=2)
 
         logger.info(f"Ended run {run_id} with status: {status}")
@@ -288,12 +289,12 @@ class ExperimentTracker:
         """Get run metadata"""
         run_dir = self._get_run_dir(run_id)
 
-        with open(run_dir / 'run.json', 'r') as f:
+        with open(run_dir / "run.json", "r") as f:
             return json.load(f)
 
     def list_runs(self, experiment_id: str) -> List[Dict[str, Any]]:
         """List all runs in an experiment"""
-        runs_dir = self.experiments_dir / experiment_id / 'runs'
+        runs_dir = self.experiments_dir / experiment_id / "runs"
 
         if not runs_dir.exists():
             return []
@@ -301,15 +302,13 @@ class ExperimentTracker:
         runs = []
         for run_dir in runs_dir.iterdir():
             if run_dir.is_dir():
-                with open(run_dir / 'run.json', 'r') as f:
+                with open(run_dir / "run.json", "r") as f:
                     runs.append(json.load(f))
 
         return runs
 
     def compare_runs(
-        self,
-        run_ids: List[str],
-        metrics: Optional[List[str]] = None
+        self, run_ids: List[str], metrics: Optional[List[str]] = None
     ) -> pd.DataFrame:
         """
         Compare multiple runs
@@ -327,19 +326,19 @@ class ExperimentTracker:
             run_metadata = self.get_run(run_id)
 
             row = {
-                'run_id': run_id,
-                'run_name': run_metadata['run_name'],
-                'status': run_metadata['status']
+                "run_id": run_id,
+                "run_name": run_metadata["run_name"],
+                "status": run_metadata["status"],
             }
 
             # Add parameters
-            for param, value in run_metadata['parameters'].items():
-                row[f'param_{param}'] = value
+            for param, value in run_metadata["parameters"].items():
+                row[f"param_{param}"] = value
 
             # Add metrics
-            for metric, value in run_metadata['metrics'].items():
+            for metric, value in run_metadata["metrics"].items():
                 if metrics is None or metric in metrics:
-                    row[f'metric_{metric}'] = value
+                    row[f"metric_{metric}"] = value
 
             comparison_data.append(row)
 
@@ -352,7 +351,7 @@ class ExperimentTracker:
             if not exp_dir.is_dir():
                 continue
 
-            run_dir = exp_dir / 'runs' / run_id
+            run_dir = exp_dir / "runs" / run_id
 
             if run_dir.exists():
                 return run_dir
@@ -374,7 +373,7 @@ class ModelRegistry:
         model_name: str,
         model: Any,
         metadata: Dict[str, Any],
-        stage: str = 'staging'  # 'staging', 'production', 'archived'
+        stage: str = "staging",  # 'staging', 'production', 'archived'
     ) -> str:
         """
         Register a model in the registry
@@ -393,39 +392,34 @@ class ModelRegistry:
         model_dir.mkdir(parents=True, exist_ok=True)
 
         # Generate version
-        existing_versions = list(model_dir.glob('v*'))
+        existing_versions = list(model_dir.glob("v*"))
         version_num = len(existing_versions) + 1
-        version_id = f'v{version_num}'
+        version_id = f"v{version_num}"
 
         version_dir = model_dir / version_id
         version_dir.mkdir(parents=True, exist_ok=True)
 
         # Save model
-        with open(version_dir / 'model.pkl', 'wb') as f:
+        with open(version_dir / "model.pkl", "wb") as f:
             pickle.dump(model, f)
 
         # Save metadata
         full_metadata = {
-            'model_name': model_name,
-            'version': version_id,
-            'registered_at': datetime.now().isoformat(),
-            'stage': stage,
-            'metadata': metadata
+            "model_name": model_name,
+            "version": version_id,
+            "registered_at": datetime.now().isoformat(),
+            "stage": stage,
+            "metadata": metadata,
         }
 
-        with open(version_dir / 'metadata.json', 'w') as f:
+        with open(version_dir / "metadata.json", "w") as f:
             json.dump(full_metadata, f, indent=2)
 
         logger.info(f"Registered model {model_name} {version_id} (stage: {stage})")
 
         return version_id
 
-    def promote_model(
-        self,
-        model_name: str,
-        version_id: str,
-        to_stage: str
-    ):
+    def promote_model(self, model_name: str, version_id: str, to_stage: str):
         """
         Promote model to a different stage
 
@@ -436,13 +430,13 @@ class ModelRegistry:
         """
         version_dir = self.registry_dir / model_name / version_id
 
-        with open(version_dir / 'metadata.json', 'r') as f:
+        with open(version_dir / "metadata.json", "r") as f:
             metadata = json.load(f)
 
-        metadata['stage'] = to_stage
-        metadata['promoted_at'] = datetime.now().isoformat()
+        metadata["stage"] = to_stage
+        metadata["promoted_at"] = datetime.now().isoformat()
 
-        with open(version_dir / 'metadata.json', 'w') as f:
+        with open(version_dir / "metadata.json", "w") as f:
             json.dump(metadata, f, indent=2)
 
         logger.info(f"Promoted {model_name} {version_id} to {to_stage}")
@@ -451,7 +445,7 @@ class ModelRegistry:
         self,
         model_name: str,
         version_id: Optional[str] = None,
-        stage: Optional[str] = None
+        stage: Optional[str] = None,
     ) -> Tuple[Any, Dict[str, Any]]:
         """
         Load a model from registry
@@ -474,11 +468,11 @@ class ModelRegistry:
             if stage is not None:
                 # Find latest version in stage
                 versions = []
-                for v_dir in model_dir.glob('v*'):
-                    with open(v_dir / 'metadata.json', 'r') as f:
+                for v_dir in model_dir.glob("v*"):
+                    with open(v_dir / "metadata.json", "r") as f:
                         meta = json.load(f)
-                        if meta['stage'] == stage:
-                            versions.append((v_dir.name, meta['registered_at']))
+                        if meta["stage"] == stage:
+                            versions.append((v_dir.name, meta["registered_at"]))
 
                 if not versions:
                     raise ValueError(f"No model in stage {stage}")
@@ -488,17 +482,17 @@ class ModelRegistry:
                 version_id = versions[0][0]
             else:
                 # Latest version
-                versions = sorted(model_dir.glob('v*'), key=lambda x: int(x.name[1:]))
+                versions = sorted(model_dir.glob("v*"), key=lambda x: int(x.name[1:]))
                 version_id = versions[-1].name
 
         version_dir = model_dir / version_id
 
         # Load model
-        with open(version_dir / 'model.pkl', 'rb') as f:
+        with open(version_dir / "model.pkl", "rb") as f:
             model = pickle.load(f)
 
         # Load metadata
-        with open(version_dir / 'metadata.json', 'r') as f:
+        with open(version_dir / "metadata.json", "r") as f:
             metadata = json.load(f)
 
         logger.info(f"Loaded model {model_name} {version_id}")
@@ -513,8 +507,8 @@ class ModelRegistry:
             if not model_dir.is_dir():
                 continue
 
-            for version_dir in model_dir.glob('v*'):
-                with open(version_dir / 'metadata.json', 'r') as f:
+            for version_dir in model_dir.glob("v*"):
+                with open(version_dir / "metadata.json", "r") as f:
                     metadata = json.load(f)
                     models.append(metadata)
 
