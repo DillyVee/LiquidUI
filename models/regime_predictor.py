@@ -285,6 +285,9 @@ class RegimePredictor:
         X_list = []
         y_list = []
 
+        # Create regime to index mapping (must be consistent with predict method)
+        regime_to_idx = {regime: i for i, regime in enumerate(MarketRegime)}
+
         min_window = max(self.detector.trend_slow, self.detector.vol_window)
         prices_aligned = prices.iloc[min_window:]
         returns_aligned = returns.iloc[min_window:]
@@ -298,14 +301,15 @@ class RegimePredictor:
             current_state = self.detector.detect_regime(price_slice, return_slice)
             features = self._extract_features(price_slice, return_slice, current_state)
 
-            # Target: regime at time t + horizon
+            # Target: regime at time t + horizon (convert enum to integer label)
             future_regime = regime_history[i + self.prediction_horizon]
+            future_regime_label = regime_to_idx[future_regime]
 
             X_list.append(features)
-            y_list.append(future_regime)
+            y_list.append(future_regime_label)
 
         X = np.array(X_list)
-        y = np.array(y_list)
+        y = np.array(y_list, dtype=int)  # Ensure integer labels
 
         return X, y
 
@@ -419,14 +423,19 @@ class RegimePredictor:
         # Overall accuracy
         accuracy = np.mean(y_pred == y_val)
 
+        # Create regime to index mapping (consistent with training)
+        regime_to_idx = {regime: i for i, regime in enumerate(MarketRegime)}
+        idx_to_regime = {i: regime for regime, i in regime_to_idx.items()}
+
         # Per-regime precision and recall
         precision_dict = {}
         recall_dict = {}
 
         for regime in MarketRegime:
-            true_positives = np.sum((y_pred == regime) & (y_val == regime))
-            false_positives = np.sum((y_pred == regime) & (y_val != regime))
-            false_negatives = np.sum((y_pred != regime) & (y_val == regime))
+            regime_idx = regime_to_idx[regime]
+            true_positives = np.sum((y_pred == regime_idx) & (y_val == regime_idx))
+            false_positives = np.sum((y_pred == regime_idx) & (y_val != regime_idx))
+            false_negatives = np.sum((y_pred != regime_idx) & (y_val == regime_idx))
 
             precision = (
                 true_positives / (true_positives + false_positives)
@@ -446,11 +455,8 @@ class RegimePredictor:
         n_regimes = len(MarketRegime)
         confusion = np.zeros((n_regimes, n_regimes))
 
-        regime_to_idx = {regime: i for i, regime in enumerate(MarketRegime)}
-
-        for true_reg, pred_reg in zip(y_val, y_pred):
-            true_idx = regime_to_idx[true_reg]
-            pred_idx = regime_to_idx[pred_reg]
+        # y_val and y_pred are already integer indices
+        for true_idx, pred_idx in zip(y_val, y_pred):
             confusion[true_idx, pred_idx] += 1
 
         return PredictionPerformance(
