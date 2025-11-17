@@ -3417,13 +3417,13 @@ Add this as a method to MainWindow and call it before running walk-forward
                 f"{pbr:.1%}</span><br>"
                 f"<b>Interpretation:</b> {interpretation}<br>"
                 f"<b>Contributing Factors:</b><br>"
-                f"  • Sharpe: {pbr_details['sharpe_probability']:.1%} | "
+                f"  • Sharpe: {pbr_details['sharpe_contribution']:.1%} | "
                 f"Sample Size: {pbr_details['sample_size_factor']:.1%}<br>"
                 f"  • Overfitting: {pbr_details['overfitting_factor']:.1%} | "
                 f"Selection Bias: {pbr_details['selection_bias_factor']:.1%}<br>"
                 f"  • Walk-Forward: {pbr_details['walkforward_factor']:.1%} | "
                 f"Regime Factor: {pbr_details['regime_factor']:.1%}<br>"
-                f"  • Dispersion: {pbr_details['dispersion_factor']:.1%} | "
+                f"  • Dispersion: {pbr_details['regime_dispersion_factor']:.1%} | "
                 f"Effective DoF: {pbr_details['effective_dof']:.1f}"
             )
 
@@ -3434,7 +3434,9 @@ Add this as a method to MainWindow and call it before running walk-forward
             print(f"   Interpretation: {interpretation}")
 
             print(f"\n   Contributing Factors:")
-            print(f"      Sharpe Probability: {pbr_details['sharpe_probability']:.1%}")
+            print(
+                f"      Sharpe Contribution: {pbr_details['sharpe_contribution']:.1%}"
+            )
             print(f"      Sample Size Factor: {pbr_details['sample_size_factor']:.1%}")
             print(f"      Overfitting Factor: {pbr_details['overfitting_factor']:.1%}")
             print(
@@ -3442,7 +3444,9 @@ Add this as a method to MainWindow and call it before running walk-forward
             )
             print(f"      Walk-Forward Factor: {pbr_details['walkforward_factor']:.1%}")
             print(f"      Regime Factor: {pbr_details['regime_factor']:.1%}")
-            print(f"      Dispersion Factor: {pbr_details['dispersion_factor']:.1%}")
+            print(
+                f"      Dispersion Factor: {pbr_details['regime_dispersion_factor']:.1%}"
+            )
             print(f"      Effective DoF: {pbr_details['effective_dof']:.1f}")
 
             print(f"\n✅ ASSESSMENT:")
@@ -3499,8 +3503,22 @@ Add this as a method to MainWindow and call it before running walk-forward
             print(f"PROBABILITY CALIBRATION")
             print(f"{'='*80}")
 
-            # Get data
-            prices = self.df_dict_full["Close"]
+            # Get data from the appropriate timeframe
+            if "daily" in self.df_dict_full:
+                df = self.df_dict_full["daily"]
+            elif "hourly" in self.df_dict_full:
+                df = self.df_dict_full["hourly"]
+            elif "5min" in self.df_dict_full:
+                df = self.df_dict_full["5min"]
+            else:
+                QMessageBox.warning(self, "Error", "No timeframe data available")
+                return
+
+            # Extract prices and returns
+            if "Datetime" in df.columns:
+                df = df.set_index("Datetime")
+
+            prices = df["Close"]
             returns = prices.pct_change().dropna()
 
             # Initialize calibrator
@@ -3613,8 +3631,22 @@ Add this as a method to MainWindow and call it before running walk-forward
             print(f"MULTI-HORIZON AGREEMENT ANALYSIS")
             print(f"{'='*80}")
 
-            # Get data
-            prices = self.df_dict_full["Close"]
+            # Get data from the appropriate timeframe
+            if "daily" in self.df_dict_full:
+                df = self.df_dict_full["daily"]
+            elif "hourly" in self.df_dict_full:
+                df = self.df_dict_full["hourly"]
+            elif "5min" in self.df_dict_full:
+                df = self.df_dict_full["5min"]
+            else:
+                QMessageBox.warning(self, "Error", "No timeframe data available")
+                return
+
+            # Extract prices and returns
+            if "Datetime" in df.columns:
+                df = df.set_index("Datetime")
+
+            prices = df["Close"]
             returns = prices.pct_change().dropna()
 
             horizons = [1, 5, 10, 20]
@@ -3844,8 +3876,22 @@ Add this as a method to MainWindow and call it before running walk-forward
             print(f"REGIME DIAGNOSTICS")
             print(f"{'='*80}")
 
-            # Get data
-            prices = self.df_dict_full["Close"]
+            # Get data from the appropriate timeframe
+            if "daily" in self.df_dict_full:
+                df = self.df_dict_full["daily"]
+            elif "hourly" in self.df_dict_full:
+                df = self.df_dict_full["hourly"]
+            elif "5min" in self.df_dict_full:
+                df = self.df_dict_full["5min"]
+            else:
+                QMessageBox.warning(self, "Error", "No timeframe data available")
+                return
+
+            # Extract prices and returns
+            if "Datetime" in df.columns:
+                df = df.set_index("Datetime")
+
+            prices = df["Close"]
             returns = prices.pct_change().dropna()
 
             # Detect regimes for full history
@@ -3980,8 +4026,22 @@ Add this as a method to MainWindow and call it before running walk-forward
                 )
                 return
 
-            # Get current asset data
-            prices = self.df_dict_full["Close"]
+            # Get data from the appropriate timeframe
+            if "daily" in self.df_dict_full:
+                df = self.df_dict_full["daily"]
+            elif "hourly" in self.df_dict_full:
+                df = self.df_dict_full["hourly"]
+            elif "5min" in self.df_dict_full:
+                df = self.df_dict_full["5min"]
+            else:
+                QMessageBox.warning(self, "Error", "No timeframe data available")
+                return
+
+            # Extract prices and returns
+            if "Datetime" in df.columns:
+                df = df.set_index("Datetime")
+
+            prices = df["Close"]
             returns = prices.pct_change().dropna()
 
             # Detect regime for current asset
