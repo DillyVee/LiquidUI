@@ -2,196 +2,152 @@
 
 All notable changes to LiquidUI will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [Unreleased] - 2025-11-17
+
+### Added - Market Regime Detection & Advanced Features
+
+#### 🌍 Market Regime Detection & Prediction
+- **Market Regime Detector** (`models/regime_detection.py`)
+  - 5 regime types: Bull, Bear, High Vol, Low Vol, Crisis
+  - Multi-factor scoring (volatility, trend, returns, momentum, drawdown)
+  - Markov chain transition analysis
+  - Historical regime statistics
+  - Regime visualization with color-coded charts
+  
+#### 🤖 ML-Based Regime Prediction  
+- **Regime Predictor** (`models/regime_predictor.py`)
+  - Random Forest / XGBoost forecasting (1-20 days ahead)
+  - 30+ engineered features
+  - Time series cross-validation
+  - Confidence-based predictions
+  - Feature importance tracking
+
+#### 📊 PBR Calculator (NEW!)
+- **Probability of Backtested Returns**
+  - Statistical measure of backtest-to-live performance
+  - Multi-factor: Sharpe, sample size, overfitting, WF efficiency, regime stability
+  - Interpretation: Very High (>80%), High (65-80%), Moderate (50-65%), Low (<50%)
+
+#### ⚖️ Dynamic Position Sizing
+- **Regime-Based Position Sizer**
+  - Automatic 0.2x-2.0x adjustments
+  - Confidence weighting
+  - Forward-looking with ML predictions
+
+#### 📚 Documentation
+- QUICKSTART.md - Beginner to advanced guide
+- CHEATSHEET.md - Quick reference
+- GUI_FEATURES.md - Visual GUI map
+- REGIME_DETECTION_GUIDE.md - Complete regime docs
+
+#### 🧪 Testing & CI/CD
+- pytest configuration (pytest.ini)
+- Unit tests (tests/test_config.py)
+- GitHub Actions CI/CD pipeline
+- .isort.cfg for Black compatibility
+
+### Fixed
+- ✅ All linting (Black, isort, flake8)
+- ✅ Integration test imports
+- ✅ Docker build configuration
+- ✅ Deprecated GitHub Actions (v3→v4)
+- ✅ Type import errors
+
+### Verified
+- ✅ Monte Carlo (VaR, CVaR, Sharpe, Drawdown)
+- ✅ Walk-Forward (efficiency, overfitting)
+- ✅ PSR (variance scaling, CIs)
+
+---
 
 ## [1.0.0] - 2025-11-17
 
 ### 🎉 Initial Release
 
-First production-ready release of LiquidUI - Professional Quantitative Trading Pipeline.
-
-### Added
+✅ **CONFIRMED - All features below are implemented and working**
 
 #### Core Infrastructure
-- **Data Layer** - Versioned Parquet storage with immutable data management
-- **Data Validation** - Automated quality checks with 15+ validation rules
-- **Feature Engineering** - Modular feature pipeline with caching and lineage tracking
-- **Structured Logging** - Audit trails with correlation IDs and regulatory compliance
+- ✅ Data Layer (Parquet storage, validation, features)
+- ✅ Structured Logging (audit trails, correlation IDs)
+- ✅ Configuration Management (dataclass settings)
 
-#### Backtesting & Execution
-- **Advanced Backtesting Engine** - Realistic market simulation with order book replay
-- **Transaction Cost Models** - Almgren-Chriss market impact (permanent & temporary)
-- **Smart Order Routing** - TWAP, VWAP, POV, and Iceberg algorithms
-- **Execution Simulation** - Pre-trade checks, slippage modeling, fill simulation
+#### Backtesting & Execution  
+- ✅ Advanced Backtesting Engine (realistic fills, slippage)
+- ✅ Transaction Cost Models (Almgren-Chriss, spreads)
+- ✅ Smart Order Routing (TWAP, VWAP, POV, Iceberg)
+- ✅ Robustness Testing (CV, walk-forward, Monte Carlo)
 
 #### Risk Management
-- **Real-Time Risk Controls** - Position, P&L, concentration, and leverage limits
-- **Kill Switches** - Automated shutdown on daily loss, drawdown, or trailing stop breaches
-- **VaR Calculation** - Historical and parametric Value-at-Risk
-- **Stress Testing** - Scenario analysis and regime-based testing
+- ✅ Real-Time Controls (position, P&L, leverage limits)
+- ✅ Kill Switches (daily loss, drawdown, trailing stop)
+- ✅ Risk Metrics (VaR, stress testing)
 
-#### Monitoring & Observability
-- **Metrics Collection** - Prometheus-compatible time series metrics
-- **Drift Detection** - Data and model performance degradation detection (KS test, KL divergence)
-- **Alert Management** - Configurable thresholds with severity levels
-- **Performance Monitoring** - Real-time Sharpe, drawdown, win rate tracking
+#### Monitoring
+- ✅ Metrics Collection (Prometheus-compatible)
+- ✅ Drift Detection (KS test, KL divergence)
+- ✅ Alert Management (thresholds, severity)
 
-#### Robustness Testing
-- **Nested Cross-Validation** - Unbiased hyperparameter optimization
-- **Walk-Forward Analysis** - Rolling train/test with degradation measurement
-- **Monte Carlo Validation** - Bootstrap confidence intervals and p-values
-- **Parameter Stability** - Sensitivity surfaces and stable region identification
-- **Regime Analysis** - Performance across volatility regimes
+#### Optimization
+- ✅ Multi-Timeframe Optimizer (Optuna, PSR)
+- ✅ Walk-Forward Analyzer (rolling windows)
+- ✅ Monte Carlo Simulator (advanced metrics)
+- ✅ PSR Calculator (Probabilistic Sharpe)
 
-#### Experiment Tracking
-- **MLflow-Compatible System** - Track experiments, parameters, metrics, artifacts
-- **Model Registry** - Version control with staging (dev/staging/production)
-- **Reproducibility** - Full lineage from data version to results
+#### ML & Tracking
+- ✅ Experiment Tracking (MLflow-compatible)
+- ✅ Model Registry (versioning, promotion)
 
-#### Deployment & Orchestration
-- **Docker Containerization** - Multi-stage builds for dev, test, production, Airflow
-- **Docker Compose Stack** - Postgres, Redis, Airflow, Grafana, Prometheus, Jupyter
-- **Airflow DAGs** - Automated daily pipeline (ingest → validate → features → backtest → deploy)
-- **Kubernetes Ready** - Scalable, high-availability configuration
+#### Deployment
+- ✅ Docker (multi-stage builds)
+- ✅ Docker Compose (Postgres, Redis, Airflow, Grafana, Prometheus, Jupyter)
+- ✅ Airflow DAGs (automated pipelines)
 
-#### Governance & Compliance
-- **Model Cards** - Comprehensive documentation following Google's framework
-- **Audit Logging** - Immutable append-only logs for regulatory compliance
-- **Data Quality Framework** - Great Expectations patterns
-- **Testing** - Integration and end-to-end validation tests
+#### Governance
+- ✅ Model Cards (Google framework)
+- ✅ Audit Logging (compliance)
 
-### Features by Module
+#### GUI
+- ✅ Main Trading Window (all features integrated)
+- ✅ Live/Paper Trading (Alpaca)
+- ✅ Charts & Visualizations
 
-#### `data_layer/`
-- Versioned Parquet storage (`storage.py`)
-- Data validation framework (`validation.py`)
-- Feature engineering pipeline (`feature_engineering.py`)
-- Corporate actions handling (splits, dividends)
+#### Examples
+- ✅ examples/01_basic_backtest.py
+- ✅ examples/02_walk_forward_validation.py
+- ✅ examples/03_regime_based_trading.py (NEW!)
 
-#### `backtest/`
-- Backtesting engine with realistic fills (`engine.py`)
-- Transaction cost modeling (`transaction_costs.py`)
-- Robustness testing suite (`robustness.py`)
-- Capacity analysis and liquidity modeling
+### File Structure
+```
+LiquidUI/
+├── data_layer/          ✅ storage, validation, features
+├── backtest/            ✅ engine, costs, robustness
+├── execution/           ✅ order routing
+├── risk/                ✅ risk manager, kill switches
+├── monitoring/          ✅ metrics, drift detection
+├── optimization/        ✅ optimizer, walk-forward, Monte Carlo, PSR
+├── models/              ✅ experiment tracking, regime detection (NEW!), regime predictor (NEW!)
+├── governance/          ✅ model cards
+├── infrastructure/      ✅ logging, docker, airflow
+├── gui/                 ✅ main window, styles
+├── trading/             ✅ Alpaca integration
+├── config/              ✅ settings
+├── tests/               ✅ unit & integration tests
+└── examples/            ✅ 3 working examples
+```
 
-#### `execution/`
-- Smart order routing (`order_router.py`)
-- Execution algorithms (TWAP, VWAP, POV)
-- Pre-trade risk checks
-- Fill simulation
-
-#### `risk/`
-- Risk manager with kill switches (`risk_manager.py`)
-- Position and P&L limits
-- VaR calculation
-- Stress testing
-
-#### `monitoring/`
-- Metrics collection (`metrics.py`)
-- Drift detection (data and model)
-- Alert management
-- Performance monitoring
-
-#### `models/`
-- Experiment tracking (`experiment_tracking.py`)
-- Model registry with versioning
-- Artifact management
-
-#### `governance/`
-- Model card generator (`model_card.py`)
-- Audit logging
-- Compliance documentation
-
-#### `infrastructure/`
-- Structured logging (`logger.py`)
-- Docker configuration (`docker/`)
-- Airflow DAGs (`airflow/dags/`)
-- Monitoring configuration (Prometheus, Grafana)
-
-### Technical Specifications
-
-- **Language**: Python 3.11+
-- **Database**: PostgreSQL 15+, Redis 7+
-- **Orchestration**: Apache Airflow 2.7+
-- **Containerization**: Docker, Docker Compose
-- **Monitoring**: Prometheus, Grafana
-- **Data Storage**: Parquet (PyArrow)
-- **Type Safety**: Full type hints with mypy support
+### Tech Stack
+- Python 3.11+
+- PostgreSQL 15+, Redis 7+
+- Apache Airflow 2.7+
+- Docker & Docker Compose
+- Prometheus & Grafana
+- PyQt6 (GUI)
+- scikit-learn, optuna, pandas, numpy
+- Optional: XGBoost
 
 ### Performance
+- 10,000+ bars/second (vectorized)
+- Parquet partitioning (year/month)
+- Feature caching
+- Parallel processing
 
-- Vectorized backtesting (10,000+ bars/second)
-- Efficient data storage with partitioning (year/month)
-- Optimized feature caching
-- Parallel walk-forward validation
-
-### Documentation
-
-- Comprehensive README with examples
-- API documentation in docstrings
-- Contributing guidelines
-- Code of conduct
-- Security policy
-- Example usage scripts
-
-### Testing
-
-- Integration tests for end-to-end validation
-- Unit test coverage framework
-- Property-based testing support (Hypothesis)
-- CI/CD pipeline configuration
-
----
-
-## [Unreleased]
-
-### Planned
-
-- Web-based dashboard UI
-- Real-time strategy monitoring
-- Additional execution algorithms (Iceberg+, Dark pool routing)
-- Machine learning model integration
-- Multi-asset class support (crypto, futures, options)
-- Advanced position sizing algorithms
-- Genetic algorithm optimization
-- Reinforcement learning framework
-
----
-
-## Version History
-
-- **1.0.0** (2025-11-17) - Initial production release
-
----
-
-## Migration Guides
-
-### Upgrading to 1.0.0
-
-This is the initial release, no migration needed.
-
----
-
-## Breaking Changes
-
-None (initial release).
-
----
-
-## Security
-
-For security-related changes, see [SECURITY.md](SECURITY.md).
-
----
-
-## Contributors
-
-Thank you to all contributors who made this release possible!
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines.
-
----
-
-[1.0.0]: https://github.com/DillyVee/LiquidUI/releases/tag/v1.0.0
-[Unreleased]: https://github.com/DillyVee/LiquidUI/compare/v1.0.0...HEAD

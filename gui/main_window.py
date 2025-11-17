@@ -48,6 +48,15 @@ from gui.styles import (
     LIVE_TRADING_BUTTON_STOPPED,
     MAIN_STYLESHEET,
 )
+
+# Regime detection imports
+from models.regime_detection import (
+    MarketRegime,
+    MarketRegimeDetector,
+    PBRCalculator,
+    RegimeState,
+)
+from models.regime_predictor import RegimeBasedPositionSizer, RegimePredictor
 from optimization import MultiTimeframeOptimizer, PerformanceMetrics
 
 # Monte Carlo imports (these are correct!)
@@ -275,6 +284,9 @@ Add this as a method to MainWindow and call it before running walk-forward
 
         # Action buttons
         self._add_action_buttons(main_layout)
+
+        # Regime detection controls
+        self._add_regime_detection_controls(main_layout)
 
         # Live trading controls
         self._add_live_trading_controls(main_layout)
@@ -695,6 +707,137 @@ Add this as a method to MainWindow and call it before running walk-forward
         wf_layout.addStretch()
 
         layout.addLayout(wf_layout)
+
+    def _add_regime_detection_controls(self, layout: QVBoxLayout):
+        """Add market regime detection and position sizing controls"""
+        regime_group = QGroupBox(
+            "🌍 Market Regime Detection & Adaptive Position Sizing"
+        )
+        regime_layout = QVBoxLayout()
+
+        # Row 1: Detect current regime
+        detect_layout = QHBoxLayout()
+        self.detect_regime_btn = QPushButton("🔍 Detect Current Market Regime")
+        self.detect_regime_btn.setEnabled(False)
+        self.detect_regime_btn.setToolTip(
+            "Identify current market regime:\n"
+            "• Bull, Bear, High Vol, Low Vol, Crisis\n"
+            "• Multi-factor analysis (volatility, trend, momentum)\n"
+            "• Markov chain transition probabilities\n"
+            "• Suggested position size adjustment"
+        )
+        self.detect_regime_btn.clicked.connect(self.detect_market_regime)
+        self.detect_regime_btn.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #FF6B35;
+                font-weight: bold;
+                padding: 8px;
+            }
+            QPushButton:hover { background-color: #FF8555; }
+            QPushButton:disabled { background-color: #0a0a0a; color: #555; }
+        """
+        )
+        detect_layout.addWidget(self.detect_regime_btn)
+        detect_layout.addStretch()
+        regime_layout.addLayout(detect_layout)
+
+        # Row 2: Train regime predictor
+        train_layout = QHBoxLayout()
+        self.train_predictor_btn = QPushButton("🤖 Train Regime Predictor (ML)")
+        self.train_predictor_btn.setEnabled(False)
+        self.train_predictor_btn.setToolTip(
+            "Train ML model to predict future regimes:\n"
+            "• Random Forest / XGBoost forecasting\n"
+            "• 30+ engineered features\n"
+            "• Time series cross-validation\n"
+            "• Confidence-based predictions"
+        )
+        self.train_predictor_btn.clicked.connect(self.train_regime_predictor)
+        self.train_predictor_btn.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #4ECDC4;
+                font-weight: bold;
+                padding: 8px;
+            }
+            QPushButton:hover { background-color: #6EDED4; }
+            QPushButton:disabled { background-color: #0a0a0a; color: #555; }
+        """
+        )
+
+        train_layout.addWidget(QLabel("Prediction Horizon (days):"))
+        self.regime_horizon_spin = QSpinBox()
+        self.regime_horizon_spin.setRange(1, 20)
+        self.regime_horizon_spin.setValue(5)
+        train_layout.addWidget(self.regime_horizon_spin)
+
+        train_layout.addWidget(self.train_predictor_btn)
+        train_layout.addStretch()
+        regime_layout.addLayout(train_layout)
+
+        # Row 3: Calculate PBR
+        pbr_layout = QHBoxLayout()
+        self.calc_pbr_btn = QPushButton("📊 Calculate PBR (Backtest Reliability)")
+        self.calc_pbr_btn.setEnabled(False)
+        self.calc_pbr_btn.setToolTip(
+            "Probability of Backtested Returns:\n"
+            "• Statistical measure of backtest-to-live performance\n"
+            "• Factors: Sharpe, sample size, overfitting, WF efficiency\n"
+            "• Regime stability consideration\n"
+            "• Interpretation: >80% Very High, 65-80% High, 50-65% Moderate, <50% Low"
+        )
+        self.calc_pbr_btn.clicked.connect(self.calculate_pbr)
+        self.calc_pbr_btn.setStyleSheet(
+            """
+            QPushButton {
+                background-color: #F7B731;
+                font-weight: bold;
+                padding: 8px;
+            }
+            QPushButton:hover { background-color: #F9C851; }
+            QPushButton:disabled { background-color: #0a0a0a; color: #555; }
+        """
+        )
+        pbr_layout.addWidget(self.calc_pbr_btn)
+        pbr_layout.addStretch()
+        regime_layout.addLayout(pbr_layout)
+
+        # Row 4: Display current regime status
+        self.regime_display = QLabel(
+            "Regime: Not detected | Click 'Detect Current Market Regime' to analyze"
+        )
+        self.regime_display.setStyleSheet(
+            "color: #aaa; font-size: 11pt; padding: 8px; "
+            "background-color: #1a1a1a; border-radius: 4px;"
+        )
+        self.regime_display.setWordWrap(True)
+        regime_layout.addWidget(self.regime_display)
+
+        # Row 5: Display prediction status
+        self.prediction_display = QLabel(
+            "Prediction: Not trained | Train ML model to forecast future regime"
+        )
+        self.prediction_display.setStyleSheet(
+            "color: #aaa; font-size: 11pt; padding: 8px; "
+            "background-color: #1a1a1a; border-radius: 4px;"
+        )
+        self.prediction_display.setWordWrap(True)
+        regime_layout.addWidget(self.prediction_display)
+
+        # Row 6: Display PBR score
+        self.pbr_display = QLabel(
+            "PBR: Not calculated | Run optimization first, then calculate PBR"
+        )
+        self.pbr_display.setStyleSheet(
+            "color: #aaa; font-size: 11pt; padding: 8px; "
+            "background-color: #1a1a1a; border-radius: 4px;"
+        )
+        self.pbr_display.setWordWrap(True)
+        regime_layout.addWidget(self.pbr_display)
+
+        regime_group.setLayout(regime_layout)
+        layout.addWidget(regime_group)
 
     def run_walk_forward(self):
         """Run walk-forward analysis with smart defaults"""
@@ -1387,6 +1530,14 @@ Add this as a method to MainWindow and call it before running walk-forward
                 self.walk_forward_btn.setEnabled(True)
                 print("✅ Walk-Forward Analysis button enabled")
 
+            # ✅ ENABLE REGIME DETECTION BUTTONS after data load
+            if hasattr(self, "detect_regime_btn"):
+                self.detect_regime_btn.setEnabled(True)
+                print("✅ Regime Detection button enabled")
+            if hasattr(self, "train_predictor_btn"):
+                self.train_predictor_btn.setEnabled(True)
+                print("✅ Regime Predictor button enabled")
+
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to load: {str(e)}")
         finally:
@@ -1853,6 +2004,13 @@ Add this as a method to MainWindow and call it before running walk-forward
         # Trade log for Monte Carlo
         self.last_trade_log = []
 
+        # Regime detection objects
+        self.regime_detector = MarketRegimeDetector(
+            vol_window=20, trend_window_fast=50, trend_window_slow=200
+        )
+        self.regime_predictor: Optional[RegimePredictor] = None
+        self.current_regime_state: Optional[RegimeState] = None
+
         # Create UI first
         self.init_ui()
 
@@ -1936,6 +2094,10 @@ Add this as a method to MainWindow and call it before running walk-forward
             self.monte_carlo_btn.setEnabled(True)
         if hasattr(self, "walk_forward_btn"):
             self.walk_forward_btn.setEnabled(True)
+
+        # ✅ ENABLE PBR BUTTON after optimization
+        if hasattr(self, "calc_pbr_btn"):
+            self.calc_pbr_btn.setEnabled(True)
 
         if df_results.empty:
             QMessageBox.information(self, "Complete", "No valid results")
@@ -2687,6 +2849,382 @@ Add this as a method to MainWindow and call it before running walk-forward
             # Re-enable button
             self.monte_carlo_btn.setEnabled(True)
             self.monte_carlo_btn.setText("🎲 Run Monte Carlo Simulation")
+
+    def detect_market_regime(self):
+        """Detect current market regime and suggest position sizing"""
+        if not self.df_dict_full:
+            QMessageBox.warning(
+                self, "No Data", "Please load data first before detecting market regime"
+            )
+            return
+
+        # Get the daily timeframe data for regime detection
+        if "daily" in self.df_dict_full:
+            df = self.df_dict_full["daily"]
+        elif "hourly" in self.df_dict_full:
+            df = self.df_dict_full["hourly"]
+        elif "5min" in self.df_dict_full:
+            df = self.df_dict_full["5min"]
+        else:
+            QMessageBox.warning(self, "Error", "No timeframe data available")
+            return
+
+        try:
+            # Extract prices and returns
+            if "Datetime" in df.columns:
+                df = df.set_index("Datetime")
+
+            prices = df["Close"]
+            returns = prices.pct_change().dropna()
+
+            print(f"\n{'='*80}")
+            print(f"MARKET REGIME DETECTION")
+            print(f"{'='*80}")
+            print(f"Ticker: {self.current_ticker}")
+            print(f"Data points: {len(prices)}")
+
+            # Detect regime
+            regime_state = self.regime_detector.detect_regime(prices, returns)
+            self.current_regime_state = regime_state
+
+            # Get regime statistics
+            regime_stats = self.regime_detector.get_regime_statistics(prices, returns)
+
+            # Update display
+            regime_color_map = {
+                MarketRegime.BULL: "#00ff88",
+                MarketRegime.BEAR: "#ff4444",
+                MarketRegime.HIGH_VOL: "#ff9900",
+                MarketRegime.LOW_VOL: "#00aaff",
+                MarketRegime.CRISIS: "#ff00ff",
+            }
+
+            regime_color = regime_color_map.get(regime_state.current_regime, "#ffffff")
+
+            display_text = (
+                f"<b>Current Regime:</b> <span style='color: {regime_color}; font-size: 14pt;'>"
+                f"{regime_state.current_regime.value.upper()}</span><br>"
+                f"<b>Confidence:</b> {regime_state.confidence:.1%} | "
+                f"<b>Duration:</b> {regime_state.regime_duration} days<br>"
+                f"<b>Predicted Next:</b> {regime_state.predicted_next_regime.value} | "
+                f"<b>Stay Probability:</b> {regime_state.transition_probability:.1%}<br>"
+                f"<b>Suggested Position Size:</b> <span style='color: #ffaa00; font-weight: bold;'>"
+                f"{regime_state.suggested_position_size:.2f}x</span>"
+            )
+
+            self.regime_display.setText(display_text)
+
+            # Print detailed analysis
+            print(f"\n📈 CURRENT REGIME: {regime_state.current_regime.value.upper()}")
+            print(f"   Confidence: {regime_state.confidence:.1%}")
+            print(f"   Duration: {regime_state.regime_duration} days")
+            print(f"   Predicted Next: {regime_state.predicted_next_regime.value}")
+            print(f"   Stay Probability: {regime_state.transition_probability:.1%}")
+            print(f"   Suggested Position: {regime_state.suggested_position_size:.2f}x")
+
+            print(f"\n📊 Regime Probabilities:")
+            for regime, prob in sorted(
+                regime_state.regime_probabilities.items(),
+                key=lambda x: x[1],
+                reverse=True,
+            ):
+                bar = "█" * int(prob * 50)
+                print(f"   {regime.value:20s} {prob:5.1%} {bar}")
+
+            print(f"\n📈 Historical Regime Performance:")
+            print(
+                f"{'Regime':<20} {'Avg Return':<12} {'Sharpe':<8} {'Max DD':<10} {'Win Rate'}"
+            )
+            print("-" * 70)
+
+            for regime, metrics in regime_stats.items():
+                print(
+                    f"{regime.value:<20} "
+                    f"{metrics.avg_return:>10.1%} "
+                    f"{metrics.sharpe:>8.2f} "
+                    f"{metrics.max_drawdown:>9.1%} "
+                    f"{metrics.win_rate:>9.1%}"
+                )
+
+            print(f"\n{'='*80}\n")
+
+            # Show message box with summary
+            summary = (
+                f"Market Regime: {regime_state.current_regime.value.upper()}\n"
+                f"Confidence: {regime_state.confidence:.1%}\n"
+                f"Suggested Position: {regime_state.suggested_position_size:.2f}x\n\n"
+                f"See console for detailed analysis."
+            )
+
+            QMessageBox.information(self, "Regime Detection Complete", summary)
+
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Regime Detection Error",
+                f"Error detecting market regime:\n{str(e)}",
+            )
+            print(f"❌ Error: {e}")
+            import traceback
+
+            traceback.print_exc()
+
+    def train_regime_predictor(self):
+        """Train ML model to predict future market regimes"""
+        if not self.df_dict_full:
+            QMessageBox.warning(
+                self, "No Data", "Please load data first before training predictor"
+            )
+            return
+
+        # Get the daily timeframe data for regime prediction
+        if "daily" in self.df_dict_full:
+            df = self.df_dict_full["daily"]
+        elif "hourly" in self.df_dict_full:
+            df = self.df_dict_full["hourly"]
+        elif "5min" in self.df_dict_full:
+            df = self.df_dict_full["5min"]
+        else:
+            QMessageBox.warning(self, "Error", "No timeframe data available")
+            return
+
+        try:
+            # Extract prices and returns
+            if "Datetime" in df.columns:
+                df = df.set_index("Datetime")
+
+            prices = df["Close"]
+            returns = prices.pct_change().dropna()
+
+            print(f"\n{'='*80}")
+            print(f"REGIME PREDICTOR TRAINING")
+            print(f"{'='*80}")
+            print(f"Ticker: {self.current_ticker}")
+            print(f"Data points: {len(prices)}")
+
+            # Get prediction horizon from UI
+            horizon = self.regime_horizon_spin.value()
+            print(f"Prediction horizon: {horizon} days")
+
+            # Create and train predictor
+            self.regime_predictor = RegimePredictor(
+                detector=self.regime_detector,
+                prediction_horizon=horizon,
+                n_estimators=100,
+                use_xgboost=False,  # Set to True if xgboost is installed
+            )
+
+            # Disable button during training
+            self.train_predictor_btn.setEnabled(False)
+            self.train_predictor_btn.setText("Training...")
+
+            # Train model
+            performance = self.regime_predictor.train(prices, returns, val_split=0.2)
+
+            print(f"\n📊 Model Performance:")
+            print(f"   Validation Accuracy: {performance.accuracy_5day:.1%}")
+
+            print(f"\n   Precision by Regime:")
+            for regime, prec in performance.precision_by_regime.items():
+                print(f"      {regime.value:<20} {prec:.1%}")
+
+            print(f"\n   Recall by Regime:")
+            for regime, rec in performance.recall_by_regime.items():
+                print(f"      {regime.value:<20} {rec:.1%}")
+
+            # Make prediction
+            prediction = self.regime_predictor.predict(
+                prices, returns, horizon_days=horizon
+            )
+
+            # Update display
+            regime_color_map = {
+                MarketRegime.BULL: "#00ff88",
+                MarketRegime.BEAR: "#ff4444",
+                MarketRegime.HIGH_VOL: "#ff9900",
+                MarketRegime.LOW_VOL: "#00aaff",
+                MarketRegime.CRISIS: "#ff00ff",
+            }
+
+            pred_color = regime_color_map.get(prediction.predicted_regime, "#ffffff")
+
+            display_text = (
+                f"<b>Predicted Regime ({horizon} days):</b> "
+                f"<span style='color: {pred_color}; font-size: 14pt;'>"
+                f"{prediction.predicted_regime.value.upper()}</span><br>"
+                f"<b>Confidence:</b> {prediction.confidence:.1%} | "
+                f"<b>Model Accuracy:</b> {prediction.model_accuracy:.1%}<br>"
+                f"<b>Top Features:</b> {', '.join(prediction.top_features[:3])}"
+            )
+
+            self.prediction_display.setText(display_text)
+
+            print(f"\n🔮 PREDICTION ({horizon} days ahead):")
+            print(f"   Predicted Regime: {prediction.predicted_regime.value.upper()}")
+            print(f"   Confidence: {prediction.confidence:.1%}")
+            print(f"   Model Accuracy: {prediction.model_accuracy:.1%}")
+
+            print(f"\n📊 Predicted Probabilities:")
+            for regime, prob in sorted(
+                prediction.regime_probabilities.items(),
+                key=lambda x: x[1],
+                reverse=True,
+            ):
+                bar = "█" * int(prob * 50)
+                print(f"   {regime.value:20s} {prob:5.1%} {bar}")
+
+            # Top features
+            print(f"\n🎯 Top 10 Predictive Features:")
+            top_features = self.regime_predictor.get_top_features(n=10)
+            for i, (feature, importance) in enumerate(top_features, 1):
+                bar = "█" * int(importance * 50)
+                print(f"   {i:2d}. {feature:<30s} {importance:.3f} {bar}")
+
+            print(f"\n{'='*80}\n")
+
+            # Show message box with summary
+            summary = (
+                f"Model trained successfully!\n\n"
+                f"Validation Accuracy: {performance.accuracy_5day:.1%}\n"
+                f"Predicted Regime ({horizon}d): {prediction.predicted_regime.value.upper()}\n"
+                f"Confidence: {prediction.confidence:.1%}\n\n"
+                f"See console for detailed analysis."
+            )
+
+            QMessageBox.information(self, "Training Complete", summary)
+
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Training Error", f"Error training regime predictor:\n{str(e)}"
+            )
+            print(f"❌ Error: {e}")
+            import traceback
+
+            traceback.print_exc()
+
+        finally:
+            # Re-enable button
+            self.train_predictor_btn.setEnabled(True)
+            self.train_predictor_btn.setText("🤖 Train Regime Predictor (ML)")
+
+    def calculate_pbr(self):
+        """Calculate Probability of Backtested Returns"""
+        if not self.best_params:
+            QMessageBox.warning(
+                self,
+                "No Results",
+                "Please run optimization first before calculating PBR",
+            )
+            return
+
+        try:
+            print(f"\n{'='*80}")
+            print(f"PBR (PROBABILITY OF BACKTESTED RETURNS)")
+            print(f"{'='*80}")
+
+            # Extract metrics from best_params
+            backtest_sharpe = self.best_params.get("Sharpe_Ratio", 0.0)
+            backtest_return = self.best_params.get("Percent_Gain_%", 0.0) / 100.0
+            n_trades = self.best_params.get("Trade_Count", 0)
+
+            # Estimate number of parameters (typical for indicators)
+            n_parameters = 4  # fast, slow, signal, atr_period
+
+            # Get walk-forward efficiency if available (default to 0.5)
+            walk_forward_efficiency = 0.5
+            if hasattr(self, "last_wf_efficiency"):
+                walk_forward_efficiency = self.last_wf_efficiency
+
+            # Get regime stability if available (default to 0.5)
+            regime_stability = 0.5
+            if self.current_regime_state:
+                regime_stability = self.current_regime_state.transition_probability
+
+            print(f"\n📊 BACKTEST INPUTS:")
+            print(f"   Sharpe Ratio: {backtest_sharpe:.2f}")
+            print(f"   Annual Return: {backtest_return:.1%}")
+            print(f"   Number of Trades: {n_trades}")
+            print(f"   Parameters Optimized: {n_parameters}")
+            print(f"   WF Efficiency: {walk_forward_efficiency:.1%}")
+            print(f"   Regime Stability: {regime_stability:.1%}")
+
+            # Calculate PBR
+            pbr, pbr_details = PBRCalculator.calculate_pbr(
+                backtest_sharpe=backtest_sharpe,
+                backtest_return=backtest_return,
+                n_trades=n_trades,
+                n_parameters=n_parameters,
+                walk_forward_efficiency=walk_forward_efficiency,
+                current_regime_stability=regime_stability,
+            )
+
+            interpretation = PBRCalculator.interpret_pbr(pbr)
+
+            # Update display
+            pbr_color = (
+                "#00ff88" if pbr > 0.70 else "#ffaa00" if pbr > 0.50 else "#ff4444"
+            )
+
+            display_text = (
+                f"<b>PBR Score:</b> <span style='color: {pbr_color}; font-size: 14pt; font-weight: bold;'>"
+                f"{pbr:.1%}</span><br>"
+                f"<b>Interpretation:</b> {interpretation}<br>"
+                f"<b>Contributing Factors:</b><br>"
+                f"  • Sharpe: {pbr_details['sharpe_contribution']:.1%} | "
+                f"Sample Size: {pbr_details['sample_size_factor']:.1%}<br>"
+                f"  • Overfitting: {pbr_details['overfitting_factor']:.1%} | "
+                f"Walk-Forward: {pbr_details['walkforward_factor']:.1%}<br>"
+                f"  • Regime Stability: {pbr_details['regime_stability_factor']:.1%}"
+            )
+
+            self.pbr_display.setText(display_text)
+
+            print(f"\n🎯 PBR ANALYSIS:")
+            print(f"   PBR Score: {pbr:.1%}")
+            print(f"   Interpretation: {interpretation}")
+
+            print(f"\n   Contributing Factors:")
+            print(
+                f"      Sharpe Contribution: {pbr_details['sharpe_contribution']:.1%}"
+            )
+            print(f"      Sample Size Factor: {pbr_details['sample_size_factor']:.1%}")
+            print(f"      Overfitting Factor: {pbr_details['overfitting_factor']:.1%}")
+            print(f"      Walk-Forward Factor: {pbr_details['walkforward_factor']:.1%}")
+            print(
+                f"      Regime Stability: {pbr_details['regime_stability_factor']:.1%}"
+            )
+
+            print(f"\n✅ ASSESSMENT:")
+            if pbr > 0.80:
+                assessment = "VERY HIGH - Strategy is highly likely to perform well in live trading"
+            elif pbr > 0.65:
+                assessment = "HIGH - Strategy has good probability of success"
+            elif pbr > 0.50:
+                assessment = "MODERATE - Strategy may work but requires caution"
+            else:
+                assessment = "LOW - High risk of backtest overfitting or regime change"
+
+            print(f"   {assessment}")
+            print(f"\n{'='*80}\n")
+
+            # Show message box with summary
+            summary = (
+                f"PBR Score: {pbr:.1%}\n"
+                f"Interpretation: {interpretation}\n\n"
+                f"{assessment}\n\n"
+                f"See console for detailed breakdown."
+            )
+
+            QMessageBox.information(self, "PBR Calculation Complete", summary)
+
+        except Exception as e:
+            QMessageBox.critical(
+                self, "PBR Calculation Error", f"Error calculating PBR:\n{str(e)}"
+            )
+            print(f"❌ Error: {e}")
+            import traceback
+
+            traceback.print_exc()
 
     def _calculate_skewness(self, returns):
         """Calculate skewness of returns"""
