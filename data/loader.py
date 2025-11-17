@@ -152,10 +152,10 @@ class DataLoader:
         # Handle MultiIndex columns
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
-        
+
         # Drop NaN and reset index
         df = df.dropna().reset_index(drop=False)
-        
+
         # Rename Date/Datetime column
         if 'Date' in df.columns:
             df = df.rename(columns={'Date': 'Datetime'})
@@ -163,12 +163,41 @@ class DataLoader:
             df = df.reset_index()
             if 'Date' in df.columns:
                 df = df.rename(columns={'Date': 'Datetime'})
-        
+
         # Ensure timezone-naive
         if 'Datetime' in df.columns:
             if pd.api.types.is_datetime64tz_dtype(df['Datetime']):
                 df['Datetime'] = df['Datetime'].dt.tz_localize(None)
-        
+
+        # Data quality validation
+        if len(df) > 0:
+            # Check for required columns
+            required_cols = ['Close', 'Open', 'High', 'Low', 'Volume']
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            if missing_cols:
+                print(f"⚠️  Warning: Missing columns: {missing_cols}")
+
+            # Check for zero/negative prices (data error)
+            if 'Close' in df.columns:
+                invalid_prices = (df['Close'] <= 0).sum()
+                if invalid_prices > 0:
+                    print(f"⚠️  Warning: Found {invalid_prices} zero/negative prices, removing...")
+                    df = df[df['Close'] > 0].copy()
+
+            # Check for duplicate timestamps
+            if 'Datetime' in df.columns:
+                duplicates = df['Datetime'].duplicated().sum()
+                if duplicates > 0:
+                    print(f"⚠️  Warning: Found {duplicates} duplicate timestamps, removing...")
+                    df = df.drop_duplicates(subset=['Datetime'], keep='last').copy()
+
+            # Check for extreme price movements (potential data errors)
+            if 'Close' in df.columns and len(df) > 1:
+                returns = df['Close'].pct_change()
+                extreme_moves = (returns.abs() > 0.5).sum()  # >50% move in one bar
+                if extreme_moves > 0:
+                    print(f"⚠️  Warning: Found {extreme_moves} extreme price movements (>50%)")
+
         return df
     
     @staticmethod
