@@ -22,7 +22,7 @@ if __name__ == "__main__":
     print("Loading GUI components...")
     print("Please wait for the window to appear...")
     print()
-    
+
     try:
         main()
     except KeyboardInterrupt:

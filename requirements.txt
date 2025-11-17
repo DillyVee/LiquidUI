@@ -35,7 +35,7 @@ statsmodels>=0.14.0
 # ============================================================================
 # Orchestration & Workflow
 # ============================================================================
-apache-airflow>=2.7.0
+# apache-airflow>=2.7.0  # Install separately for compatibility
 celery>=5.3.0
 redis>=5.0.0
 
@@ -75,16 +75,16 @@ pyyaml>=6.0.1
 requests>=2.31.0
 
 # ============================================================================
-# GUI (PyQt6)
+# GUI (PyQt6) - Optional, install separately or use requirements-windows.txt
 # ============================================================================
-PyQt6>=6.5.0
+# PyQt6>=6.5.0  # For GUI - install with: pip install PyQt6
 matplotlib>=3.8.0
 seaborn>=0.13.0
 
 # ============================================================================
 # Financial Calculations
 # ============================================================================
-QuantLib-Python>=1.31  # Optional: advanced financial math
+# QuantLib-Python==1.18  # Optional: advanced financial math (Windows only)
 
 # ============================================================================
 # Performance & Acceleration

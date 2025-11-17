@@ -1,6 +1,7 @@
 """
 GUI Styling and Constants
 """
+
 from config.settings import DARK_THEME_STYLESHEET
 
 # Export the dark theme as MAIN_STYLESHEET
@@ -43,9 +44,9 @@ LIVE_TRADING_BUTTON_STOPPED = """
 """
 
 # Color constants
-COLOR_SUCCESS = "#3fb950"    # GitHub green
-COLOR_ERROR = "#f85149"      # GitHub red
-COLOR_WARNING = "#d29922"    # GitHub yellow
-COLOR_PRIMARY = "#58a6ff"    # GitHub blue
-COLOR_BACKGROUND = "#0d1117" # GitHub dark background
-COLOR_TEXT = "#c9d1d9"       # GitHub text
+COLOR_SUCCESS = "#3fb950"  # GitHub green
+COLOR_ERROR = "#f85149"  # GitHub red
+COLOR_WARNING = "#d29922"  # GitHub yellow
+COLOR_PRIMARY = "#58a6ff"  # GitHub blue
+COLOR_BACKGROUND = "#0d1117"  # GitHub dark background
+COLOR_TEXT = "#c9d1d9"  # GitHub text

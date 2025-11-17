@@ -8,4 +8,4 @@ Note: GUI components are imported on-demand to avoid requiring
 PyQt6 for non-GUI usage of the trading platform.
 """
 
-__all__ = ['main_window']
+__all__ = ["main_window"]

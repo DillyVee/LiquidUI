@@ -7,20 +7,19 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-    QStackedWidget, QPushButton, QLabel, QFrame, QSizePolicy
-)
-from PyQt6.QtCore import Qt, QSize, pyqtSignal
-from PyQt6.QtGui import QIcon, QFont, QPalette, QColor
+from PyQt6.QtCore import QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QIcon, QPalette
+from PyQt6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel,
+                             QMainWindow, QPushButton, QSizePolicy,
+                             QStackedWidget, QVBoxLayout, QWidget)
 
+from gui.pages.backtest import BacktestPage
 # Import page modules (will create these)
 from gui.pages.dashboard import DashboardPage
 from gui.pages.data_manager import DataManagerPage
-from gui.pages.backtest import BacktestPage
-from gui.pages.strategy_config import StrategyConfigPage
 from gui.pages.live_trading import LiveTradingPage
 from gui.pages.risk_monitor import RiskMonitorPage
+from gui.pages.strategy_config import StrategyConfigPage
 
 
 class NavigationButton(QPushButton):
@@ -34,7 +33,8 @@ class NavigationButton(QPushButton):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         # Modern styling
-        self.setStyleSheet("""
+        self.setStyleSheet(
+            """
             QPushButton {
                 background-color: transparent;
                 color: #E0E0E0;
@@ -54,7 +54,8 @@ class NavigationButton(QPushButton):
                 border-left: 3px solid #42A5F5;
                 color: #42A5F5;
             }
-        """)
+        """
+        )
 
 
 class SideNavigation(QFrame):
@@ -68,12 +69,14 @@ class SideNavigation(QFrame):
         self.setFrameShape(QFrame.Shape.NoFrame)
 
         # Dark background
-        self.setStyleSheet("""
+        self.setStyleSheet(
+            """
             QFrame {
                 background-color: #1E1E1E;
                 border-right: 1px solid #333333;
             }
-        """)
+        """
+        )
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -107,7 +110,9 @@ class SideNavigation(QFrame):
 
         for text, page_idx in pages:
             btn = NavigationButton(text)
-            btn.clicked.connect(lambda checked, idx=page_idx: self._on_button_clicked(idx))
+            btn.clicked.connect(
+                lambda checked, idx=page_idx: self._on_button_clicked(idx)
+            )
             self.nav_buttons.append(btn)
             layout.addWidget(btn)
 
@@ -214,7 +219,8 @@ class MainWindow(QMainWindow):
         self.setPalette(palette)
 
         # Global stylesheet
-        self.setStyleSheet("""
+        self.setStyleSheet(
+            """
             QMainWindow {
                 background-color: #2B2B2B;
             }
@@ -292,7 +298,8 @@ class MainWindow(QMainWindow):
             QScrollBar::handle:horizontal:hover {
                 background-color: #666666;
             }
-        """)
+        """
+        )
 
 
 def main():
