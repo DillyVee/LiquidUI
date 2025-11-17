@@ -461,24 +461,30 @@ class MarketRegimeDetector:
         """
         # Detect regimes for entire history
         regime_labels = []
+        min_window = max(self.trend_slow, self.vol_window)
 
-        for i in range(max(self.trend_slow, self.vol_window), len(prices)):
+        for i in range(min_window, len(prices)):
             price_slice = prices.iloc[: i + 1]
             return_slice = returns.iloc[: i + 1]
 
             state = self.detect_regime(price_slice, return_slice)
             regime_labels.append(state.current_regime)
 
-        if len(regime_labels) != len(returns.tail(len(regime_labels))):
-            returns_labeled = returns.tail(len(regime_labels))
-        else:
-            returns_labeled = returns
+        # Align returns with regime labels
+        # regime_labels starts from index min_window, so we need corresponding returns
+        returns_labeled = returns.iloc[min_window:].reset_index(drop=True)
+
+        # Ensure they have the same length
+        if len(regime_labels) != len(returns_labeled):
+            min_len = min(len(regime_labels), len(returns_labeled))
+            regime_labels = regime_labels[:min_len]
+            returns_labeled = returns_labeled.iloc[:min_len]
 
         # Calculate stats for each regime
         regime_stats = {}
 
         for regime in MarketRegime:
-            mask = [r == regime for r in regime_labels]
+            mask = np.array([r == regime for r in regime_labels])
 
             if sum(mask) > 0:
                 regime_returns = returns_labeled[mask]

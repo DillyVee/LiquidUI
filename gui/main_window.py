@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -316,10 +317,18 @@ Add this as a method to MainWindow and call it before running walk-forward
         self.best_params_label.setWordWrap(True)
         main_layout.addWidget(self.best_params_label)
 
-        # Set central widget
+        # Set central widget with scroll area
         container = QWidget()
         container.setLayout(main_layout)
-        self.setCentralWidget(container)
+
+        # Wrap in scroll area for long content
+        scroll_area = QScrollArea()
+        scroll_area.setWidget(container)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        self.setCentralWidget(scroll_area)
 
     def _add_data_source_controls(self, layout: QVBoxLayout):
         """Add data source input controls"""
