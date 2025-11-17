@@ -47,15 +47,19 @@ from gui.styles import (
     LIVE_TRADING_BUTTON_ACTIVE,
     LIVE_TRADING_BUTTON_STOPPED,
 )
-from core.optimizer import MultiTimeframeOptimizer
-from core.regime_detection import MarketRegimeDetector
-from core.regime_predictor import RegimePredictor
-from core.regime_calibrator import MultiClassCalibrator
-from core.multi_horizon_agreement import MultiHorizonAgreementIndex
-from core.regime_diagnostics import RegimeDiagnosticAnalyzer
-from core.cross_asset_analyzer import CrossAssetRegimeAnalyzer
-from data.data_loader import YFinanceDataLoader
-from live_trading.alpaca_trader import AlpacaLiveTrader
+from optimization import (
+    MultiTimeframeOptimizer,
+    MonteCarloSimulator,
+    WalkForwardAnalyzer,
+)
+from models.regime_detection import MarketRegimeDetector
+from models.regime_predictor import RegimePredictor
+from models.regime_calibration import MultiClassCalibrator
+from models.regime_agreement import MultiHorizonAgreementIndex
+from models.regime_diagnostics import RegimeDiagnosticAnalyzer
+from models.regime_cross_asset import CrossAssetRegimeAnalyzer
+from data import DataLoader
+from trading import AlpacaLiveTrader, ALPACA_AVAILABLE
 
 
 class MainWindow(QMainWindow):
@@ -895,8 +899,17 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Loading {ticker}...")
 
         try:
-            loader = YFinanceDataLoader()
-            self.df_dict_full = loader.load_multiple_timeframes(ticker)
+            # Load data using DataLoader
+            df_dict, error = DataLoader.load_yfinance_data(ticker)
+
+            if error:
+                QMessageBox.critical(
+                    self, "Data Loading Error", f"Failed to load {ticker}:\n{error}"
+                )
+                self.statusBar().showMessage("Error loading data")
+                return
+
+            self.df_dict_full = df_dict
 
             # Filter to selected timeframes
             self._filter_timeframes()
@@ -907,8 +920,8 @@ class MainWindow(QMainWindow):
             # Update date range display
             if "daily" in self.df_dict:
                 df = self.df_dict["daily"]
-                start_date = df.index[0].strftime("%Y-%m-%d")
-                end_date = df.index[-1].strftime("%Y-%m-%d")
+                start_date = pd.to_datetime(df["Datetime"].iloc[0]).strftime("%Y-%m-%d")
+                end_date = pd.to_datetime(df["Datetime"].iloc[-1]).strftime("%Y-%m-%d")
                 days = len(df)
                 self.date_range_label.setText(
                     f"✅ Loaded {ticker}: {start_date} to {end_date} ({days} days)"
@@ -965,11 +978,10 @@ class MainWindow(QMainWindow):
                 return
 
             # Load each ticker
-            loader = YFinanceDataLoader()
             for ticker in tickers:
                 try:
                     self.statusBar().showMessage(f"Loading {ticker}...")
-                    self._load_and_optimize_ticker(ticker, loader)
+                    self._load_and_optimize_ticker(ticker)
                 except Exception as e:
                     print(f"Error loading {ticker}: {e}")
 
@@ -982,9 +994,15 @@ class MainWindow(QMainWindow):
                 self, "Batch Load Error", f"Failed to load ticker list:\n{str(e)}"
             )
 
-    def _load_and_optimize_ticker(self, ticker: str, loader: YFinanceDataLoader):
+    def _load_and_optimize_ticker(self, ticker: str):
         """Load single ticker and run optimization"""
-        self.df_dict_full = loader.load_multiple_timeframes(ticker)
+        df_dict, error = DataLoader.load_yfinance_data(ticker)
+
+        if error:
+            print(f"Error loading {ticker}: {error}")
+            return
+
+        self.df_dict_full = df_dict
         self._filter_timeframes()
         self.current_ticker = ticker
         self.start_optimization()
@@ -1007,7 +1025,7 @@ class MainWindow(QMainWindow):
         for tf_name, cb in self.tf_checkboxes.items():
             if cb.isChecked() and tf_name in self.df_dict:
                 df = self.df_dict[tf_name]
-                self._update_chart(df["close"].values, tf_name)
+                self._update_chart(df["Close"].values, tf_name)
                 break
 
     def _update_chart(self, close_arr: np.ndarray, timeframe: str):
