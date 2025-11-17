@@ -15,8 +15,10 @@ from optimization.metrics import PerformanceMetrics
 
 # Try to import Alpaca - will be used if available
 try:
-    from alpaca.data.historical import (CryptoHistoricalDataClient,
-                                        StockHistoricalDataClient)
+    from alpaca.data.historical import (
+        CryptoHistoricalDataClient,
+        StockHistoricalDataClient,
+    )
     from alpaca.data.requests import CryptoBarsRequest, StockBarsRequest
     from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
     from alpaca.trading.client import TradingClient

@@ -4,12 +4,16 @@ Tests the full workflow from data ingestion to backtest execution
 """
 
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
+
+# Add project root to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from backtest.engine import BacktestEngine, OrderSide
 from data_layer.feature_engineering import MACD, RSI, FeaturePipeline

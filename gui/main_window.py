@@ -10,25 +10,54 @@ import pandas as pd
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtGui import QFont
-from PyQt6.QtWidgets import (QCheckBox, QComboBox, QDoubleSpinBox, QGroupBox,
-                             QHBoxLayout, QLabel, QLineEdit, QMainWindow,
-                             QMessageBox, QProgressBar, QPushButton, QSpinBox,
-                             QVBoxLayout, QWidget)
+from PyQt6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDoubleSpinBox,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
 
 # Config imports
-from config.settings import (AlpacaConfig, IndicatorRanges, OptimizationConfig,
-                             Paths, RiskConfig, TransactionCosts)
+from config.settings import (
+    AlpacaConfig,
+    IndicatorRanges,
+    OptimizationConfig,
+    Paths,
+    RiskConfig,
+    TransactionCosts,
+)
+
 # ✅ ADD THESE MISSING IMPORTS:
 from data import DataLoader
+
 # GUI style imports
-from gui.styles import (COLOR_SUCCESS, COLOR_WARNING,
-                        LIVE_TRADING_BUTTON_ACTIVE,
-                        LIVE_TRADING_BUTTON_STOPPED, MAIN_STYLESHEET)
+from gui.styles import (
+    COLOR_SUCCESS,
+    COLOR_WARNING,
+    LIVE_TRADING_BUTTON_ACTIVE,
+    LIVE_TRADING_BUTTON_STOPPED,
+    MAIN_STYLESHEET,
+)
 from optimization import MultiTimeframeOptimizer, PerformanceMetrics
+
 # Monte Carlo imports (these are correct!)
-from optimization.monte_carlo import (AdvancedMonteCarloAnalyzer,
-                                      AdvancedMonteCarloMetrics,
-                                      MonteCarloResults, MonteCarloSimulator)
+from optimization.monte_carlo import (
+    AdvancedMonteCarloAnalyzer,
+    AdvancedMonteCarloMetrics,
+    MonteCarloResults,
+    MonteCarloSimulator,
+)
+
 # Walk-forward imports
 from optimization.walk_forward import WalkForwardAnalyzer, WalkForwardResults
 from trading import ALPACA_AVAILABLE, AlpacaLiveTrader
