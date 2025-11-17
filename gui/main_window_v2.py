@@ -111,7 +111,8 @@ class MainWindow(QMainWindow):
 
         # Create tab widget
         self.tabs = QTabWidget()
-        self.tabs.setStyleSheet("""
+        self.tabs.setStyleSheet(
+            """
             QTabWidget::pane {
                 border: 1px solid #3a3a3a;
                 background-color: #1e1e1e;
@@ -137,7 +138,8 @@ class MainWindow(QMainWindow):
             QTabBar::tab:hover:!selected {
                 background-color: #3a3a3a;
             }
-        """)
+        """
+        )
 
         # Create all tabs
         self.tab1 = self._create_data_tab()
@@ -171,7 +173,9 @@ class MainWindow(QMainWindow):
 
         # Welcome message
         welcome_label = QLabel("👋 Welcome to LiquidUI Professional Trading Platform")
-        welcome_label.setStyleSheet(f"font-size: 18px; color: {COLOR_SUCCESS}; font-weight: bold; padding: 15px;")
+        welcome_label.setStyleSheet(
+            f"font-size: 18px; color: {COLOR_SUCCESS}; font-weight: bold; padding: 15px;"
+        )
         welcome_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(welcome_label)
 
@@ -189,7 +193,9 @@ class MainWindow(QMainWindow):
         ticker_layout.addWidget(self.ticker_input)
 
         self.load_yf_btn = QPushButton("📈 Load from Yahoo Finance")
-        self.load_yf_btn.setStyleSheet(f"background-color: {COLOR_SUCCESS}; font-weight: bold; padding: 10px;")
+        self.load_yf_btn.setStyleSheet(
+            f"background-color: {COLOR_SUCCESS}; font-weight: bold; padding: 10px;"
+        )
         self.load_yf_btn.clicked.connect(self.load_yfinance)
         ticker_layout.addWidget(self.load_yf_btn)
         ticker_layout.addStretch()
@@ -205,7 +211,9 @@ class MainWindow(QMainWindow):
 
         # Date range display
         self.date_range_label = QLabel("No data loaded")
-        self.date_range_label.setStyleSheet("color: #888; font-style: italic; padding: 5px;")
+        self.date_range_label.setStyleSheet(
+            "color: #888; font-style: italic; padding: 5px;"
+        )
         data_layout.addWidget(self.date_range_label)
 
         data_group.setLayout(data_layout)
@@ -216,7 +224,11 @@ class MainWindow(QMainWindow):
         tf_layout = QHBoxLayout()
 
         self.tf_checkboxes = {}
-        for tf_name, tf_label in [("daily", "Daily"), ("hourly", "Hourly"), ("5min", "5-Minute")]:
+        for tf_name, tf_label in [
+            ("daily", "Daily"),
+            ("hourly", "Hourly"),
+            ("5min", "5-Minute"),
+        ]:
             cb = QCheckBox(tf_label)
             cb.setChecked(tf_name == "daily")
             cb.stateChanged.connect(self.on_timeframe_changed)
@@ -231,7 +243,7 @@ class MainWindow(QMainWindow):
         chart_group = QGroupBox("Price Chart")
         chart_layout = QVBoxLayout()
 
-        self.figure = plt.figure(figsize=(12, 6), facecolor='#1e1e1e')
+        self.figure = plt.figure(figsize=(12, 6), facecolor="#1e1e1e")
         self.canvas = FigureCanvas(self.figure)
         chart_layout.addWidget(self.canvas)
 
@@ -239,8 +251,12 @@ class MainWindow(QMainWindow):
         layout.addWidget(chart_group)
 
         # Next steps hint
-        hint_label = QLabel("💡 Next Step: Load data, then go to 'Strategy Optimization' tab to run PSR optimization")
-        hint_label.setStyleSheet("color: #FFA726; padding: 10px; background-color: #2d2d2d; border-radius: 4px;")
+        hint_label = QLabel(
+            "💡 Next Step: Load data, then go to 'Strategy Optimization' tab to run PSR optimization"
+        )
+        hint_label.setStyleSheet(
+            "color: #FFA726; padding: 10px; background-color: #2d2d2d; border-radius: 4px;"
+        )
         hint_label.setWordWrap(True)
         layout.addWidget(hint_label)
 
@@ -269,7 +285,9 @@ class MainWindow(QMainWindow):
 
         self._add_param_range(params_layout, "MN1 (Fast Moving Average)", "mn1")
         self._add_param_range(params_layout, "MN2 (Slow Moving Average)", "mn2")
-        self._add_param_range(params_layout, "Entry Threshold", "entry", is_decimal=True)
+        self._add_param_range(
+            params_layout, "Entry Threshold", "entry", is_decimal=True
+        )
         self._add_param_range(params_layout, "Exit Threshold", "exit", is_decimal=True)
         self._add_param_range(params_layout, "On Cycle", "on")
         self._add_param_range(params_layout, "Off Cycle", "off")
@@ -321,12 +339,16 @@ class MainWindow(QMainWindow):
         # PSR Optimization
         opt_btn_layout = QHBoxLayout()
         self.start_btn = QPushButton("▶️ START PSR OPTIMIZATION")
-        self.start_btn.setStyleSheet(f"background-color: {COLOR_SUCCESS}; font-weight: bold; padding: 15px; font-size: 14px;")
+        self.start_btn.setStyleSheet(
+            f"background-color: {COLOR_SUCCESS}; font-weight: bold; padding: 15px; font-size: 14px;"
+        )
         self.start_btn.clicked.connect(self.start_optimization)
         opt_btn_layout.addWidget(self.start_btn)
 
         self.stop_btn = QPushButton("⏹️ STOP")
-        self.stop_btn.setStyleSheet(f"background-color: {COLOR_DANGER}; font-weight: bold; padding: 15px;")
+        self.stop_btn.setStyleSheet(
+            f"background-color: {COLOR_DANGER}; font-weight: bold; padding: 15px;"
+        )
         self.stop_btn.clicked.connect(self.stop_optimization)
         self.stop_btn.setEnabled(False)
         opt_btn_layout.addWidget(self.stop_btn)
@@ -408,7 +430,9 @@ class MainWindow(QMainWindow):
 
         self.best_params_label = QLabel("No optimization run yet")
         self.best_params_label.setWordWrap(True)
-        self.best_params_label.setStyleSheet("padding: 10px; background-color: #2d2d2d; border-radius: 4px;")
+        self.best_params_label.setStyleSheet(
+            "padding: 10px; background-color: #2d2d2d; border-radius: 4px;"
+        )
         results_layout.addWidget(self.best_params_label)
 
         # Metrics display
@@ -420,7 +444,9 @@ class MainWindow(QMainWindow):
         psr_label.setStyleSheet("font-size: 11px; color: #888;")
         psr_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.psr_label = QLabel("--")
-        self.psr_label.setStyleSheet(f"font-size: 24px; font-weight: bold; color: {COLOR_SUCCESS}; background-color: #2d2d2d; padding: 10px; border-radius: 4px;")
+        self.psr_label.setStyleSheet(
+            f"font-size: 24px; font-weight: bold; color: {COLOR_SUCCESS}; background-color: #2d2d2d; padding: 10px; border-radius: 4px;"
+        )
         self.psr_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         psr_box.addWidget(psr_label)
         psr_box.addWidget(self.psr_label)
@@ -432,7 +458,9 @@ class MainWindow(QMainWindow):
         sharpe_label.setStyleSheet("font-size: 11px; color: #888;")
         sharpe_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.sharpe_label = QLabel("--")
-        self.sharpe_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #e0e0e0; background-color: #2d2d2d; padding: 10px; border-radius: 4px;")
+        self.sharpe_label.setStyleSheet(
+            "font-size: 20px; font-weight: bold; color: #e0e0e0; background-color: #2d2d2d; padding: 10px; border-radius: 4px;"
+        )
         self.sharpe_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sharpe_box.addWidget(sharpe_label)
         sharpe_box.addWidget(self.sharpe_label)
@@ -444,7 +472,9 @@ class MainWindow(QMainWindow):
         sortino_label.setStyleSheet("font-size: 11px; color: #888;")
         sortino_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.sortino_label = QLabel("--")
-        self.sortino_label.setStyleSheet("font-size: 20px; font-weight: bold; color: #e0e0e0; background-color: #2d2d2d; padding: 10px; border-radius: 4px;")
+        self.sortino_label.setStyleSheet(
+            "font-size: 20px; font-weight: bold; color: #e0e0e0; background-color: #2d2d2d; padding: 10px; border-radius: 4px;"
+        )
         self.sortino_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         sortino_box.addWidget(sortino_label)
         sortino_box.addWidget(self.sortino_label)
@@ -464,7 +494,7 @@ class MainWindow(QMainWindow):
         chart_group = QGroupBox("Equity Curve")
         chart_layout = QVBoxLayout()
 
-        self.results_figure = plt.figure(figsize=(10, 6), facecolor='#1e1e1e')
+        self.results_figure = plt.figure(figsize=(10, 6), facecolor="#1e1e1e")
         self.results_canvas = FigureCanvas(self.results_figure)
         chart_layout.addWidget(self.results_canvas)
 
@@ -493,12 +523,16 @@ class MainWindow(QMainWindow):
         basic_layout = QVBoxLayout()
 
         self.detect_regime_btn = QPushButton("🔍 Detect Current Market Regime")
-        self.detect_regime_btn.setStyleSheet(f"background-color: {COLOR_SUCCESS}; font-weight: bold; padding: 12px;")
+        self.detect_regime_btn.setStyleSheet(
+            f"background-color: {COLOR_SUCCESS}; font-weight: bold; padding: 12px;"
+        )
         self.detect_regime_btn.clicked.connect(self.detect_market_regime)
         basic_layout.addWidget(self.detect_regime_btn)
 
         self.regime_display = QLabel("No regime detected yet")
-        self.regime_display.setStyleSheet("padding: 15px; background-color: #2d2d2d; border-radius: 4px; font-size: 14px;")
+        self.regime_display.setStyleSheet(
+            "padding: 15px; background-color: #2d2d2d; border-radius: 4px; font-size: 14px;"
+        )
         self.regime_display.setWordWrap(True)
         basic_layout.addWidget(self.regime_display)
 
@@ -514,7 +548,9 @@ class MainWindow(QMainWindow):
         ml_layout.addWidget(self.train_predictor_btn)
 
         self.prediction_display = QLabel("No prediction yet")
-        self.prediction_display.setStyleSheet("padding: 15px; background-color: #2d2d2d; border-radius: 4px;")
+        self.prediction_display.setStyleSheet(
+            "padding: 15px; background-color: #2d2d2d; border-radius: 4px;"
+        )
         self.prediction_display.setWordWrap(True)
         ml_layout.addWidget(self.prediction_display)
 
@@ -562,13 +598,19 @@ class MainWindow(QMainWindow):
         self.institutional_display = QTextEdit()
         self.institutional_display.setReadOnly(True)
         self.institutional_display.setMaximumHeight(200)
-        self.institutional_display.setPlaceholderText("Institutional analysis results will appear here...")
-        self.institutional_display.setStyleSheet("background-color: #2d2d2d; border: 1px solid #3a3a3a;")
+        self.institutional_display.setPlaceholderText(
+            "Institutional analysis results will appear here..."
+        )
+        self.institutional_display.setStyleSheet(
+            "background-color: #2d2d2d; border: 1px solid #3a3a3a;"
+        )
         inst_layout.addWidget(self.institutional_display)
 
         # PBR display
         self.pbr_display = QLabel("PBR: Not calculated")
-        self.pbr_display.setStyleSheet("padding: 10px; background-color: #2d2d2d; border-radius: 4px; font-weight: bold;")
+        self.pbr_display.setStyleSheet(
+            "padding: 10px; background-color: #2d2d2d; border-radius: 4px; font-weight: bold;"
+        )
         inst_layout.addWidget(self.pbr_display)
 
         inst_group.setLayout(inst_layout)
@@ -590,7 +632,9 @@ class MainWindow(QMainWindow):
 
         # Warning banner
         warning_label = QLabel("⚠️ DANGER: Live Trading Mode - Real Money at Risk!")
-        warning_label.setStyleSheet(f"background-color: {COLOR_DANGER}; color: white; font-size: 16px; font-weight: bold; padding: 15px; border-radius: 4px;")
+        warning_label.setStyleSheet(
+            f"background-color: {COLOR_DANGER}; color: white; font-size: 16px; font-weight: bold; padding: 15px; border-radius: 4px;"
+        )
         warning_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(warning_label)
 
@@ -617,7 +661,9 @@ class MainWindow(QMainWindow):
         # Paper trading toggle
         self.paper_trading_cb = QCheckBox("Paper Trading (Recommended)")
         self.paper_trading_cb.setChecked(True)
-        self.paper_trading_cb.setStyleSheet(f"color: {COLOR_SUCCESS}; font-weight: bold;")
+        self.paper_trading_cb.setStyleSheet(
+            f"color: {COLOR_SUCCESS}; font-weight: bold;"
+        )
         api_layout.addWidget(self.paper_trading_cb)
 
         api_group.setLayout(api_layout)
@@ -636,7 +682,9 @@ class MainWindow(QMainWindow):
 
         # Status display
         self.trading_status_label = QLabel("Status: Not Running")
-        self.trading_status_label.setStyleSheet("padding: 15px; background-color: #2d2d2d; border-radius: 4px; font-size: 14px;")
+        self.trading_status_label.setStyleSheet(
+            "padding: 15px; background-color: #2d2d2d; border-radius: 4px; font-size: 14px;"
+        )
         control_layout.addWidget(self.trading_status_label)
 
         control_group.setLayout(control_layout)
@@ -648,8 +696,12 @@ class MainWindow(QMainWindow):
 
         self.trade_log_display = QTextEdit()
         self.trade_log_display.setReadOnly(True)
-        self.trade_log_display.setPlaceholderText("Trade executions will appear here...")
-        self.trade_log_display.setStyleSheet("background-color: #2d2d2d; border: 1px solid #3a3a3a;")
+        self.trade_log_display.setPlaceholderText(
+            "Trade executions will appear here..."
+        )
+        self.trade_log_display.setStyleSheet(
+            "background-color: #2d2d2d; border: 1px solid #3a3a3a;"
+        )
         log_layout.addWidget(self.trade_log_display)
 
         log_group.setLayout(log_layout)
@@ -696,7 +748,9 @@ class MainWindow(QMainWindow):
         risk_layout.addLayout(max_pos_layout)
 
         self.leverage_warning_label = QLabel("")
-        self.leverage_warning_label.setStyleSheet(f"color: {COLOR_WARNING}; font-weight: bold;")
+        self.leverage_warning_label.setStyleSheet(
+            f"color: {COLOR_WARNING}; font-weight: bold;"
+        )
         risk_layout.addWidget(self.leverage_warning_label)
 
         risk_group.setLayout(risk_layout)
@@ -771,7 +825,9 @@ class MainWindow(QMainWindow):
     # HELPER METHODS
     # =============================================================================
 
-    def _add_param_range(self, layout: QVBoxLayout, label: str, param_name: str, is_decimal: bool = False):
+    def _add_param_range(
+        self, layout: QVBoxLayout, label: str, param_name: str, is_decimal: bool = False
+    ):
         """Add parameter range controls"""
         group_layout = QHBoxLayout()
         group_layout.addWidget(QLabel(f"{label}:"))
@@ -857,7 +913,9 @@ class MainWindow(QMainWindow):
                 self.date_range_label.setText(
                     f"✅ Loaded {ticker}: {start_date} to {end_date} ({days} days)"
                 )
-                self.date_range_label.setStyleSheet(f"color: {COLOR_SUCCESS}; font-weight: bold; padding: 5px;")
+                self.date_range_label.setStyleSheet(
+                    f"color: {COLOR_SUCCESS}; font-weight: bold; padding: 5px;"
+                )
 
             # Update chart
             self.on_timeframe_changed()
@@ -869,16 +927,15 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(f"Successfully loaded {ticker}")
 
         except Exception as e:
-            QMessageBox.critical(self, "Data Loading Error", f"Failed to load {ticker}:\n{str(e)}")
+            QMessageBox.critical(
+                self, "Data Loading Error", f"Failed to load {ticker}:\n{str(e)}"
+            )
             self.statusBar().showMessage("Error loading data")
 
     def load_ticker_list(self):
         """Load multiple tickers from CSV"""
         file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select Ticker List CSV",
-            "",
-            "CSV Files (*.csv);;All Files (*)"
+            self, "Select Ticker List CSV", "", "CSV Files (*.csv);;All Files (*)"
         )
 
         if not file_path:
@@ -887,18 +944,22 @@ class MainWindow(QMainWindow):
         try:
             # Read CSV
             df = pd.read_csv(file_path)
-            if 'ticker' not in df.columns:
-                QMessageBox.critical(self, "CSV Error", "CSV must have a 'ticker' column")
+            if "ticker" not in df.columns:
+                QMessageBox.critical(
+                    self, "CSV Error", "CSV must have a 'ticker' column"
+                )
                 return
 
-            tickers = df['ticker'].tolist()
+            tickers = df["ticker"].tolist()
 
             # Show confirmation
             msg = QMessageBox()
             msg.setIcon(QMessageBox.Icon.Question)
             msg.setText(f"Load and optimize {len(tickers)} tickers?")
             msg.setInformativeText("This may take a while...")
-            msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            msg.setStandardButtons(
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
 
             if msg.exec() != QMessageBox.StandardButton.Yes:
                 return
@@ -912,10 +973,14 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     print(f"Error loading {ticker}: {e}")
 
-            self.statusBar().showMessage(f"Completed batch loading {len(tickers)} tickers")
+            self.statusBar().showMessage(
+                f"Completed batch loading {len(tickers)} tickers"
+            )
 
         except Exception as e:
-            QMessageBox.critical(self, "Batch Load Error", f"Failed to load ticker list:\n{str(e)}")
+            QMessageBox.critical(
+                self, "Batch Load Error", f"Failed to load ticker list:\n{str(e)}"
+            )
 
     def _load_and_optimize_ticker(self, ticker: str, loader: YFinanceDataLoader):
         """Load single ticker and run optimization"""
@@ -942,21 +1007,31 @@ class MainWindow(QMainWindow):
         for tf_name, cb in self.tf_checkboxes.items():
             if cb.isChecked() and tf_name in self.df_dict:
                 df = self.df_dict[tf_name]
-                self._update_chart(df['close'].values, tf_name)
+                self._update_chart(df["close"].values, tf_name)
                 break
 
     def _update_chart(self, close_arr: np.ndarray, timeframe: str):
         """Update price chart"""
         self.figure.clear()
-        ax = self.figure.add_subplot(111, facecolor='#1e1e1e')
+        ax = self.figure.add_subplot(111, facecolor="#1e1e1e")
 
-        ax.plot(close_arr, color='#4CAF50', linewidth=2, label=f'{self.current_ticker} ({timeframe})')
-        ax.set_title(f'{self.current_ticker} Price Chart', color='white', fontsize=14, fontweight='bold')
-        ax.set_xlabel('Index', color='white')
-        ax.set_ylabel('Price', color='white')
-        ax.tick_params(colors='white')
-        ax.legend(facecolor='#2d2d2d', edgecolor='#3a3a3a', labelcolor='white')
-        ax.grid(True, alpha=0.2, color='white')
+        ax.plot(
+            close_arr,
+            color="#4CAF50",
+            linewidth=2,
+            label=f"{self.current_ticker} ({timeframe})",
+        )
+        ax.set_title(
+            f"{self.current_ticker} Price Chart",
+            color="white",
+            fontsize=14,
+            fontweight="bold",
+        )
+        ax.set_xlabel("Index", color="white")
+        ax.set_ylabel("Price", color="white")
+        ax.tick_params(colors="white")
+        ax.legend(facecolor="#2d2d2d", edgecolor="#3a3a3a", labelcolor="white")
+        ax.grid(True, alpha=0.2, color="white")
 
         self.canvas.draw()
 
@@ -971,17 +1046,19 @@ class MainWindow(QMainWindow):
             return
 
         if self.worker and self.worker.isRunning():
-            QMessageBox.warning(self, "Already Running", "Optimization is already running")
+            QMessageBox.warning(
+                self, "Already Running", "Optimization is already running"
+            )
             return
 
         # Get parameters
         params = {
-            'mn1': (self.mn1_min.value(), self.mn1_max.value()),
-            'mn2': (self.mn2_min.value(), self.mn2_max.value()),
-            'entry': (self.entry_min.value(), self.entry_max.value()),
-            'exit': (self.exit_min.value(), self.exit_max.value()),
-            'on': (self.on_min.value(), self.on_max.value()),
-            'off': (self.off_min.value(), self.off_max.value()),
+            "mn1": (self.mn1_min.value(), self.mn1_max.value()),
+            "mn2": (self.mn2_min.value(), self.mn2_max.value()),
+            "entry": (self.entry_min.value(), self.entry_max.value()),
+            "exit": (self.exit_min.value(), self.exit_max.value()),
+            "on": (self.on_min.value(), self.on_max.value()),
+            "off": (self.off_min.value(), self.off_max.value()),
         }
 
         trials = self.trials_spin.value()
@@ -995,7 +1072,7 @@ class MainWindow(QMainWindow):
             n_trials=trials,
             batch_size=batch_size,
             objective=objective,
-            transaction_costs=self.transaction_costs
+            transaction_costs=self.transaction_costs,
         )
 
         # Connect signals
@@ -1031,9 +1108,9 @@ class MainWindow(QMainWindow):
         self.best_params = best_params
 
         # Update metrics
-        psr = best_params.get('psr', 0.0)
-        sharpe = best_params.get('sharpe_ratio', 0.0)
-        sortino = best_params.get('sortino_ratio', 0.0)
+        psr = best_params.get("psr", 0.0)
+        sharpe = best_params.get("sharpe_ratio", 0.0)
+        sortino = best_params.get("sortino_ratio", 0.0)
 
         self.psr_label.setText(f"{psr:.3f}")
         self.sharpe_label.setText(f"{sharpe:.3f}")
@@ -1068,8 +1145,8 @@ class MainWindow(QMainWindow):
             self._plot_results(best)
 
             # Store trade log for Monte Carlo
-            if 'trade_log' in best:
-                self.last_trade_log = best['trade_log']
+            if "trade_log" in best:
+                self.last_trade_log = best["trade_log"]
 
         self.statusBar().showMessage("Optimization completed successfully")
 
@@ -1077,42 +1154,58 @@ class MainWindow(QMainWindow):
         """Plot equity curve with buy/sell signals"""
         self.results_figure.clear()
 
-        if 'equity_curve' not in best or best['equity_curve'] is None:
+        if "equity_curve" not in best or best["equity_curve"] is None:
             return
 
-        equity = best['equity_curve']
-        trade_log = best.get('trade_log')
+        equity = best["equity_curve"]
+        trade_log = best.get("trade_log")
 
         # Main plot
-        ax1 = self.results_figure.add_subplot(211, facecolor='#1e1e1e')
-        ax1.plot(equity, color='#4CAF50', linewidth=2, label='Equity')
-        ax1.set_title('Equity Curve', color='white', fontweight='bold')
-        ax1.set_ylabel('Equity', color='white')
-        ax1.tick_params(colors='white')
-        ax1.grid(True, alpha=0.2, color='white')
-        ax1.legend(facecolor='#2d2d2d', edgecolor='#3a3a3a', labelcolor='white')
+        ax1 = self.results_figure.add_subplot(211, facecolor="#1e1e1e")
+        ax1.plot(equity, color="#4CAF50", linewidth=2, label="Equity")
+        ax1.set_title("Equity Curve", color="white", fontweight="bold")
+        ax1.set_ylabel("Equity", color="white")
+        ax1.tick_params(colors="white")
+        ax1.grid(True, alpha=0.2, color="white")
+        ax1.legend(facecolor="#2d2d2d", edgecolor="#3a3a3a", labelcolor="white")
 
         # Add buy/sell markers if we have trade log
         if trade_log is not None and not trade_log.empty:
-            buys = trade_log[trade_log['side'] == 'buy']
-            sells = trade_log[trade_log['side'] == 'sell']
+            buys = trade_log[trade_log["side"] == "buy"]
+            sells = trade_log[trade_log["side"] == "sell"]
 
             if not buys.empty:
-                ax1.scatter(buys.index, equity[buys.index], color='#2196F3', marker='^', s=100, label='Buy', zorder=5)
+                ax1.scatter(
+                    buys.index,
+                    equity[buys.index],
+                    color="#2196F3",
+                    marker="^",
+                    s=100,
+                    label="Buy",
+                    zorder=5,
+                )
             if not sells.empty:
-                ax1.scatter(sells.index, equity[sells.index], color='#F44336', marker='v', s=100, label='Sell', zorder=5)
+                ax1.scatter(
+                    sells.index,
+                    equity[sells.index],
+                    color="#F44336",
+                    marker="v",
+                    s=100,
+                    label="Sell",
+                    zorder=5,
+                )
 
         # Drawdown plot
-        ax2 = self.results_figure.add_subplot(212, facecolor='#1e1e1e')
+        ax2 = self.results_figure.add_subplot(212, facecolor="#1e1e1e")
         running_max = np.maximum.accumulate(equity)
         drawdown = (equity - running_max) / running_max * 100
-        ax2.fill_between(range(len(drawdown)), drawdown, 0, color='#F44336', alpha=0.3)
-        ax2.plot(drawdown, color='#F44336', linewidth=1)
-        ax2.set_title('Drawdown %', color='white', fontweight='bold')
-        ax2.set_xlabel('Time', color='white')
-        ax2.set_ylabel('Drawdown %', color='white')
-        ax2.tick_params(colors='white')
-        ax2.grid(True, alpha=0.2, color='white')
+        ax2.fill_between(range(len(drawdown)), drawdown, 0, color="#F44336", alpha=0.3)
+        ax2.plot(drawdown, color="#F44336", linewidth=1)
+        ax2.set_title("Drawdown %", color="white", fontweight="bold")
+        ax2.set_xlabel("Time", color="white")
+        ax2.set_ylabel("Drawdown %", color="white")
+        ax2.tick_params(colors="white")
+        ax2.grid(True, alpha=0.2, color="white")
 
         self.results_figure.tight_layout()
         self.results_canvas.draw()
@@ -1173,11 +1266,15 @@ Parameters:
     def run_monte_carlo(self):
         """Run Monte Carlo simulation"""
         if not self.last_trade_log or self.last_trade_log.empty:
-            QMessageBox.warning(self, "No Trade Log", "Run optimization first to get trade log")
+            QMessageBox.warning(
+                self, "No Trade Log", "Run optimization first to get trade log"
+            )
             return
 
         if len(self.last_trade_log) < 10:
-            QMessageBox.warning(self, "Insufficient Trades", "Need at least 10 trades for Monte Carlo")
+            QMessageBox.warning(
+                self, "Insufficient Trades", "Need at least 10 trades for Monte Carlo"
+            )
             return
 
         self.statusBar().showMessage("Running Monte Carlo simulation...")
@@ -1215,7 +1312,9 @@ Block Bootstrap:
             self.statusBar().showMessage("Monte Carlo completed")
 
         except Exception as e:
-            QMessageBox.critical(self, "Monte Carlo Error", f"Failed to run Monte Carlo:\n{str(e)}")
+            QMessageBox.critical(
+                self, "Monte Carlo Error", f"Failed to run Monte Carlo:\n{str(e)}"
+            )
             self.statusBar().showMessage("Monte Carlo failed")
 
     # =============================================================================
@@ -1238,12 +1337,12 @@ Block Bootstrap:
             from core.walk_forward import WalkForwardAnalyzer
 
             params = {
-                'mn1': (self.mn1_min.value(), self.mn1_max.value()),
-                'mn2': (self.mn2_min.value(), self.mn2_max.value()),
-                'entry': (self.entry_min.value(), self.entry_max.value()),
-                'exit': (self.exit_min.value(), self.exit_max.value()),
-                'on': (self.on_min.value(), self.on_max.value()),
-                'off': (self.off_min.value(), self.off_max.value()),
+                "mn1": (self.mn1_min.value(), self.mn1_max.value()),
+                "mn2": (self.mn2_min.value(), self.mn2_max.value()),
+                "entry": (self.entry_min.value(), self.entry_max.value()),
+                "exit": (self.exit_min.value(), self.exit_max.value()),
+                "on": (self.on_min.value(), self.on_max.value()),
+                "off": (self.off_min.value(), self.off_max.value()),
             }
 
             analyzer = WalkForwardAnalyzer(
@@ -1252,7 +1351,7 @@ Block Bootstrap:
                 train_days=train_days,
                 test_days=test_days,
                 trials_per_window=trials,
-                transaction_costs=self.transaction_costs
+                transaction_costs=self.transaction_costs,
             )
 
             results = analyzer.run()
@@ -1277,7 +1376,9 @@ Plots saved to: {Paths.RESULTS_DIR}/walk_forward/
             self.statusBar().showMessage("Walk-forward analysis completed")
 
         except Exception as e:
-            QMessageBox.critical(self, "Walk-Forward Error", f"Failed to run walk-forward:\n{str(e)}")
+            QMessageBox.critical(
+                self, "Walk-Forward Error", f"Failed to run walk-forward:\n{str(e)}"
+            )
             self.statusBar().showMessage("Walk-forward failed")
 
     # =============================================================================
@@ -1364,7 +1465,7 @@ Confidence: {prediction['confidence']:.2%}
             calculator = PBRCalculator()
             pbr_score = calculator.calculate(
                 backtest_results=self.best_results.iloc[0],
-                regime_state=self.current_regime_state
+                regime_state=self.current_regime_state,
             )
 
             self.pbr_display.setText(f"PBR Score: {pbr_score:.2%}")
@@ -1375,7 +1476,7 @@ Confidence: {prediction['confidence']:.2%}
             text += f"Status: {'HIGH CONFIDENCE' if pbr_score > 0.7 else 'MEDIUM CONFIDENCE' if pbr_score > 0.5 else 'LOW CONFIDENCE'}"
 
             self.institutional_display.append(text)
-            self.institutional_display.append("\n" + "="*50 + "\n")
+            self.institutional_display.append("\n" + "=" * 50 + "\n")
 
             self.statusBar().showMessage("PBR calculated")
 
@@ -1410,7 +1511,7 @@ Confidence: {prediction['confidence']:.2%}
             text += "Predictions are now calibrated for accurate probability estimates"
 
             self.institutional_display.append(text)
-            self.institutional_display.append("\n" + "="*50 + "\n")
+            self.institutional_display.append("\n" + "=" * 50 + "\n")
 
             self.statusBar().showMessage("Calibration complete")
 
@@ -1436,7 +1537,9 @@ Confidence: {prediction['confidence']:.2%}
             current_features = self.regime_detector.get_current_features()
 
             for h in horizons:
-                pred = self.regime_predictor.predict_horizon(current_features, horizon=h)
+                pred = self.regime_predictor.predict_horizon(
+                    current_features, horizon=h
+                )
                 predictions[f"{h}d"] = pred
 
             # Calculate agreement
@@ -1449,7 +1552,7 @@ Confidence: {prediction['confidence']:.2%}
             text += f"\nConsensus: {'STRONG' if agreement_score > 0.8 else 'MODERATE' if agreement_score > 0.6 else 'WEAK'}"
 
             self.institutional_display.append(text)
-            self.institutional_display.append("\n" + "="*50 + "\n")
+            self.institutional_display.append("\n" + "=" * 50 + "\n")
 
             self.statusBar().showMessage("Multi-horizon check complete")
 
@@ -1470,21 +1573,25 @@ Confidence: {prediction['confidence']:.2%}
 
             analyzer = RobustnessAnalyzer()
             results = analyzer.run_tests(
-                strategy_returns=self.best_results.iloc[0]['returns'],
-                n_bootstrap=500  # Reduced for GUI performance
+                strategy_returns=self.best_results.iloc[0]["returns"],
+                n_bootstrap=500,  # Reduced for GUI performance
             )
 
             text = "Robustness Tests:\n\n"
             text += f"White's Reality Check:\n"
             text += f"  p-value: {results['wrc_pvalue']:.4f}\n"
-            text += f"  Result: {'PASS' if results['wrc_pvalue'] < 0.05 else 'FAIL'}\n\n"
+            text += (
+                f"  Result: {'PASS' if results['wrc_pvalue'] < 0.05 else 'FAIL'}\n\n"
+            )
             text += f"Hansen's SPA Test:\n"
             text += f"  p-value: {results['spa_pvalue']:.4f}\n"
-            text += f"  Result: {'PASS' if results['spa_pvalue'] < 0.05 else 'FAIL'}\n\n"
+            text += (
+                f"  Result: {'PASS' if results['spa_pvalue'] < 0.05 else 'FAIL'}\n\n"
+            )
             text += f"Sharpe Ratio 95% CI: [{results['sharpe_ci_lower']:.3f}, {results['sharpe_ci_upper']:.3f}]"
 
             self.institutional_display.append(text)
-            self.institutional_display.append("\n" + "="*50 + "\n")
+            self.institutional_display.append("\n" + "=" * 50 + "\n")
 
             self.statusBar().showMessage("Robustness tests complete")
 
@@ -1508,13 +1615,15 @@ Confidence: {prediction['confidence']:.2%}
             text = "Regime Diagnostic Analysis:\n\n"
             text += f"Regime Stability: {results['stability']:.2%}\n"
             text += f"Average Persistence: {results['avg_persistence']:.1f} days\n"
-            text += f"Transition Frequency: {results['transition_freq']:.1f} per month\n\n"
+            text += (
+                f"Transition Frequency: {results['transition_freq']:.1f} per month\n\n"
+            )
             text += "Regime Distribution:\n"
-            for regime, pct in results['distribution'].items():
+            for regime, pct in results["distribution"].items():
                 text += f"  {regime.upper()}: {pct:.1%}\n"
 
             self.institutional_display.append(text)
-            self.institutional_display.append("\n" + "="*50 + "\n")
+            self.institutional_display.append("\n" + "=" * 50 + "\n")
 
             self.statusBar().showMessage("Diagnostics complete")
 
@@ -1524,7 +1633,9 @@ Confidence: {prediction['confidence']:.2%}
 
     def run_cross_asset_analysis(self):
         """Run cross-asset regime analysis"""
-        self.statusBar().showMessage("Running cross-asset analysis (loading SPY, TLT, GLD, BTC)...")
+        self.statusBar().showMessage(
+            "Running cross-asset analysis (loading SPY, TLT, GLD, BTC)..."
+        )
 
         try:
             self.cross_asset_analyzer = CrossAssetRegimeAnalyzer()
@@ -1536,12 +1647,12 @@ Confidence: {prediction['confidence']:.2%}
             text += f"Global Regime: {results['global_regime'].upper()}\n"
             text += f"Agreement Score: {results['agreement']:.2%}\n\n"
             text += "Individual Assets:\n"
-            for asset, regime in results['asset_regimes'].items():
+            for asset, regime in results["asset_regimes"].items():
                 text += f"  {asset}: {regime.upper()}\n"
             text += f"\nCorrelation Regime: {results['correlation_regime']}"
 
             self.institutional_display.append(text)
-            self.institutional_display.append("\n" + "="*50 + "\n")
+            self.institutional_display.append("\n" + "=" * 50 + "\n")
 
             self.statusBar().showMessage("Cross-asset analysis complete")
 
@@ -1563,7 +1674,9 @@ Confidence: {prediction['confidence']:.2%}
     def start_live_trading(self):
         """Start live trading"""
         if not self.best_params:
-            QMessageBox.warning(self, "No Strategy", "Run optimization first to get strategy parameters")
+            QMessageBox.warning(
+                self, "No Strategy", "Run optimization first to get strategy parameters"
+            )
             return
 
         # Get API credentials
@@ -1571,7 +1684,9 @@ Confidence: {prediction['confidence']:.2%}
         api_secret = self.api_secret_input.text().strip()
 
         if not api_key or not api_secret:
-            QMessageBox.warning(self, "Missing Credentials", "Please enter API key and secret")
+            QMessageBox.warning(
+                self, "Missing Credentials", "Please enter API key and secret"
+            )
             return
 
         # Confirm
@@ -1579,11 +1694,15 @@ Confidence: {prediction['confidence']:.2%}
         mode = "PAPER" if paper else "LIVE"
 
         msg = QMessageBox()
-        msg.setIcon(QMessageBox.Icon.Warning if not paper else QMessageBox.Icon.Question)
+        msg.setIcon(
+            QMessageBox.Icon.Warning if not paper else QMessageBox.Icon.Question
+        )
         msg.setWindowTitle("Confirm Trading")
         msg.setText(f"Start {mode} trading?")
         msg.setInformativeText("Make sure you understand the risks involved.")
-        msg.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        msg.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
 
         if msg.exec() != QMessageBox.StandardButton.Yes:
             return
@@ -1596,7 +1715,7 @@ Confidence: {prediction['confidence']:.2%}
                 paper=paper,
                 strategy_params=self.best_params,
                 position_size_pct=self.position_size_pct,
-                max_positions=self.max_positions
+                max_positions=self.max_positions,
             )
 
             # Connect signals
@@ -1611,12 +1730,16 @@ Confidence: {prediction['confidence']:.2%}
             self.live_trading_btn.setText("⏹️ STOP LIVE TRADING")
             self.live_trading_btn.setStyleSheet(LIVE_TRADING_BUTTON_ACTIVE)
             self.trading_status_label.setText(f"Status: {mode} TRADING ACTIVE")
-            self.trading_status_label.setStyleSheet(f"padding: 15px; background-color: {COLOR_SUCCESS}; color: white; border-radius: 4px; font-size: 14px; font-weight: bold;")
+            self.trading_status_label.setStyleSheet(
+                f"padding: 15px; background-color: {COLOR_SUCCESS}; color: white; border-radius: 4px; font-size: 14px; font-weight: bold;"
+            )
 
             self.statusBar().showMessage(f"{mode} trading started")
 
         except Exception as e:
-            QMessageBox.critical(self, "Trading Error", f"Failed to start trading:\n{str(e)}")
+            QMessageBox.critical(
+                self, "Trading Error", f"Failed to start trading:\n{str(e)}"
+            )
 
     def stop_live_trading(self):
         """Stop live trading"""
@@ -1630,12 +1753,16 @@ Confidence: {prediction['confidence']:.2%}
             self.live_trading_btn.setText("▶️ START LIVE TRADING")
             self.live_trading_btn.setStyleSheet(LIVE_TRADING_BUTTON_STOPPED)
             self.trading_status_label.setText("Status: Not Running")
-            self.trading_status_label.setStyleSheet("padding: 15px; background-color: #2d2d2d; border-radius: 4px; font-size: 14px;")
+            self.trading_status_label.setStyleSheet(
+                "padding: 15px; background-color: #2d2d2d; border-radius: 4px; font-size: 14px;"
+            )
 
             self.statusBar().showMessage("Trading stopped")
 
         except Exception as e:
-            QMessageBox.critical(self, "Stop Error", f"Failed to stop trading:\n{str(e)}")
+            QMessageBox.critical(
+                self, "Stop Error", f"Failed to stop trading:\n{str(e)}"
+            )
 
     def update_trading_status(self, status: str):
         """Update trading status display"""
