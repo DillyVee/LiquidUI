@@ -2,30 +2,34 @@
 Risk Management System
 Real-time risk controls, position limits, kill switches, and P&L monitoring
 """
-import pandas as pd
-import numpy as np
-from typing import Dict, List, Optional, Tuple, Any
+
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
+import pandas as pd
+from scipy import stats
 
 from infrastructure.logger import quant_logger
 
-
-logger = quant_logger.get_logger('risk_management')
+logger = quant_logger.get_logger("risk_management")
 
 
 class RiskLevel(Enum):
     """Risk alert levels"""
-    GREEN = "green"      # Normal
-    YELLOW = "yellow"    # Warning
-    ORANGE = "orange"    # Elevated
-    RED = "red"          # Critical - kill switch
+
+    GREEN = "green"  # Normal
+    YELLOW = "yellow"  # Warning
+    ORANGE = "orange"  # Elevated
+    RED = "red"  # Critical - kill switch
 
 
 @dataclass
 class RiskLimit:
     """Risk limit configuration"""
+
     name: str
     limit_type: str  # 'max', 'min', 'range'
     value: float
@@ -38,6 +42,7 @@ class RiskLimit:
 @dataclass
 class RiskEvent:
     """Risk event/breach"""
+
     timestamp: datetime
     event_type: str
     severity: RiskLevel
@@ -51,17 +56,17 @@ class PositionLimits:
     """Position and concentration limits"""
 
     def __init__(self, config: Dict[str, Any]):
-        self.max_gross_exposure = config.get('max_gross_exposure', 1000000)
-        self.max_net_exposure = config.get('max_net_exposure', 500000)
-        self.max_single_position = config.get('max_single_position', 100000)
-        self.max_sector_concentration = config.get('max_sector_concentration', 0.30)
-        self.max_leverage = config.get('max_leverage', 1.0)
+        self.max_gross_exposure = config.get("max_gross_exposure", 1000000)
+        self.max_net_exposure = config.get("max_net_exposure", 500000)
+        self.max_single_position = config.get("max_single_position", 100000)
+        self.max_sector_concentration = config.get("max_sector_concentration", 0.30)
+        self.max_leverage = config.get("max_leverage", 1.0)
 
     def check_position_limits(
         self,
         positions: Dict[str, float],
         prices: Dict[str, float],
-        portfolio_value: float
+        portfolio_value: float,
     ) -> Tuple[RiskLevel, List[str]]:
         """
         Check position limits
@@ -79,14 +84,12 @@ class PositionLimits:
 
         # Calculate exposures
         long_exposure = sum(
-            max(0, qty) * prices.get(sym, 0)
-            for sym, qty in positions.items()
+            max(0, qty) * prices.get(sym, 0) for sym, qty in positions.items()
         )
 
-        short_exposure = abs(sum(
-            min(0, qty) * prices.get(sym, 0)
-            for sym, qty in positions.items()
-        ))
+        short_exposure = abs(
+            sum(min(0, qty) * prices.get(sym, 0) for sym, qty in positions.items())
+        )
 
         gross_exposure = long_exposure + short_exposure
         net_exposure = long_exposure - short_exposure
@@ -99,7 +102,9 @@ class PositionLimits:
             max_risk_level = RiskLevel.RED
 
         elif gross_exposure > self.max_gross_exposure * 0.9:
-            violations.append(f"Gross exposure at {gross_exposure/self.max_gross_exposure*100:.1f}% of limit")
+            violations.append(
+                f"Gross exposure at {gross_exposure/self.max_gross_exposure*100:.1f}% of limit"
+            )
             max_risk_level = max(max_risk_level, RiskLevel.YELLOW)
 
         # Check net exposure
@@ -113,7 +118,9 @@ class PositionLimits:
         leverage = gross_exposure / portfolio_value if portfolio_value > 0 else 0
 
         if leverage > self.max_leverage:
-            violations.append(f"Leverage {leverage:.2f}x exceeds limit {self.max_leverage:.2f}x")
+            violations.append(
+                f"Leverage {leverage:.2f}x exceeds limit {self.max_leverage:.2f}x"
+            )
             max_risk_level = RiskLevel.RED
 
         # Check single position limits
@@ -133,19 +140,17 @@ class PnLLimits:
     """P&L-based limits and stop-loss"""
 
     def __init__(self, config: Dict[str, Any]):
-        self.max_daily_loss = config.get('max_daily_loss', -10000)
-        self.max_drawdown_pct = config.get('max_drawdown_pct', -0.10)  # -10%
-        self.profit_target = config.get('profit_target', 20000)
-        self.trailing_stop_pct = config.get('trailing_stop_pct', -0.05)  # -5% from peak
+        self.max_daily_loss = config.get("max_daily_loss", -10000)
+        self.max_drawdown_pct = config.get("max_drawdown_pct", -0.10)  # -10%
+        self.profit_target = config.get("profit_target", 20000)
+        self.trailing_stop_pct = config.get("trailing_stop_pct", -0.05)  # -5% from peak
 
         self.daily_start_equity = 0.0
         self.peak_equity = 0.0
         self.hwm = 0.0  # High water mark
 
     def check_pnl_limits(
-        self,
-        current_equity: float,
-        realized_pnl_today: float
+        self, current_equity: float, realized_pnl_today: float
     ) -> Tuple[RiskLevel, List[str]]:
         """
         Check P&L limits
@@ -178,7 +183,9 @@ class PnLLimits:
             max_risk_level = RiskLevel.RED
 
         elif daily_pnl < self.max_daily_loss * 0.8:
-            violations.append(f"Daily loss at {daily_pnl/self.max_daily_loss*100:.0f}% of limit")
+            violations.append(
+                f"Daily loss at {daily_pnl/self.max_daily_loss*100:.0f}% of limit"
+            )
             max_risk_level = max(max_risk_level, RiskLevel.YELLOW)
 
         # Check drawdown from peak
@@ -203,7 +210,9 @@ class PnLLimits:
 
         # Check profit target (optional de-risk)
         if daily_pnl > self.profit_target:
-            violations.append(f"Profit target reached: ${daily_pnl:,.0f} (consider de-risking)")
+            violations.append(
+                f"Profit target reached: ${daily_pnl:,.0f} (consider de-risking)"
+            )
             # Not a violation, just informational
 
         return max_risk_level, violations
@@ -220,15 +229,15 @@ class RiskManager:
     """
 
     def __init__(self, config: Dict[str, Any]):
-        self.position_limits = PositionLimits(config.get('position_limits', {}))
-        self.pnl_limits = PnLLimits(config.get('pnl_limits', {}))
+        self.position_limits = PositionLimits(config.get("position_limits", {}))
+        self.pnl_limits = PnLLimits(config.get("pnl_limits", {}))
 
         self.enabled = True
         self.kill_switch_active = False
         self.risk_events: List[RiskEvent] = []
 
-        self.volatility_limit = config.get('volatility_limit', 0.03)  # 3% daily vol
-        self.var_limit = config.get('var_limit', -50000)  # $50k 1-day 95% VaR
+        self.volatility_limit = config.get("volatility_limit", 0.03)  # 3% daily vol
+        self.var_limit = config.get("var_limit", -50000)  # $50k 1-day 95% VaR
 
         logger.info("Risk Manager initialized")
 
@@ -237,7 +246,7 @@ class RiskManager:
         positions: Dict[str, float],
         prices: Dict[str, float],
         portfolio_value: float,
-        realized_pnl_today: float
+        realized_pnl_today: float,
     ) -> Tuple[RiskLevel, List[str]]:
         """
         Run all risk checks
@@ -269,7 +278,11 @@ class RiskManager:
         all_violations.extend(pnl_violations)
 
         # Overall risk level is the maximum
-        overall_level = max(pos_level, pnl_level, key=lambda x: ['green', 'yellow', 'orange', 'red'].index(x.value))
+        overall_level = max(
+            pos_level,
+            pnl_level,
+            key=lambda x: ["green", "yellow", "orange", "red"].index(x.value),
+        )
 
         # Trigger kill switch if RED
         if overall_level == RiskLevel.RED and not self.kill_switch_active:
@@ -285,10 +298,7 @@ class RiskManager:
                 description="; ".join(all_violations),
                 current_value=portfolio_value,
                 limit_value=0,
-                metadata={
-                    'positions': positions,
-                    'prices': prices
-                }
+                metadata={"positions": positions, "prices": prices},
             )
             self.risk_events.append(event)
 
@@ -314,15 +324,16 @@ class RiskManager:
 
         # Log to audit trail
         from infrastructure.logger import quant_logger
+
         audit = quant_logger.audit
 
         audit.log_risk_event(
             event_type="kill_switch",
             details={
-                'reason': reason,
-                'timestamp': datetime.now().isoformat(),
-                'action': 'kill_switch_activated'
-            }
+                "reason": reason,
+                "timestamp": datetime.now().isoformat(),
+                "action": "kill_switch_activated",
+            },
         )
 
         # In production: send alerts (email, SMS, Slack, PagerDuty)
@@ -347,7 +358,7 @@ class RiskManager:
         self,
         positions: Dict[str, float],
         returns_history: pd.DataFrame,
-        confidence_level: float = 0.95
+        confidence_level: float = 0.95,
     ) -> float:
         """
         Calculate Value at Risk (VaR)
@@ -376,7 +387,7 @@ class RiskManager:
         positions: Dict[str, float],
         prices: Dict[str, float],
         covariance_matrix: pd.DataFrame,
-        confidence_level: float = 0.95
+        confidence_level: float = 0.95,
     ) -> float:
         """
         Calculate parametric VaR using covariance matrix
@@ -391,10 +402,12 @@ class RiskManager:
             VaR value
         """
         # Position values
-        position_values = pd.Series({
-            sym: positions.get(sym, 0) * prices.get(sym, 0)
-            for sym in covariance_matrix.columns
-        })
+        position_values = pd.Series(
+            {
+                sym: positions.get(sym, 0) * prices.get(sym, 0)
+                for sym in covariance_matrix.columns
+            }
+        )
 
         # Portfolio variance
         portfolio_variance = position_values.dot(covariance_matrix.dot(position_values))
@@ -410,7 +423,7 @@ class RiskManager:
         self,
         positions: Dict[str, float],
         prices: Dict[str, float],
-        scenarios: List[Dict[str, float]]
+        scenarios: List[Dict[str, float]],
     ) -> pd.DataFrame:
         """
         Run stress test scenarios
@@ -435,11 +448,13 @@ class RiskManager:
                     pnl = qty * price * price_change_pct
                     scenario_pnl += pnl
 
-            results.append({
-                'scenario': f'Scenario {i+1}',
-                'pnl': scenario_pnl,
-                'changes': scenario
-            })
+            results.append(
+                {
+                    "scenario": f"Scenario {i+1}",
+                    "pnl": scenario_pnl,
+                    "changes": scenario,
+                }
+            )
 
         return pd.DataFrame(results)
 
@@ -447,34 +462,38 @@ class RiskManager:
         self,
         positions: Dict[str, float],
         prices: Dict[str, float],
-        portfolio_value: float
+        portfolio_value: float,
     ) -> Dict[str, Any]:
         """Get comprehensive risk summary"""
 
         # Calculate exposures
         long_exposure = sum(
-            max(0, qty) * prices.get(sym, 0)
-            for sym, qty in positions.items()
+            max(0, qty) * prices.get(sym, 0) for sym, qty in positions.items()
         )
 
-        short_exposure = abs(sum(
-            min(0, qty) * prices.get(sym, 0)
-            for sym, qty in positions.items()
-        ))
+        short_exposure = abs(
+            sum(min(0, qty) * prices.get(sym, 0) for sym, qty in positions.items())
+        )
 
         gross_exposure = long_exposure + short_exposure
         net_exposure = long_exposure - short_exposure
 
         summary = {
-            'portfolio_value': portfolio_value,
-            'long_exposure': long_exposure,
-            'short_exposure': short_exposure,
-            'gross_exposure': gross_exposure,
-            'net_exposure': net_exposure,
-            'leverage': gross_exposure / portfolio_value if portfolio_value > 0 else 0,
-            'num_positions': len([p for p in positions.values() if p != 0]),
-            'kill_switch_active': self.kill_switch_active,
-            'recent_events': len([e for e in self.risk_events if e.timestamp > datetime.now() - timedelta(hours=1)])
+            "portfolio_value": portfolio_value,
+            "long_exposure": long_exposure,
+            "short_exposure": short_exposure,
+            "gross_exposure": gross_exposure,
+            "net_exposure": net_exposure,
+            "leverage": gross_exposure / portfolio_value if portfolio_value > 0 else 0,
+            "num_positions": len([p for p in positions.values() if p != 0]),
+            "kill_switch_active": self.kill_switch_active,
+            "recent_events": len(
+                [
+                    e
+                    for e in self.risk_events
+                    if e.timestamp > datetime.now() - timedelta(hours=1)
+                ]
+            ),
         }
 
         return summary

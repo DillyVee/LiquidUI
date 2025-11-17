@@ -2,17 +2,19 @@
 Example 2: Walk-Forward Validation
 Demonstrates robust testing methodology with walk-forward analysis
 """
+
+import sys
+from pathlib import Path
+
+import numpy as np
 import pandas as pd
 import yfinance as yf
-import numpy as np
-from pathlib import Path
-import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from data_layer.feature_engineering import FeaturePipeline, RSI, MACD
 from backtest.engine import BacktestEngine, OrderSide
 from backtest.robustness import WalkForwardAnalysis
+from data_layer.feature_engineering import MACD, RSI, FeaturePipeline
 
 
 def create_strategy_function(rsi_oversold=30, rsi_overbought=70):
@@ -38,10 +40,13 @@ def create_strategy_function(rsi_oversold=30, rsi_overbought=70):
 def run_backtest_with_params(train_data, test_data, **params):
     """Run backtest with given parameters"""
     strategy = create_strategy_function(
-        rsi_oversold=params.get("rsi_oversold", 30), rsi_overbought=params.get("rsi_overbought", 70)
+        rsi_oversold=params.get("rsi_oversold", 30),
+        rsi_overbought=params.get("rsi_overbought", 70),
     )
 
-    engine = BacktestEngine(initial_cash=100_000, commission_pct=0.001, spread_pct=0.0005)
+    engine = BacktestEngine(
+        initial_cash=100_000, commission_pct=0.001, spread_pct=0.0005
+    )
 
     results = engine.run_backtest(test_data, strategy, "AAPL")
     metrics = engine.get_performance_metrics()
@@ -79,7 +84,9 @@ def main():
     print(f"   Training window: 252 days (1 year)")
     print(f"   Testing window:  63 days (3 months)")
     print(f"   Step size:       21 days (1 month)")
-    print(f"   Parameter combinations: {len(param_grid['rsi_oversold']) * len(param_grid['rsi_overbought'])}")
+    print(
+        f"   Parameter combinations: {len(param_grid['rsi_oversold']) * len(param_grid['rsi_overbought'])}"
+    )
 
     wfa = WalkForwardAnalysis(train_window=252, test_window=63, step_size=21)
 
@@ -88,7 +95,10 @@ def main():
 
     try:
         results = wfa.run(
-            data=features_df, strategy_func=run_backtest_with_params, param_grid=param_grid, metric_func=lambda x: x.mean()
+            data=features_df,
+            strategy_func=run_backtest_with_params,
+            param_grid=param_grid,
+            metric_func=lambda x: x.mean(),
         )
 
         # Display results

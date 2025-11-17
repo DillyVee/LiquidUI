@@ -35,9 +35,9 @@ statsmodels>=0.14.0
 # ============================================================================
 # Orchestration & Workflow
 # ============================================================================
-apache-airflow>=2.7.0
-celery>=5.3.0
-redis>=5.0.0
+# apache-airflow>=2.7.0  # Optional: for production workflow orchestration
+# celery>=5.3.0  # Optional: for distributed task queue
+# redis>=5.0.0  # Optional: for caching and message broker
 
 # ============================================================================
 # Monitoring & Observability
@@ -84,7 +84,7 @@ seaborn>=0.13.0
 # ============================================================================
 # Financial Calculations
 # ============================================================================
-QuantLib-Python>=1.31  # Optional: advanced financial math
+# QuantLib-Python>=1.31  # Optional: advanced financial math (currently not available in PyPI)
 
 # ============================================================================
 # Performance & Acceleration

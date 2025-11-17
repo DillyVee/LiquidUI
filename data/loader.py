@@ -3,8 +3,10 @@ Data Loading Module
 """
 import datetime
 from typing import Dict, Optional, Tuple
+
 import pandas as pd
 import yfinance as yf
+
 from config.settings import OptimizationConfig
 
 

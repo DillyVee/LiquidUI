@@ -2,22 +2,24 @@
 Advanced Backtesting Engine
 Realistic market simulation with order book replay, fill models, and latency effects
 """
-import pandas as pd
-import numpy as np
-from typing import Dict, List, Optional, Tuple, Any
-from dataclasses import dataclass, field
-from enum import Enum
-from datetime import datetime, timedelta
+
 import uuid
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple
+
+import numpy as np
+import pandas as pd
 
 from infrastructure.logger import quant_logger
 
-
-logger = quant_logger.get_logger('backtest_engine')
+logger = quant_logger.get_logger("backtest_engine")
 
 
 class OrderType(Enum):
     """Order types"""
+
     MARKET = "market"
     LIMIT = "limit"
     STOP = "stop"
@@ -26,12 +28,14 @@ class OrderType(Enum):
 
 class OrderSide(Enum):
     """Order side"""
+
     BUY = "buy"
     SELL = "sell"
 
 
 class OrderStatus(Enum):
     """Order status"""
+
     PENDING = "pending"
     FILLED = "filled"
     PARTIALLY_FILLED = "partially_filled"
@@ -42,6 +46,7 @@ class OrderStatus(Enum):
 @dataclass
 class Order:
     """Order representation"""
+
     order_id: str
     timestamp: pd.Timestamp
     symbol: str
@@ -60,6 +65,7 @@ class Order:
 @dataclass
 class Fill:
     """Trade fill representation"""
+
     fill_id: str
     order_id: str
     timestamp: pd.Timestamp
@@ -74,6 +80,7 @@ class Fill:
 @dataclass
 class Position:
     """Position representation"""
+
     symbol: str
     quantity: float  # Positive = long, negative = short
     average_price: float
@@ -95,7 +102,7 @@ class FillModel:
         spread_pct: float = 0.0001,  # 1 bps
         slippage_pct: float = 0.0002,  # 2 bps
         partial_fill_prob: float = 0.0,  # Probability of partial fill
-        latency_ms: int = 0  # Execution latency in milliseconds
+        latency_ms: int = 0,  # Execution latency in milliseconds
     ):
         self.spread_pct = spread_pct
         self.slippage_pct = slippage_pct
@@ -103,10 +110,7 @@ class FillModel:
         self.latency_ms = latency_ms
 
     def simulate_fill(
-        self,
-        order: Order,
-        current_bar: pd.Series,
-        next_bar: Optional[pd.Series] = None
+        self, order: Order, current_bar: pd.Series, next_bar: Optional[pd.Series] = None
     ) -> Tuple[float, float, OrderStatus]:
         """
         Simulate order fill
@@ -128,18 +132,15 @@ class FillModel:
             return 0.0, 0.0, OrderStatus.PENDING
 
     def _fill_market_order(
-        self,
-        order: Order,
-        current_bar: pd.Series,
-        next_bar: Optional[pd.Series]
+        self, order: Order, current_bar: pd.Series, next_bar: Optional[pd.Series]
     ) -> Tuple[float, float, OrderStatus]:
         """Fill market order with spread and slippage"""
 
         # Use next bar's open (more realistic) or current bar's close
         if next_bar is not None:
-            base_price = next_bar['Open']
+            base_price = next_bar["Open"]
         else:
-            base_price = current_bar['Close']
+            base_price = current_bar["Close"]
 
         # Apply spread
         if order.side == OrderSide.BUY:
@@ -166,10 +167,7 @@ class FillModel:
         return fill_quantity, fill_price, status
 
     def _fill_limit_order(
-        self,
-        order: Order,
-        current_bar: pd.Series,
-        next_bar: Optional[pd.Series]
+        self, order: Order, current_bar: pd.Series, next_bar: Optional[pd.Series]
     ) -> Tuple[float, float, OrderStatus]:
         """Fill limit order if price reaches limit"""
 
@@ -181,14 +179,14 @@ class FillModel:
         # Check if limit order can be filled
         if order.side == OrderSide.BUY:
             # Buy limit: fill if market goes at or below limit price
-            if bar['Low'] <= order.limit_price:
-                fill_price = min(order.limit_price, bar['Open'])
+            if bar["Low"] <= order.limit_price:
+                fill_price = min(order.limit_price, bar["Open"])
                 fill_quantity = order.quantity
                 return fill_quantity, fill_price, OrderStatus.FILLED
         else:
             # Sell limit: fill if market goes at or above limit price
-            if bar['High'] >= order.limit_price:
-                fill_price = max(order.limit_price, bar['Open'])
+            if bar["High"] >= order.limit_price:
+                fill_price = max(order.limit_price, bar["Open"])
                 fill_quantity = order.quantity
                 return fill_quantity, fill_price, OrderStatus.FILLED
 
@@ -211,12 +209,14 @@ class PortfolioState:
         fill_quantity: float,
         fill_price: float,
         side: OrderSide,
-        commission: float
+        commission: float,
     ):
         """Update position after fill"""
 
         if symbol not in self.positions:
-            self.positions[symbol] = Position(symbol=symbol, quantity=0.0, average_price=0.0)
+            self.positions[symbol] = Position(
+                symbol=symbol, quantity=0.0, average_price=0.0
+            )
 
         pos = self.positions[symbol]
         old_quantity = pos.quantity
@@ -237,15 +237,25 @@ class PortfolioState:
             pos.realized_pnl += realized_pnl
 
         # Update average price (FIFO accounting)
-        if (old_quantity >= 0 and side == OrderSide.BUY) or (old_quantity <= 0 and side == OrderSide.SELL):
+        if (old_quantity >= 0 and side == OrderSide.BUY) or (
+            old_quantity <= 0 and side == OrderSide.SELL
+        ):
             # Adding to position
-            total_cost = (abs(old_quantity) * pos.average_price) + (fill_quantity * fill_price)
-            pos.average_price = total_cost / abs(new_quantity) if new_quantity != 0 else 0.0
+            total_cost = (abs(old_quantity) * pos.average_price) + (
+                fill_quantity * fill_price
+            )
+            pos.average_price = (
+                total_cost / abs(new_quantity) if new_quantity != 0 else 0.0
+            )
 
         pos.quantity = new_quantity
 
         # Update cash
-        cash_flow = -fill_quantity * fill_price if side == OrderSide.BUY else fill_quantity * fill_price
+        cash_flow = (
+            -fill_quantity * fill_price
+            if side == OrderSide.BUY
+            else fill_quantity * fill_price
+        )
         self.cash += cash_flow - commission
 
         # Remove position if flat
@@ -262,8 +272,10 @@ class PortfolioState:
     def get_total_equity(self, prices: Dict[str, float]) -> float:
         """Calculate total equity"""
         self.update_unrealized_pnl(prices)
-        position_value = sum(pos.quantity * prices.get(pos.symbol, pos.average_price)
-                            for pos in self.positions.values())
+        position_value = sum(
+            pos.quantity * prices.get(pos.symbol, pos.average_price)
+            for pos in self.positions.values()
+        )
         return self.cash + position_value
 
     def record_equity(self, timestamp: pd.Timestamp, prices: Dict[str, float]):
@@ -284,15 +296,13 @@ class BacktestEngine:
         commission_pct: float = 0.0,
         spread_pct: float = 0.0001,
         slippage_pct: float = 0.0002,
-        latency_ms: int = 0
+        latency_ms: int = 0,
     ):
         self.initial_cash = initial_cash
         self.commission_pct = commission_pct
 
         self.fill_model = FillModel(
-            spread_pct=spread_pct,
-            slippage_pct=slippage_pct,
-            latency_ms=latency_ms
+            spread_pct=spread_pct, slippage_pct=slippage_pct, latency_ms=latency_ms
         )
 
         self.portfolio = PortfolioState(initial_cash)
@@ -309,7 +319,7 @@ class BacktestEngine:
         quantity: float,
         order_type: OrderType = OrderType.MARKET,
         limit_price: Optional[float] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> str:
         """
         Submit an order
@@ -333,7 +343,7 @@ class BacktestEngine:
             order_type=order_type,
             quantity=quantity,
             limit_price=limit_price,
-            metadata=metadata or {}
+            metadata=metadata or {},
         )
 
         self.orders.append(order)
@@ -346,16 +356,18 @@ class BacktestEngine:
         return order.order_id
 
     def process_orders(
-        self,
-        current_bar: pd.Series,
-        next_bar: Optional[pd.Series] = None
+        self, current_bar: pd.Series, next_bar: Optional[pd.Series] = None
     ):
         """Process pending orders"""
 
         filled_orders = []
 
         for order in self.pending_orders:
-            if order.symbol != current_bar.name[0] if isinstance(current_bar.name, tuple) else current_bar.get('symbol'):
+            if (
+                order.symbol != current_bar.name[0]
+                if isinstance(current_bar.name, tuple)
+                else current_bar.get("symbol")
+            ):
                 continue
 
             # Simulate fill
@@ -377,7 +389,8 @@ class BacktestEngine:
                     quantity=fill_quantity,
                     price=fill_price,
                     commission=commission,
-                    slippage=abs(fill_price - current_bar['Close']) / current_bar['Close']
+                    slippage=abs(fill_price - current_bar["Close"])
+                    / current_bar["Close"],
                 )
                 self.fills.append(fill)
 
@@ -387,15 +400,15 @@ class BacktestEngine:
                     fill_quantity=fill_quantity,
                     fill_price=fill_price,
                     side=order.side,
-                    commission=commission
+                    commission=commission,
                 )
 
                 # Update order
                 order.filled_quantity += fill_quantity
                 order.average_fill_price = (
-                    (order.average_fill_price * (order.filled_quantity - fill_quantity) + fill_price * fill_quantity)
-                    / order.filled_quantity
-                )
+                    order.average_fill_price * (order.filled_quantity - fill_quantity)
+                    + fill_price * fill_quantity
+                ) / order.filled_quantity
                 order.status = status
 
                 logger.debug(
@@ -411,10 +424,7 @@ class BacktestEngine:
             self.pending_orders.remove(order)
 
     def run_backtest(
-        self,
-        data: pd.DataFrame,
-        strategy_func: callable,
-        symbol: str = None
+        self, data: pd.DataFrame, strategy_func: callable, symbol: str = None
     ) -> pd.DataFrame:
         """
         Run backtest
@@ -435,8 +445,8 @@ class BacktestEngine:
         self.pending_orders = []
 
         data_with_symbol = data.copy()
-        if symbol and 'symbol' not in data_with_symbol.columns:
-            data_with_symbol['symbol'] = symbol
+        if symbol and "symbol" not in data_with_symbol.columns:
+            data_with_symbol["symbol"] = symbol
 
         for i in range(len(data)):
             current_bar = data.iloc[i]
@@ -451,18 +461,22 @@ class BacktestEngine:
             try:
                 strategy_func(current_bar, self.portfolio, self)
             except Exception as e:
-                logger.error(f"Strategy error at {self.current_timestamp}: {e}", exc_info=True)
+                logger.error(
+                    f"Strategy error at {self.current_timestamp}: {e}", exc_info=True
+                )
 
             # Record equity
-            current_prices = {symbol or 'default': current_bar['Close']}
+            current_prices = {symbol or "default": current_bar["Close"]}
             self.portfolio.record_equity(self.current_timestamp, current_prices)
 
         # Create results DataFrame
-        results_df = pd.DataFrame({
-            'equity': self.portfolio.equity_curve
-        }, index=self.portfolio.timestamps)
+        results_df = pd.DataFrame(
+            {"equity": self.portfolio.equity_curve}, index=self.portfolio.timestamps
+        )
 
-        logger.info(f"Backtest complete: {len(self.fills)} fills, {len(self.orders)} orders")
+        logger.info(
+            f"Backtest complete: {len(self.fills)} fills, {len(self.orders)} orders"
+        )
 
         return results_df
 
@@ -471,7 +485,9 @@ class BacktestEngine:
         if len(self.portfolio.equity_curve) == 0:
             return {}
 
-        equity_series = pd.Series(self.portfolio.equity_curve, index=self.portfolio.timestamps)
+        equity_series = pd.Series(
+            self.portfolio.equity_curve, index=self.portfolio.timestamps
+        )
         returns = equity_series.pct_change().dropna()
 
         # Calculate metrics
@@ -488,19 +504,21 @@ class BacktestEngine:
 
         # Win rate
         total_fills = len(self.fills)
-        winning_trades = sum(1 for pos in self.portfolio.positions.values() if pos.realized_pnl > 0)
+        winning_trades = sum(
+            1 for pos in self.portfolio.positions.values() if pos.realized_pnl > 0
+        )
         win_rate = winning_trades / total_fills if total_fills > 0 else 0
 
         metrics = {
-            'total_return': total_return,
-            'annual_return': annual_return,
-            'volatility': volatility,
-            'sharpe_ratio': sharpe_ratio,
-            'max_drawdown': max_drawdown,
-            'total_trades': total_fills,
-            'win_rate': win_rate,
-            'final_equity': equity_series.iloc[-1],
-            'initial_equity': self.initial_cash
+            "total_return": total_return,
+            "annual_return": annual_return,
+            "volatility": volatility,
+            "sharpe_ratio": sharpe_ratio,
+            "max_drawdown": max_drawdown,
+            "total_trades": total_fills,
+            "win_rate": win_rate,
+            "final_equity": equity_series.iloc[-1],
+            "initial_equity": self.initial_cash,
         }
 
         return metrics

@@ -9,12 +9,13 @@ Key improvements:
 5. Same API as your original version
 """
 
-import numpy as np
-import pandas as pd
-from typing import Dict, List, Tuple, Optional
-from scipy import stats
 from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
 import optuna
+import pandas as pd
+from scipy import stats
 
 
 # ============================================================
@@ -23,6 +24,7 @@ import optuna
 @dataclass
 class CompositeWeights:
     """Weights for composite score"""
+
     psr: float = 0.70
     pbo_penalty: float = 0.20
     turnover: float = 0.05
@@ -51,7 +53,7 @@ class PSRCalculator:
         returns: np.ndarray,
         benchmark_sharpe: float = 0.0,
         annualization_factor: float = 252.0,
-        trade_count: int = None
+        trade_count: int = None,
     ) -> float:
         """Calculate PSR with correct scaling and trade-count awareness"""
         if returns is None or len(returns) == 0:
@@ -91,7 +93,7 @@ class PSRCalculator:
 
         try:
             # Corrected variance computation
-            numerator = (1.0 - (skew * s_p) + (((kurt - 1.0) / 4.0) * (s_p ** 2)))
+            numerator = 1.0 - (skew * s_p) + (((kurt - 1.0) / 4.0) * (s_p**2))
             denom = max(effective_n - 1.0, 1.0)
             var_sp = numerator / denom
             variance_annual_sharpe = annualization_factor * var_sp
@@ -100,7 +102,12 @@ class PSRCalculator:
                 base_se = 1.0 / np.sqrt(max(effective_n - 1.0, 1.0))
                 skew_penalty = 1.0 + min(5.0, abs(skew)) * 0.3
                 kurt_penalty = 1.0 + min(10.0, abs(kurt)) * 0.15
-                sharpe_std = base_se * skew_penalty * kurt_penalty * np.sqrt(annualization_factor)
+                sharpe_std = (
+                    base_se
+                    * skew_penalty
+                    * kurt_penalty
+                    * np.sqrt(annualization_factor)
+                )
             else:
                 sharpe_std = np.sqrt(variance_annual_sharpe)
 
@@ -127,8 +134,7 @@ class PSRCalculator:
 
     @staticmethod
     def calculate_sharpe_from_equity(
-        equity_curve: np.ndarray,
-        annualization_factor: float = 252.0
+        equity_curve: np.ndarray, annualization_factor: float = 252.0
     ) -> float:
         """Calculate annualized Sharpe ratio from equity curve"""
         if len(equity_curve) < 2:
@@ -170,8 +176,8 @@ class PBOCalculatorSimple:
         first_half = returns[:mid]
         second_half = returns[mid:]
 
-        sharpe_1 = (np.mean(first_half) / (np.std(first_half, ddof=1) + 1e-10))
-        sharpe_2 = (np.mean(second_half) / (np.std(second_half, ddof=1) + 1e-10))
+        sharpe_1 = np.mean(first_half) / (np.std(first_half, ddof=1) + 1e-10)
+        sharpe_2 = np.mean(second_half) / (np.std(second_half, ddof=1) + 1e-10)
 
         if sharpe_1 <= 0 and sharpe_2 <= 0:
             pbo = 0.9
@@ -199,9 +205,7 @@ class TurnoverCalculator:
 
     @staticmethod
     def calculate_annual_turnover(
-        trade_count: int,
-        total_days: int,
-        position_size: float = 1.0
+        trade_count: int, total_days: int, position_size: float = 1.0
     ) -> float:
         """Estimate annualized turnover"""
         if total_days == 0:
@@ -225,7 +229,7 @@ class CompositeOptimizer:
         benchmark_sharpe: float = 0.0,
         max_acceptable_turnover: float = 200.0,
         max_acceptable_dd: float = 0.50,
-        min_trades: int = 20
+        min_trades: int = 20,
     ):
         self.weights = weights or CompositeWeights()
         self.weights.validate()
@@ -240,7 +244,7 @@ class CompositeOptimizer:
         equity_curve: np.ndarray,
         trade_count: int,
         total_days: int,
-        annualization_factor: float = 252.0
+        annualization_factor: float = 252.0,
     ) -> Dict[str, float]:
         """Calculate composite score with all components"""
         if len(equity_curve) < 2:
@@ -257,7 +261,7 @@ class CompositeOptimizer:
             returns,
             benchmark_sharpe=self.benchmark_sharpe,
             annualization_factor=annualization_factor,
-            trade_count=trade_count
+            trade_count=trade_count,
         )
         psr_score = psr
 
@@ -306,7 +310,7 @@ class CompositeOptimizer:
     def create_optuna_study(
         study_name: str = "composite_optimization",
         storage_path: str = "sqlite:///optuna_composite.db",
-        load_if_exists: bool = True
+        load_if_exists: bool = True,
     ) -> optuna.Study:
         """Create Optuna study"""
         sampler = optuna.samplers.TPESampler(

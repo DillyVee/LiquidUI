@@ -2,24 +2,26 @@
 Robustness Testing Framework
 Nested CV, walk-forward, parameter stability, Monte Carlo, and statistical validation
 """
-import pandas as pd
-import numpy as np
-from typing import Dict, List, Tuple, Optional, Callable, Any
-from dataclasses import dataclass
+
 import itertools
+import warnings
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+import numpy as np
+import pandas as pd
 from scipy import stats
 from sklearn.model_selection import TimeSeriesSplit
-import warnings
 
 from infrastructure.logger import quant_logger
 
-
-logger = quant_logger.get_logger('robustness')
+logger = quant_logger.get_logger("robustness")
 
 
 @dataclass
 class RobustnessResult:
     """Result from robustness testing"""
+
     test_name: str
     passed: bool
     score: float
@@ -40,7 +42,7 @@ class NestedCrossValidation:
         self,
         n_outer_splits: int = 5,
         n_inner_splits: int = 3,
-        min_train_size: int = 252  # 1 year of daily data
+        min_train_size: int = 252,  # 1 year of daily data
     ):
         self.n_outer_splits = n_outer_splits
         self.n_inner_splits = n_inner_splits
@@ -51,7 +53,7 @@ class NestedCrossValidation:
         data: pd.DataFrame,
         strategy_func: Callable,
         param_grid: Dict[str, List[Any]],
-        metric_func: Callable[[pd.Series], float]
+        metric_func: Callable[[pd.Series], float],
     ) -> Dict[str, Any]:
         """
         Run nested cross-validation
@@ -65,7 +67,9 @@ class NestedCrossValidation:
         Returns:
             Dictionary with results
         """
-        logger.info(f"Starting nested CV: {self.n_outer_splits} outer, {self.n_inner_splits} inner splits")
+        logger.info(
+            f"Starting nested CV: {self.n_outer_splits} outer, {self.n_inner_splits} inner splits"
+        )
 
         outer_cv = TimeSeriesSplit(n_splits=self.n_outer_splits)
         inner_cv = TimeSeriesSplit(n_splits=self.n_inner_splits)
@@ -73,7 +77,9 @@ class NestedCrossValidation:
         outer_scores = []
         best_params_per_fold = []
 
-        for fold_idx, (outer_train_idx, outer_test_idx) in enumerate(outer_cv.split(data)):
+        for fold_idx, (outer_train_idx, outer_test_idx) in enumerate(
+            outer_cv.split(data)
+        ):
             logger.info(f"Outer fold {fold_idx + 1}/{self.n_outer_splits}")
 
             outer_train = data.iloc[outer_train_idx]
@@ -111,7 +117,9 @@ class NestedCrossValidation:
                     best_inner_score = avg_inner_score
                     best_params = params
 
-            logger.info(f"Best params for fold {fold_idx}: {best_params}, score: {best_inner_score:.4f}")
+            logger.info(
+                f"Best params for fold {fold_idx}: {best_params}, score: {best_inner_score:.4f}"
+            )
             best_params_per_fold.append(best_params)
 
             # Outer loop: test with best params
@@ -130,13 +138,13 @@ class NestedCrossValidation:
         valid_scores = outer_scores[~np.isnan(outer_scores)]
 
         results = {
-            'mean_score': np.mean(valid_scores),
-            'std_score': np.std(valid_scores),
-            'min_score': np.min(valid_scores),
-            'max_score': np.max(valid_scores),
-            'all_scores': outer_scores.tolist(),
-            'best_params_per_fold': best_params_per_fold,
-            'n_successful_folds': len(valid_scores)
+            "mean_score": np.mean(valid_scores),
+            "std_score": np.std(valid_scores),
+            "min_score": np.min(valid_scores),
+            "max_score": np.max(valid_scores),
+            "all_scores": outer_scores.tolist(),
+            "best_params_per_fold": best_params_per_fold,
+            "n_successful_folds": len(valid_scores),
         }
 
         logger.info(
@@ -155,8 +163,8 @@ class WalkForwardAnalysis:
     def __init__(
         self,
         train_window: int = 252,  # 1 year
-        test_window: int = 63,    # 3 months
-        step_size: int = 21       # 1 month
+        test_window: int = 63,  # 3 months
+        step_size: int = 21,  # 1 month
     ):
         self.train_window = train_window
         self.test_window = test_window
@@ -167,7 +175,7 @@ class WalkForwardAnalysis:
         data: pd.DataFrame,
         strategy_func: Callable,
         param_grid: Dict[str, List[Any]],
-        metric_func: Callable[[pd.Series], float]
+        metric_func: Callable[[pd.Series], float],
     ) -> Dict[str, Any]:
         """
         Run walk-forward analysis
@@ -187,11 +195,11 @@ class WalkForwardAnalysis:
         )
 
         results = {
-            'train_scores': [],
-            'test_scores': [],
-            'best_params': [],
-            'train_periods': [],
-            'test_periods': []
+            "train_scores": [],
+            "test_scores": [],
+            "best_params": [],
+            "train_periods": [],
+            "test_periods": [],
         }
 
         param_combinations = list(itertools.product(*param_grid.values()))
@@ -237,11 +245,15 @@ class WalkForwardAnalysis:
                 test_returns = strategy_func(train_data, test_data, **best_params)
                 test_score = metric_func(test_returns)
 
-                results['train_scores'].append(best_score)
-                results['test_scores'].append(test_score)
-                results['best_params'].append(best_params)
-                results['train_periods'].append((train_data.index[0], train_data.index[-1]))
-                results['test_periods'].append((test_data.index[0], test_data.index[-1]))
+                results["train_scores"].append(best_score)
+                results["test_scores"].append(test_score)
+                results["best_params"].append(best_params)
+                results["train_periods"].append(
+                    (train_data.index[0], train_data.index[-1])
+                )
+                results["test_periods"].append(
+                    (test_data.index[0], test_data.index[-1])
+                )
 
                 logger.info(
                     f"Train score: {best_score:.4f}, Test score: {test_score:.4f}, "
@@ -255,15 +267,18 @@ class WalkForwardAnalysis:
             start_idx += self.step_size
 
         # Calculate degradation (train vs test)
-        train_scores = np.array(results['train_scores'])
-        test_scores = np.array(results['test_scores'])
+        train_scores = np.array(results["train_scores"])
+        test_scores = np.array(results["test_scores"])
 
-        results['avg_train_score'] = np.mean(train_scores)
-        results['avg_test_score'] = np.mean(test_scores)
-        results['score_degradation'] = results['avg_train_score'] - results['avg_test_score']
-        results['degradation_pct'] = (
-            results['score_degradation'] / abs(results['avg_train_score'])
-            if results['avg_train_score'] != 0 else np.nan
+        results["avg_train_score"] = np.mean(train_scores)
+        results["avg_test_score"] = np.mean(test_scores)
+        results["score_degradation"] = (
+            results["avg_train_score"] - results["avg_test_score"]
+        )
+        results["degradation_pct"] = (
+            results["score_degradation"] / abs(results["avg_train_score"])
+            if results["avg_train_score"] != 0
+            else np.nan
         )
 
         logger.info(
@@ -286,9 +301,7 @@ class MonteCarloValidation:
         np.random.seed(random_seed)
 
     def bootstrap_returns(
-        self,
-        returns: pd.Series,
-        metric_func: Callable[[pd.Series], float]
+        self, returns: pd.Series, metric_func: Callable[[pd.Series], float]
     ) -> Tuple[float, float, List[float]]:
         """
         Bootstrap confidence intervals for a performance metric
@@ -315,14 +328,14 @@ class MonteCarloValidation:
         return (
             np.mean(bootstrap_metrics),
             np.std(bootstrap_metrics),
-            bootstrap_metrics.tolist()
+            bootstrap_metrics.tolist(),
         )
 
     def block_bootstrap(
         self,
         returns: pd.Series,
         block_size: int,
-        metric_func: Callable[[pd.Series], float]
+        metric_func: Callable[[pd.Series], float],
     ) -> Tuple[float, float, List[float]]:
         """
         Block bootstrap for time series (preserves autocorrelation)
@@ -335,7 +348,9 @@ class MonteCarloValidation:
         Returns:
             (mean, std, distribution)
         """
-        logger.info(f"Running block bootstrap: block_size={block_size}, n_sims={self.n_simulations}")
+        logger.info(
+            f"Running block bootstrap: block_size={block_size}, n_sims={self.n_simulations}"
+        )
 
         n_obs = len(returns)
         n_blocks = int(np.ceil(n_obs / block_size))
@@ -348,7 +363,7 @@ class MonteCarloValidation:
 
             for _ in range(n_blocks):
                 start_idx = np.random.randint(0, max(1, n_obs - block_size + 1))
-                block = returns.iloc[start_idx:start_idx + block_size]
+                block = returns.iloc[start_idx : start_idx + block_size]
                 sampled_returns.extend(block.values)
 
             # Trim to original length
@@ -362,14 +377,14 @@ class MonteCarloValidation:
         return (
             np.mean(bootstrap_metrics),
             np.std(bootstrap_metrics),
-            bootstrap_metrics.tolist()
+            bootstrap_metrics.tolist(),
         )
 
     def permutation_test(
         self,
         returns: pd.Series,
         metric_func: Callable[[pd.Series], float],
-        null_hypothesis_value: float = 0.0
+        null_hypothesis_value: float = 0.0,
     ) -> Tuple[float, float]:
         """
         Permutation test for statistical significance
@@ -399,8 +414,10 @@ class MonteCarloValidation:
         null_distribution = np.array(null_distribution)
 
         # Calculate p-value (two-tailed)
-        p_value = np.mean(np.abs(null_distribution - null_hypothesis_value) >=
-                         np.abs(observed_metric - null_hypothesis_value))
+        p_value = np.mean(
+            np.abs(null_distribution - null_hypothesis_value)
+            >= np.abs(observed_metric - null_hypothesis_value)
+        )
 
         logger.info(f"Observed: {observed_metric:.4f}, p-value: {p_value:.4f}")
 
@@ -418,7 +435,7 @@ class ParameterStabilityAnalyzer:
         strategy_func: Callable,
         base_params: Dict[str, Any],
         param_ranges: Dict[str, np.ndarray],
-        metric_func: Callable[[pd.Series], float]
+        metric_func: Callable[[pd.Series], float],
     ) -> pd.DataFrame:
         """
         Perform sensitivity analysis on parameters
@@ -449,26 +466,20 @@ class ParameterStabilityAnalyzer:
                     returns = strategy_func(data, data, **test_params)
                     score = metric_func(returns)
 
-                    results.append({
-                        'parameter': param_name,
-                        'value': value,
-                        'score': score
-                    })
+                    results.append(
+                        {"parameter": param_name, "value": value, "score": score}
+                    )
 
                 except Exception as e:
                     logger.warning(f"Failed for {param_name}={value}: {e}")
-                    results.append({
-                        'parameter': param_name,
-                        'value': value,
-                        'score': np.nan
-                    })
+                    results.append(
+                        {"parameter": param_name, "value": value, "score": np.nan}
+                    )
 
         return pd.DataFrame(results)
 
     def stability_score(
-        self,
-        sensitivity_df: pd.DataFrame,
-        threshold_pct: float = 0.20
+        self, sensitivity_df: pd.DataFrame, threshold_pct: float = 0.20
     ) -> Dict[str, float]:
         """
         Calculate stability score for each parameter
@@ -484,9 +495,9 @@ class ParameterStabilityAnalyzer:
         """
         stability_scores = {}
 
-        for param_name in sensitivity_df['parameter'].unique():
-            param_data = sensitivity_df[sensitivity_df['parameter'] == param_name]
-            scores = param_data['score'].dropna()
+        for param_name in sensitivity_df["parameter"].unique():
+            param_data = sensitivity_df[sensitivity_df["parameter"] == param_name]
+            scores = param_data["score"].dropna()
 
             if len(scores) == 0:
                 stability_scores[param_name] = 0.0
@@ -509,9 +520,7 @@ class RegimeAnalysis:
 
     @staticmethod
     def detect_volatility_regimes(
-        returns: pd.Series,
-        window: int = 60,
-        n_regimes: int = 3
+        returns: pd.Series, window: int = 60, n_regimes: int = 3
     ) -> pd.Series:
         """
         Detect volatility regimes
@@ -536,15 +545,14 @@ class RegimeAnalysis:
 
         regime_thresholds = vol.quantile(quantiles)
 
-        regimes = pd.cut(vol, bins=regime_thresholds, labels=range(n_regimes), include_lowest=True)
+        regimes = pd.cut(
+            vol, bins=regime_thresholds, labels=range(n_regimes), include_lowest=True
+        )
 
         return regimes
 
     @staticmethod
-    def detect_trend_regimes(
-        prices: pd.Series,
-        window: int = 60
-    ) -> pd.Series:
+    def detect_trend_regimes(prices: pd.Series, window: int = 60) -> pd.Series:
         """
         Detect trend regimes (up/down/sideways)
 
@@ -561,16 +569,14 @@ class RegimeAnalysis:
         trend = (prices - sma) / sma
 
         regimes = pd.Series(index=prices.index, dtype=int)
-        regimes[trend > 0.02] = 1   # Up trend
+        regimes[trend > 0.02] = 1  # Up trend
         regimes[trend < -0.02] = -1  # Down trend
         regimes[(trend >= -0.02) & (trend <= 0.02)] = 0  # Sideways
 
         return regimes
 
     def performance_by_regime(
-        self,
-        returns: pd.Series,
-        regimes: pd.Series
+        self, returns: pd.Series, regimes: pd.Series
     ) -> pd.DataFrame:
         """
         Calculate performance metrics by regime
@@ -588,19 +594,23 @@ class RegimeAnalysis:
             if pd.isna(regime_label):
                 continue
 
-            regime_mask = (regimes == regime_label)
+            regime_mask = regimes == regime_label
             regime_returns = returns[regime_mask]
 
             if len(regime_returns) < 10:  # Skip if too few observations
                 continue
 
             metrics = {
-                'regime': regime_label,
-                'n_periods': len(regime_returns),
-                'mean_return': regime_returns.mean(),
-                'volatility': regime_returns.std(),
-                'sharpe': regime_returns.mean() / regime_returns.std() if regime_returns.std() > 0 else 0,
-                'hit_rate': (regime_returns > 0).mean()
+                "regime": regime_label,
+                "n_periods": len(regime_returns),
+                "mean_return": regime_returns.mean(),
+                "volatility": regime_returns.std(),
+                "sharpe": (
+                    regime_returns.mean() / regime_returns.std()
+                    if regime_returns.std() > 0
+                    else 0
+                ),
+                "hit_rate": (regime_returns > 0).mean(),
             }
 
             results.append(metrics)
