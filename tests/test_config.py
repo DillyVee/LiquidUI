@@ -18,16 +18,16 @@ def test_project_structure():
     project_root = Path(__file__).parent.parent
     assert (project_root / "config").exists(), "config directory should exist"
     assert (project_root / "backtest").exists(), "backtest directory should exist"
-    assert (project_root / "optimization").exists(), "optimization directory should exist"
+    assert (
+        project_root / "optimization"
+    ).exists(), "optimization directory should exist"
     assert (project_root / "risk").exists(), "risk directory should exist"
 
 
 def test_requirements_files():
     """Test that requirements files exist"""
     project_root = Path(__file__).parent.parent
-    assert (
-        project_root / "requirements.txt"
-    ).exists(), "requirements.txt should exist"
+    assert (project_root / "requirements.txt").exists(), "requirements.txt should exist"
     assert (
         project_root / "requirements-test.txt"
     ).exists(), "requirements-test.txt should exist"
