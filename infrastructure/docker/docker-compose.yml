@@ -1,0 +1,223 @@
+version: '3.8'
+
+# Production Quant Trading Pipeline Stack
+# Services: Database, Redis, Airflow, Monitoring, Application
+
+services:
+  # ============================================================================
+  # Data Storage
+  # ============================================================================
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: quant_postgres
+    environment:
+      POSTGRES_USER: quant
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: quant_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quant"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - quant_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: quant_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - quant_network
+
+  # ============================================================================
+  # Airflow Orchestration
+  # ============================================================================
+
+  airflow-webserver:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile
+      target: airflow
+    container_name: quant_airflow_webserver
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://quant:${POSTGRES_PASSWORD:-changeme}@postgres/quant_db
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://quant:${POSTGRES_PASSWORD:-changeme}@postgres/quant_db
+      AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+      AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+      AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth'
+    volumes:
+      - ./infrastructure/airflow/dags:/opt/airflow/dags
+      - ./infrastructure/airflow/logs:/opt/airflow/logs
+      - ./infrastructure/airflow/plugins:/opt/airflow/plugins
+      - airflow_data:/opt/airflow
+    ports:
+      - "8080:8080"
+    command: webserver
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - quant_network
+
+  airflow-scheduler:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile
+      target: airflow
+    container_name: quant_airflow_scheduler
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://quant:${POSTGRES_PASSWORD:-changeme}@postgres/quant_db
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://quant:${POSTGRES_PASSWORD:-changeme}@postgres/quant_db
+      AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+    volumes:
+      - ./infrastructure/airflow/dags:/opt/airflow/dags
+      - ./infrastructure/airflow/logs:/opt/airflow/logs
+      - ./infrastructure/airflow/plugins:/opt/airflow/plugins
+      - airflow_data:/opt/airflow
+    command: scheduler
+    networks:
+      - quant_network
+
+  airflow-worker:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile
+      target: airflow
+    container_name: quant_airflow_worker
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://quant:${POSTGRES_PASSWORD:-changeme}@postgres/quant_db
+      AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://quant:${POSTGRES_PASSWORD:-changeme}@postgres/quant_db
+      AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/0
+      AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY}
+    volumes:
+      - ./infrastructure/airflow/dags:/opt/airflow/dags
+      - ./infrastructure/airflow/logs:/opt/airflow/logs
+      - ./infrastructure/airflow/plugins:/opt/airflow/plugins
+      - airflow_data:/opt/airflow
+    command: celery worker
+    networks:
+      - quant_network
+
+  # ============================================================================
+  # Monitoring Stack
+  # ============================================================================
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: quant_prometheus
+    volumes:
+      - ./infrastructure/monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    ports:
+      - "9090:9090"
+    networks:
+      - quant_network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: quant_grafana
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_INSTALL_PLUGINS: grafana-clock-panel
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infrastructure/monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./infrastructure/monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    ports:
+      - "3000:3000"
+    networks:
+      - quant_network
+
+  # ============================================================================
+  # Main Application
+  # ============================================================================
+
+  quant_app:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile
+      target: production
+    container_name: quant_app
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      DATABASE_URL: postgresql://quant:${POSTGRES_PASSWORD:-changeme}@postgres/quant_db
+      REDIS_URL: redis://redis:6379/0
+      ENVIRONMENT: production
+    volumes:
+      - ./data_layer:/app/data_layer
+      - ./logs:/app/logs
+      - ./models:/app/models
+    ports:
+      - "8000:8000"
+    networks:
+      - quant_network
+    restart: unless-stopped
+
+  # ============================================================================
+  # Jupyter Notebook (Development)
+  # ============================================================================
+
+  jupyter:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile
+      target: development
+    container_name: quant_jupyter
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./:/app
+      - jupyter_data:/home/quant/.jupyter
+    environment:
+      JUPYTER_ENABLE_LAB: "yes"
+    networks:
+      - quant_network
+
+volumes:
+  postgres_data:
+  redis_data:
+  airflow_data:
+  prometheus_data:
+  grafana_data:
+  jupyter_data:
+
+networks:
+  quant_network:
+    driver: bridge
