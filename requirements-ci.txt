@@ -1,0 +1,40 @@
+# CI/CD Requirements - Minimal dependencies for testing
+# Updated: 2025-11-17
+
+# Core Data Processing
+pandas>=2.1.0
+numpy>=1.24.0
+scipy>=1.11.0
+pyarrow>=14.0.0
+
+# Market Data
+yfinance>=0.2.30
+
+# Machine Learning
+scikit-learn>=1.3.0
+statsmodels>=0.14.0
+
+# Utilities
+python-dotenv>=1.0.0
+pyyaml>=6.0.1
+requests>=2.31.0
+
+# Charts (for backtest visualizations)
+matplotlib>=3.8.0
+seaborn>=0.13.0
+
+# Performance
+numba>=0.58.0
+bottleneck>=1.3.7
+
+# Monitoring
+prometheus-client>=0.18.0
+
+# Database (for tests)
+SQLAlchemy>=2.0.0
+
+# Optimization
+optuna>=3.4.0
+
+# Note: This excludes PyQt6, Apache Airflow, QuantLib, and other
+# packages that cause CI failures or aren't needed for core tests
