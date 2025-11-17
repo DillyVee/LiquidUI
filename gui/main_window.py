@@ -3166,8 +3166,17 @@ Add this as a method to MainWindow and call it before running walk-forward
 
             # Get regime stability if available (default to 0.5)
             regime_stability = 0.5
+            regime_confidence = None
+            current_regime = None
             if self.current_regime_state:
                 regime_stability = self.current_regime_state.transition_probability
+                regime_confidence = self.current_regime_state.confidence
+                current_regime = self.current_regime_state.current_regime
+
+            # Enhanced PBR parameters
+            n_models_tested = 1  # Not doing multi-model search (yet)
+            optimization_method = "grid_search"  # Current optimization approach
+            model_type = "indicator"  # Using technical indicators (MACD, etc.)
 
             print(f"\n📊 BACKTEST INPUTS:")
             print(f"   Sharpe Ratio: {backtest_sharpe:.2f}")
@@ -3176,8 +3185,12 @@ Add this as a method to MainWindow and call it before running walk-forward
             print(f"   Parameters Optimized: {n_parameters}")
             print(f"   WF Efficiency: {walk_forward_efficiency:.1%}")
             print(f"   Regime Stability: {regime_stability:.1%}")
+            if regime_confidence:
+                print(f"   Regime Confidence: {regime_confidence:.1%}")
+            if current_regime:
+                print(f"   Current Regime: {current_regime.value}")
 
-            # Calculate PBR
+            # Calculate Enhanced PBR
             pbr, pbr_details = PBRCalculator.calculate_pbr(
                 backtest_sharpe=backtest_sharpe,
                 backtest_return=backtest_return,
@@ -3185,6 +3198,12 @@ Add this as a method to MainWindow and call it before running walk-forward
                 n_parameters=n_parameters,
                 walk_forward_efficiency=walk_forward_efficiency,
                 current_regime_stability=regime_stability,
+                regime_confidence=regime_confidence,
+                current_regime=current_regime,
+                sharpe_by_regime=None,  # Would need per-regime backtests
+                n_models_tested=n_models_tested,
+                optimization_method=optimization_method,
+                model_type=model_type,
             )
 
             interpretation = PBRCalculator.interpret_pbr(pbr)
@@ -3199,29 +3218,33 @@ Add this as a method to MainWindow and call it before running walk-forward
                 f"{pbr:.1%}</span><br>"
                 f"<b>Interpretation:</b> {interpretation}<br>"
                 f"<b>Contributing Factors:</b><br>"
-                f"  • Sharpe: {pbr_details['sharpe_contribution']:.1%} | "
+                f"  • Sharpe: {pbr_details['sharpe_probability']:.1%} | "
                 f"Sample Size: {pbr_details['sample_size_factor']:.1%}<br>"
                 f"  • Overfitting: {pbr_details['overfitting_factor']:.1%} | "
-                f"Walk-Forward: {pbr_details['walkforward_factor']:.1%}<br>"
-                f"  • Regime Stability: {pbr_details['regime_stability_factor']:.1%}"
+                f"Selection Bias: {pbr_details['selection_bias_factor']:.1%}<br>"
+                f"  • Walk-Forward: {pbr_details['walkforward_factor']:.1%} | "
+                f"Regime Factor: {pbr_details['regime_factor']:.1%}<br>"
+                f"  • Dispersion: {pbr_details['dispersion_factor']:.1%} | "
+                f"Effective DoF: {pbr_details['effective_dof']:.1f}"
             )
 
             self.pbr_display.setText(display_text)
 
-            print(f"\n🎯 PBR ANALYSIS:")
+            print(f"\n🎯 ENHANCED PBR ANALYSIS:")
             print(f"   PBR Score: {pbr:.1%}")
             print(f"   Interpretation: {interpretation}")
 
             print(f"\n   Contributing Factors:")
-            print(
-                f"      Sharpe Contribution: {pbr_details['sharpe_contribution']:.1%}"
-            )
+            print(f"      Sharpe Probability: {pbr_details['sharpe_probability']:.1%}")
             print(f"      Sample Size Factor: {pbr_details['sample_size_factor']:.1%}")
             print(f"      Overfitting Factor: {pbr_details['overfitting_factor']:.1%}")
-            print(f"      Walk-Forward Factor: {pbr_details['walkforward_factor']:.1%}")
             print(
-                f"      Regime Stability: {pbr_details['regime_stability_factor']:.1%}"
+                f"      Selection Bias Factor (EMS): {pbr_details['selection_bias_factor']:.1%}"
             )
+            print(f"      Walk-Forward Factor: {pbr_details['walkforward_factor']:.1%}")
+            print(f"      Regime Factor: {pbr_details['regime_factor']:.1%}")
+            print(f"      Dispersion Factor: {pbr_details['dispersion_factor']:.1%}")
+            print(f"      Effective DoF: {pbr_details['effective_dof']:.1f}")
 
             print(f"\n✅ ASSESSMENT:")
             if pbr > 0.80:

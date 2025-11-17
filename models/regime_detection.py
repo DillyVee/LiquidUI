@@ -624,15 +624,165 @@ class MarketRegimeDetector:
 
 class PBRCalculator:
     """
-    Probability of Backtested Returns (PBR)
+    Enhanced Probability of Backtested Returns (PBR)
+
+    Institutional-grade implementation with:
+    - Expected Maximum Sharpe (EMS) selection penalty
+    - Effective degrees of freedom calculation
+    - Regime performance dispersion
+    - Smooth sigmoid functions (no hard thresholds)
+    - Enhanced regime factor calculation
 
     Calculates the probability that live trading returns will match or exceed
     backtested returns, accounting for:
     - Statistical uncertainty
+    - Data mining / selection bias
     - Overfitting risk
-    - Market regime changes
+    - Regime-dependent performance
     - Sample size
     """
+
+    @staticmethod
+    def _sigmoid(x: float, center: float = 0.5, steepness: float = 10.0) -> float:
+        """
+        Smooth sigmoid function (replaces hard thresholds)
+
+        Args:
+            x: Input value
+            center: Center point of sigmoid
+            steepness: How steep the transition (higher = closer to step function)
+
+        Returns:
+            Value in [0, 1]
+        """
+        return 1.0 / (1.0 + np.exp(-steepness * (x - center)))
+
+    @staticmethod
+    def _effective_degrees_of_freedom(
+        n_parameters: int,
+        optimization_method: str = "grid_search",
+        model_type: str = "indicator",
+    ) -> float:
+        """
+        Calculate effective degrees of freedom (not just raw parameter count)
+
+        Args:
+            n_parameters: Raw number of parameters
+            optimization_method: 'grid_search', 'random', 'bayesian', 'gradient'
+            model_type: 'indicator', 'ml_tree', 'ml_linear', 'ensemble'
+
+        Returns:
+            Effective DoF (accounts for search space and model complexity)
+        """
+        # Base: raw parameters
+        effective_dof = n_parameters
+
+        # Adjustment for optimization method
+        method_multipliers = {
+            "grid_search": 1.5,  # Searches exhaustively
+            "random": 1.2,  # Samples randomly
+            "bayesian": 1.0,  # Targeted search
+            "gradient": 0.8,  # Continuous optimization
+        }
+        effective_dof *= method_multipliers.get(optimization_method, 1.0)
+
+        # Adjustment for model type
+        type_multipliers = {
+            "indicator": 1.0,  # Simple indicators
+            "ml_linear": 1.2,  # Linear models
+            "ml_tree": 1.5,  # Decision trees (more flexible)
+            "ensemble": 2.0,  # Ensembles (very flexible)
+        }
+        effective_dof *= type_multipliers.get(model_type, 1.0)
+
+        return effective_dof
+
+    @staticmethod
+    def _selection_penalty(n_models_tested: int) -> float:
+        """
+        Expected Maximum Sharpe (EMS) selection penalty
+
+        Penalizes testing many model variations
+        Based on Bailey & de Prado (2014)
+
+        Args:
+            n_models_tested: Number of strategies/variations tested
+
+        Returns:
+            Selection penalty factor (0-1, lower for more testing)
+        """
+        if n_models_tested <= 1:
+            return 1.0
+
+        # Penalty increases with log of number of tests
+        penalty = 1.0 / np.sqrt(np.log(n_models_tested + 1))
+        return max(0.3, penalty)  # Floor at 0.3
+
+    @staticmethod
+    def _regime_dispersion_factor(sharpe_by_regime: Dict[MarketRegime, float]) -> float:
+        """
+        Calculate regime performance dispersion
+
+        Penalizes strategies that work in only one regime
+
+        Args:
+            sharpe_by_regime: Sharpe ratio in each regime
+
+        Returns:
+            Dispersion factor (0-1, lower for high dispersion)
+        """
+        if not sharpe_by_regime or len(sharpe_by_regime) < 2:
+            return 0.7  # Neutral if no regime data
+
+        sharpes = list(sharpe_by_regime.values())
+
+        # Calculate standard deviation of Sharpe across regimes
+        std_sharpe = np.std(sharpes)
+
+        # Lower dispersion = better (more consistent across regimes)
+        # Typical std_sharpe ranges from 0 (perfect) to 2+ (regime-dependent)
+        dispersion_factor = 1.0 / (1.0 + std_sharpe)
+
+        return max(0.3, dispersion_factor)  # Floor at 0.3
+
+    @staticmethod
+    def _enhanced_regime_factor(
+        regime_confidence: float,
+        stay_probability: float,
+        current_regime: MarketRegime = None,
+    ) -> float:
+        """
+        Enhanced regime factor calculation
+
+        Combines:
+        - Regime detection confidence
+        - Transition probability (regime stability)
+        - Regime-specific risk premia
+
+        Args:
+            regime_confidence: Confidence in current regime detection (0-1)
+            stay_probability: Probability of staying in regime (0-1)
+            current_regime: Current regime (for risk premium adjustment)
+
+        Returns:
+            Enhanced regime factor (0-1)
+        """
+        # Base: blend confidence and stability
+        base_factor = 0.5 + 0.3 * stay_probability + 0.2 * regime_confidence
+
+        # Regime-specific risk premia (some regimes inherently more uncertain)
+        if current_regime is not None:
+            regime_premia = {
+                MarketRegime.BULL: 1.0,  # Stable, predictable
+                MarketRegime.BEAR: 0.9,  # Somewhat predictable
+                MarketRegime.LOW_VOL: 0.95,  # Very stable
+                MarketRegime.HIGH_VOL: 0.7,  # Unstable, unpredictable
+                MarketRegime.CRISIS: 0.5,  # Extremely uncertain
+            }
+            regime_premium = regime_premia.get(current_regime, 0.8)
+            base_factor *= regime_premium
+
+        return np.clip(base_factor, 0.0, 1.0)
 
     @staticmethod
     def calculate_pbr(
@@ -642,84 +792,121 @@ class PBRCalculator:
         n_parameters: int,
         walk_forward_efficiency: float = None,
         current_regime_stability: float = None,
+        regime_confidence: float = None,
+        current_regime: MarketRegime = None,
+        sharpe_by_regime: Dict[MarketRegime, float] = None,
+        n_models_tested: int = 1,
+        optimization_method: str = "grid_search",
+        model_type: str = "indicator",
     ) -> Tuple[float, Dict[str, float]]:
         """
-        Calculate Probability of Backtested Returns
+        Calculate Enhanced Probability of Backtested Returns
 
         Args:
             backtest_sharpe: Backtested Sharpe ratio
             backtest_return: Backtested annualized return
             n_trades: Number of trades in backtest
-            n_parameters: Number of optimized parameters
+            n_parameters: Number of optimized parameters (raw count)
             walk_forward_efficiency: WF efficiency (0-1), if available
-            current_regime_stability: Regime stability (0-1), if available
+            current_regime_stability: Regime stability (stay probability), if available
+            regime_confidence: Confidence in regime detection (0-1), if available
+            current_regime: Current market regime, if available
+            sharpe_by_regime: Dict of Sharpe per regime, if available
+            n_models_tested: Number of strategy variations tested (for selection penalty)
+            optimization_method: Method used for optimization
+            model_type: Type of model (indicator, ml_tree, etc.)
 
         Returns:
             (pbr_score, details_dict)
         """
-        # 1. Base probability from Sharpe ratio
-        # Higher Sharpe = higher base probability
+        # 1. Base probability from Sharpe ratio (smooth sigmoid)
+        # Use sigmoid for smooth transition instead of hard thresholds
         if backtest_sharpe <= 0:
             sharpe_prob = 0.1
-        elif backtest_sharpe < 1.0:
-            sharpe_prob = 0.3 + (backtest_sharpe * 0.2)
-        elif backtest_sharpe < 2.0:
-            sharpe_prob = 0.5 + ((backtest_sharpe - 1.0) * 0.3)
         else:
-            sharpe_prob = min(0.95, 0.8 + ((backtest_sharpe - 2.0) * 0.05))
+            # Sigmoid centered at Sharpe=1.5, scaled to [0.3, 0.95]
+            raw_prob = PBRCalculator._sigmoid(
+                backtest_sharpe, center=1.5, steepness=2.0
+            )
+            sharpe_prob = 0.3 + raw_prob * 0.65
 
-        # 2. Sample size adjustment
-        # More trades = more confidence
-        if n_trades < 30:
-            sample_penalty = 0.5
-        elif n_trades < 100:
-            sample_penalty = 0.7
-        elif n_trades < 300:
-            sample_penalty = 0.85
-        else:
-            sample_penalty = 0.95
-
-        # 3. Overfitting penalty
-        # More parameters = more overfitting risk
-        if n_parameters <= 2:
-            overfitting_penalty = 0.95
-        elif n_parameters <= 5:
-            overfitting_penalty = 0.85
-        elif n_parameters <= 10:
-            overfitting_penalty = 0.70
-        else:
-            overfitting_penalty = 0.50
-
-        # 4. Walk-forward efficiency bonus
-        if walk_forward_efficiency is not None:
-            wf_bonus = walk_forward_efficiency
-        else:
-            wf_bonus = 0.7  # Assume moderate if not provided
-
-        # 5. Regime stability bonus
-        if current_regime_stability is not None:
-            regime_bonus = current_regime_stability
-        else:
-            regime_bonus = 0.7  # Assume moderate
-
-        # Combine factors (weighted geometric mean for conservatism)
-        pbr = (
-            (sharpe_prob**0.35)
-            * (sample_penalty**0.25)
-            * (overfitting_penalty**0.20)
-            * (wf_bonus**0.10)
-            * (regime_bonus**0.10)
+        # 2. Sample size factor (smooth sigmoid, not thresholds)
+        # Sigmoid centered at 100 trades
+        sample_factor = 0.5 + 0.45 * PBRCalculator._sigmoid(
+            n_trades, center=100, steepness=0.02
         )
 
-        pbr = np.clip(pbr, 0.01, 0.99)
+        # 3. Effective degrees of freedom (not raw parameter count)
+        effective_dof = PBRCalculator._effective_degrees_of_freedom(
+            n_parameters, optimization_method, model_type
+        )
+
+        # Overfitting penalty based on effective DoF vs sample size
+        # Rule of thumb: need 10 trades per parameter
+        dof_ratio = n_trades / (effective_dof * 10 + 1e-6)
+        overfitting_factor = PBRCalculator._sigmoid(
+            dof_ratio, center=1.0, steepness=2.0
+        )
+        overfitting_factor = 0.4 + 0.6 * overfitting_factor  # Scale to [0.4, 1.0]
+
+        # 4. Selection bias penalty (Expected Maximum Sharpe)
+        selection_factor = PBRCalculator._selection_penalty(n_models_tested)
+
+        # 5. Walk-forward efficiency (smooth sigmoid)
+        if walk_forward_efficiency is not None:
+            # Sigmoid centered at 0.5 efficiency
+            wf_factor = PBRCalculator._sigmoid(
+                walk_forward_efficiency, center=0.5, steepness=4.0
+            )
+            wf_factor = 0.3 + 0.7 * wf_factor  # Scale to [0.3, 1.0]
+        else:
+            wf_factor = 0.7  # Neutral default
+
+        # 6. Enhanced regime factor
+        if current_regime_stability is not None and regime_confidence is not None:
+            regime_factor = PBRCalculator._enhanced_regime_factor(
+                regime_confidence, current_regime_stability, current_regime
+            )
+        elif current_regime_stability is not None:
+            # Fallback: use stability only
+            regime_factor = 0.5 + 0.5 * current_regime_stability
+        else:
+            regime_factor = 0.7  # Neutral default
+
+        # 7. Regime performance dispersion
+        if sharpe_by_regime is not None:
+            dispersion_factor = PBRCalculator._regime_dispersion_factor(
+                sharpe_by_regime
+            )
+        else:
+            dispersion_factor = 0.8  # Neutral default
+
+        # Combine factors (weighted geometric mean for conservatism)
+        # Adjusted weights to include new factors
+        pbr = (
+            (sharpe_prob**0.30)  # Sharpe quality
+            * (sample_factor**0.20)  # Sample size
+            * (overfitting_factor**0.20)  # Overfitting (effective DoF)
+            * (selection_factor**0.10)  # Selection bias (EMS)
+            * (wf_factor**0.10)  # Walk-forward
+            * (regime_factor**0.08)  # Regime stability
+            * (dispersion_factor**0.02)  # Regime dispersion
+        )
+
+        # Final normalization to [0, 1]
+        pbr = np.clip(pbr, 0.0, 1.0)
 
         details = {
-            "sharpe_contribution": sharpe_prob,
-            "sample_size_factor": sample_penalty,
-            "overfitting_factor": overfitting_penalty,
-            "walkforward_factor": wf_bonus,
-            "regime_stability_factor": regime_bonus,
-            "final_pbr": pbr,
+            "sharpe_contribution": float(sharpe_prob),
+            "sample_size_factor": float(sample_factor),
+            "overfitting_factor": float(overfitting_factor),
+            "effective_dof": float(effective_dof),
+            "selection_bias_factor": float(selection_factor),
+            "n_models_tested": n_models_tested,
+            "walkforward_factor": float(wf_factor),
+            "regime_factor": float(regime_factor),
+            "regime_dispersion_factor": float(dispersion_factor),
+            "final_pbr": float(pbr),
         }
 
         return float(pbr), details
@@ -737,3 +924,102 @@ class PBRCalculator:
             return "Low - High risk of underperformance"
         else:
             return "Very Low - Likely overfit, not recommended"
+
+    @staticmethod
+    def generate_scenario_analysis() -> str:
+        """
+        Generate example scenarios demonstrating PBR calculation
+
+        Returns:
+            Formatted scenario analysis
+        """
+        scenarios = []
+
+        # Scenario 1: Overfit strategy
+        pbr1, details1 = PBRCalculator.calculate_pbr(
+            backtest_sharpe=3.0,
+            backtest_return=0.50,
+            n_trades=25,
+            n_parameters=8,
+            walk_forward_efficiency=0.15,
+            current_regime_stability=0.6,
+            n_models_tested=50,  # Tested many variations!
+        )
+        scenarios.append(("Overfit Strategy", pbr1, details1))
+
+        # Scenario 2: Robust strategy
+        pbr2, details2 = PBRCalculator.calculate_pbr(
+            backtest_sharpe=1.5,
+            backtest_return=0.25,
+            n_trades=150,
+            n_parameters=4,
+            walk_forward_efficiency=0.65,
+            current_regime_stability=0.75,
+            regime_confidence=0.85,
+            n_models_tested=5,  # Limited testing
+        )
+        scenarios.append(("Robust Strategy", pbr2, details2))
+
+        # Scenario 3: Regime winner, regime loser
+        regime_sharpes = {
+            MarketRegime.HIGH_VOL: 2.5,  # Great in high vol
+            MarketRegime.BULL: -0.5,  # Terrible in bull
+            MarketRegime.BEAR: -0.3,  # Terrible in bear
+            MarketRegime.LOW_VOL: 0.2,  # Poor in low vol
+            MarketRegime.CRISIS: 0.0,  # Neutral in crisis
+        }
+        pbr3, details3 = PBRCalculator.calculate_pbr(
+            backtest_sharpe=1.8,  # Overall looks good
+            backtest_return=0.35,
+            n_trades=100,
+            n_parameters=5,
+            walk_forward_efficiency=0.55,
+            current_regime_stability=0.70,
+            regime_confidence=0.80,
+            current_regime=MarketRegime.HIGH_VOL,
+            sharpe_by_regime=regime_sharpes,  # But terrible dispersion!
+            n_models_tested=10,
+        )
+        scenarios.append(("Regime-Dependent Strategy", pbr3, details3))
+
+        # Format report
+        report = f"""
+╔══════════════════════════════════════════════════════════════╗
+║              PBR SCENARIO ANALYSIS                           ║
+╚══════════════════════════════════════════════════════════════╝
+"""
+
+        for name, pbr, details in scenarios:
+            report += f"\n{'='*62}\n"
+            report += f"{name}\n"
+            report += f"{'='*62}\n"
+            report += f"PBR Score: {pbr:.1%} ({PBRCalculator.interpret_pbr(pbr)})\n\n"
+            report += f"Component Breakdown:\n"
+            report += (
+                f"  Sharpe Contribution:    {details['sharpe_contribution']:.3f}\n"
+            )
+            report += f"  Sample Size Factor:     {details['sample_size_factor']:.3f}\n"
+            report += f"  Overfitting Factor:     {details['overfitting_factor']:.3f}\n"
+            report += f"    (Effective DoF: {details['effective_dof']:.1f})\n"
+            report += (
+                f"  Selection Bias Factor:  {details['selection_bias_factor']:.3f}\n"
+            )
+            report += f"    (Models Tested: {details['n_models_tested']})\n"
+            report += f"  Walk-Forward Factor:    {details['walkforward_factor']:.3f}\n"
+            report += f"  Regime Factor:          {details['regime_factor']:.3f}\n"
+
+            if "regime_dispersion_factor" in details:
+                report += f"  Regime Dispersion:      {details['regime_dispersion_factor']:.3f}\n"
+
+            report += "\n"
+
+        report += f"{'='*62}\n"
+        report += "\nKey Insights:\n"
+        report += "• Scenario 1: High Sharpe but overfit (few trades, many params, many tests)\n"
+        report += "• Scenario 2: Moderate Sharpe but robust (good sample, good WF, limited testing)\n"
+        report += "• Scenario 3: High overall Sharpe but regime-dependent (fails in most regimes)\n"
+        report += "\nScenario 3 demonstrates the MOST COMMON LIVE FAILURE MODE!\n"
+        report += "Strategy works great in one regime, terrible in others.\n"
+        report += f"{'='*62}\n"
+
+        return report
