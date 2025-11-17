@@ -360,9 +360,7 @@ class RegimePredictor:
             self.feature_names.append("skewness_20d")
 
             # Kurtosis
-            kurt = (
-                stats.kurtosis(recent_returns) if len(recent_returns) >= 10 else 0
-            )
+            kurt = stats.kurtosis(recent_returns) if len(recent_returns) >= 10 else 0
             features.append(kurt)
             self.feature_names.append("kurtosis_20d")
         else:

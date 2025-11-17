@@ -208,14 +208,10 @@ class MarketRegimeDetector:
         # 3. RETURN FEATURES
         # Recent returns (annualized)
         recent_ret_20 = (
-            (1 + returns.tail(20)).prod() ** (252 / 20) - 1
-            if len(returns) >= 20
-            else 0
+            (1 + returns.tail(20)).prod() ** (252 / 20) - 1 if len(returns) >= 20 else 0
         )
         recent_ret_60 = (
-            (1 + returns.tail(60)).prod() ** (252 / 60) - 1
-            if len(returns) >= 60
-            else 0
+            (1 + returns.tail(60)).prod() ** (252 / 60) - 1 if len(returns) >= 60 else 0
         )
 
         features["return_20d_ann"] = recent_ret_20

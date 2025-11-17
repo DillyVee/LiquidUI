@@ -22,17 +22,15 @@ import yfinance as yf
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from models.regime_detection import (MarketRegimeDetector, PBRCalculator,
-                                      RegimeMetrics)
-from models.regime_predictor import (RegimeBasedPositionSizer,
-                                      RegimePredictor)
+from models.regime_detection import MarketRegimeDetector, PBRCalculator, RegimeMetrics
+from models.regime_predictor import RegimeBasedPositionSizer, RegimePredictor
 
 
 def main():
     """Main example"""
-    print("="*80)
+    print("=" * 80)
     print("MARKET REGIME DETECTION & ADAPTIVE POSITION SIZING")
-    print("="*80)
+    print("=" * 80)
 
     # ============================================================================
     # 1. LOAD DATA
@@ -73,9 +71,7 @@ def main():
 
     print(f"\n📊 Regime Probabilities:")
     for regime, prob in sorted(
-        current_state.regime_probabilities.items(),
-        key=lambda x: x[1],
-        reverse=True
+        current_state.regime_probabilities.items(), key=lambda x: x[1], reverse=True
     ):
         bar = "█" * int(prob * 50)
         print(f"   {regime.value:20s} {prob:5.1%} {bar}")
@@ -87,7 +83,9 @@ def main():
 
     regime_stats = detector.get_regime_statistics(prices, returns)
 
-    print(f"\n{'Regime':<20} {'Avg Return':<12} {'Sharpe':<8} {'Max DD':<10} {'Win Rate':<10} {'Avg Days'}")
+    print(
+        f"\n{'Regime':<20} {'Avg Return':<12} {'Sharpe':<8} {'Max DD':<10} {'Win Rate':<10} {'Avg Days'}"
+    )
     print("-" * 80)
 
     for regime, metrics in regime_stats.items():
@@ -133,15 +131,15 @@ def main():
 
     prediction = predictor.predict(prices, returns, horizon_days=5)
 
-    print(f"\n📈 PREDICTED REGIME (5 days ahead): {prediction.predicted_regime.value.upper()}")
+    print(
+        f"\n📈 PREDICTED REGIME (5 days ahead): {prediction.predicted_regime.value.upper()}"
+    )
     print(f"   Confidence:        {prediction.confidence:.1%}")
     print(f"   Model Accuracy:    {prediction.model_accuracy:.1%}")
 
     print(f"\n📊 Predicted Probabilities:")
     for regime, prob in sorted(
-        prediction.regime_probabilities.items(),
-        key=lambda x: x[1],
-        reverse=True
+        prediction.regime_probabilities.items(), key=lambda x: x[1], reverse=True
     ):
         bar = "█" * int(prob * 50)
         print(f"   {regime.value:20s} {prob:5.1%} {bar}")
@@ -225,14 +223,16 @@ def main():
 
     print(f"\n   With Prediction (Forward-Looking):")
     print(f"      Current Regime:        {sizing_with_pred['current_regime']}")
-    print(f"      Prediction Adjustment: {sizing_with_pred['prediction_adjustment']:.2f}x")
+    print(
+        f"      Prediction Adjustment: {sizing_with_pred['prediction_adjustment']:.2f}x"
+    )
     print(f"      Final Position:        {sizing_with_pred['final_size']:.2f}x")
 
     # Calculate impact
     capital = 100000  # $100k
     position_basic = capital * 1.0
-    position_regime_only = capital * sizing_no_pred['position_size']
-    position_regime_pred = capital * sizing_with_pred['final_size']
+    position_regime_only = capital * sizing_no_pred["position_size"]
+    position_regime_pred = capital * sizing_with_pred["final_size"]
 
     print(f"\n💵 Position Size Comparison (for ${capital:,} capital):")
     print(f"      Static (100%):         ${position_basic:,.0f}")
@@ -244,20 +244,16 @@ def main():
     # ============================================================================
     print("\n📊 Generating regime visualization...")
 
-    detector.plot_regime_history(
-        prices,
-        returns,
-        save_path="regime_history.png"
-    )
+    detector.plot_regime_history(prices, returns, save_path="regime_history.png")
 
     print(f"✅ Saved regime visualization to: regime_history.png")
 
     # ============================================================================
     # 9. SUMMARY & RECOMMENDATIONS
     # ============================================================================
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("TRADING RECOMMENDATIONS")
-    print("="*80)
+    print("=" * 80)
 
     print(f"\n🎯 Current Market State:")
     print(f"   • Regime: {current_state.current_regime.value.upper()}")
@@ -266,9 +262,9 @@ def main():
 
     print(f"\n📈 Position Sizing:")
     print(f"   • Recommended: {sizing_with_pred['final_size']:.2f}x base position")
-    if sizing_with_pred['final_size'] > 1.2:
+    if sizing_with_pred["final_size"] > 1.2:
         print(f"   • Action: INCREASE position size (favorable conditions)")
-    elif sizing_with_pred['final_size'] < 0.8:
+    elif sizing_with_pred["final_size"] < 0.8:
         print(f"   • Action: DECREASE position size (unfavorable conditions)")
     else:
         print(f"   • Action: MAINTAIN standard position size")
@@ -289,7 +285,7 @@ def main():
     if prediction.model_accuracy > 0.70:
         print(f"   • RELIABLE PREDICTION: Model has good track record")
 
-    print(f"\n" + "="*80)
+    print(f"\n" + "=" * 80)
 
 
 if __name__ == "__main__":
