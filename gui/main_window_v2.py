@@ -1166,7 +1166,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(100)
         self.phase_label.setText("Optimization complete!")
 
-        # Plot results
+        # Plot results and show summary
         if not df_results.empty:
             best = df_results.iloc[0]
             self._plot_results(best)
@@ -1175,7 +1175,48 @@ class MainWindow(QMainWindow):
             if "trade_log" in best:
                 self.last_trade_log = best["trade_log"]
 
+            # Show results summary
+            self._show_results_summary(best)
+
         self.statusBar().showMessage("Optimization completed successfully")
+
+    def _show_results_summary(self, best: pd.Series):
+        """Display optimization results summary in a message box"""
+        try:
+            psr = best.get("PSR", 0.0)
+            sharpe = best.get("Sharpe_Ratio", 0.0)
+            sortino = best.get("Sortino_Ratio", 0.0)
+            total_return = best.get("Percent_Gain_%", 0.0)
+            max_dd = best.get("Max_Drawdown_%", 0.0)
+            profit_factor = best.get("Profit_Factor", 0.0)
+            trades = best.get("Trade_Count", 0)
+
+            msg = f"""
+Optimization Complete!
+
+📊 Performance Metrics:
+  PSR: {psr:.3f} ({psr*100:.1f}%)
+  Sharpe Ratio: {sharpe:.2f}
+  Sortino Ratio: {sortino:.2f}
+
+  Total Return: {total_return:.2f}%
+  Max Drawdown: {max_dd:.2f}%
+  Profit Factor: {profit_factor:.2f}
+  Total Trades: {trades}
+
+⚙️  Best Parameters:
+  MN1: {best.get('MN1_daily', 'N/A')}
+  MN2: {best.get('MN2_daily', 'N/A')}
+  Entry: {best.get('Entry_daily', 'N/A')}
+  Exit: {best.get('Exit_daily', 'N/A')}
+  ON: {best.get('On_daily', 'N/A')}
+  OFF: {best.get('Off_daily', 'N/A')}
+
+View the equity curve chart below for visual results.
+"""
+            QMessageBox.information(self, "Optimization Results", msg)
+        except Exception as e:
+            print(f"Error displaying results summary: {e}")
 
     def _plot_results(self, best: pd.Series):
         """Plot equity curve with buy/sell signals"""
@@ -1277,7 +1318,9 @@ Parameters:
 
     def run_monte_carlo(self):
         """Run Monte Carlo simulation"""
-        if not self.last_trade_log or self.last_trade_log.empty:
+        if self.last_trade_log is None or (
+            isinstance(self.last_trade_log, pd.DataFrame) and self.last_trade_log.empty
+        ):
             QMessageBox.warning(
                 self, "No Trade Log", "Run optimization first to get trade log"
             )
