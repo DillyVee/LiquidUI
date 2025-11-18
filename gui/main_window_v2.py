@@ -2126,11 +2126,23 @@ Features: {len(self.regime_predictor.feature_names)}
             text += f"  Point Estimate: {sharpe:.3f}\n"
             text += f"  95% CI: [{sharpe_lower:.3f}, {sharpe_upper:.3f}]\n\n"
 
-            # Overall verdict
-            if wrc_result.is_significant and sharpe > 0:
-                verdict = "✅ ROBUST: Strategy shows statistically significant outperformance"
-            elif wrc_result.is_significant:
+            # Overall verdict - must check both significance AND confidence interval
+            # A strategy is only robust if:
+            # 1. White's RC shows significance (p < 0.05)
+            # 2. Sharpe ratio CI excludes zero (lower bound > 0)
+            # 3. Sharpe ratio is meaningfully positive (> 0.5 annualized)
+            ci_excludes_zero = sharpe_lower > 0
+            meaningful_sharpe = sharpe > 0.5  # At least 0.5 Sharpe for "robust"
+
+            if wrc_result.is_significant and ci_excludes_zero and sharpe > 0:
+                if meaningful_sharpe:
+                    verdict = "✅ ROBUST: Strategy shows statistically significant outperformance"
+                else:
+                    verdict = "⚠️ MARGINALLY SIGNIFICANT: Statistically significant but Sharpe ratio is low"
+            elif wrc_result.is_significant and sharpe < 0:
                 verdict = "❌ SIGNIFICANT UNDERPERFORMANCE: Strategy loses money"
+            elif not ci_excludes_zero:
+                verdict = "⚠️ NOT ROBUST: Confidence interval includes zero - performance not statistically different from random"
             else:
                 verdict = "⚠️ NOT ROBUST: Performance may be due to luck or overfitting"
 
