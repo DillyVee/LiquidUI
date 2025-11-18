@@ -1705,9 +1705,21 @@ Training Complete: {'✅ Yes' if self.regime_predictor.is_trained else '❌ No'}
             # Extract metrics from optimization results
             best = self.best_results.iloc[0]
 
-            backtest_sharpe = best.get("Sharpe_Ratio", 0.0)
-            backtest_return = best.get("Percent_Gain_%", 0.0) / 100.0  # Convert to decimal
-            n_trades = int(best.get("Trade_Count", 0))
+            # Debug: Print available columns
+            print(f"Available columns in best_results: {list(self.best_results.columns)}")
+            print(f"Best result values: {dict(best)}")
+
+            backtest_sharpe = float(best.get("Sharpe_Ratio", best.get("sharpe_ratio", 0.0)))
+            backtest_return = float(best.get("Percent_Gain_%", best.get("percent_gain_%", 0.0))) / 100.0
+            n_trades = int(best.get("Trade_Count", best.get("trade_count", 0)))
+
+            if n_trades == 0:
+                QMessageBox.warning(
+                    self,
+                    "Insufficient Trades",
+                    "Need at least 1 trade for PBR calculation",
+                )
+                return
 
             # Count optimized parameters (MN1, MN2, Entry, Exit, On, Off = 6)
             n_parameters = 6
@@ -1716,6 +1728,8 @@ Training Complete: {'✅ Yes' if self.regime_predictor.is_trained else '❌ No'}
             regime_stability = None
             if self.current_regime_state:
                 regime_stability = self.current_regime_state.transition_probability
+
+            print(f"Calling PBRCalculator with: sharpe={backtest_sharpe}, return={backtest_return}, trades={n_trades}")
 
             # Calculate PBR
             pbr_score, pbr_details = PBRCalculator.calculate_pbr(
@@ -1726,6 +1740,8 @@ Training Complete: {'✅ Yes' if self.regime_predictor.is_trained else '❌ No'}
                 walk_forward_efficiency=None,  # Not available in single optimization
                 current_regime_stability=regime_stability,
             )
+
+            print(f"PBR calculation returned: score={pbr_score}, details keys={list(pbr_details.keys())}")
 
             # Update display
             self.pbr_display.setText(f"PBR Score: {pbr_score:.1%}")
@@ -1741,20 +1757,25 @@ Training Complete: {'✅ Yes' if self.regime_predictor.is_trained else '❌ No'}
             text += f"  Number of Trades: {n_trades}\n"
             text += f"  Parameters: {n_parameters}\n\n"
             text += f"Contributing Factors:\n"
-            text += f"  Sharpe Factor: {pbr_details['sharpe_contribution']:.1%}\n"
-            text += f"  Sample Size: {pbr_details['sample_size_factor']:.1%}\n"
-            text += f"  Overfitting Penalty: {pbr_details['overfitting_factor']:.1%}\n"
+            text += f"  Sharpe Factor: {pbr_details.get('sharpe_contribution', 0.0):.1%}\n"
+            text += f"  Sample Size: {pbr_details.get('sample_size_factor', 0.0):.1%}\n"
+            text += f"  Overfitting Penalty: {pbr_details.get('overfitting_factor', 0.0):.1%}\n"
+
+            if regime_stability is not None:
+                text += f"  Regime Stability: {pbr_details.get('regime_factor', 0.0):.1%}\n"
 
             self.institutional_display.append(text)
             self.institutional_display.append("\n" + "=" * 50 + "\n")
 
-            self.statusBar().showMessage("PBR calculated")
+            self.statusBar().showMessage("PBR calculated successfully")
 
         except Exception as e:
-            QMessageBox.critical(self, "PBR Error", str(e))
+            error_msg = f"PBR calculation failed: {str(e)}"
+            QMessageBox.critical(self, "PBR Error", error_msg)
             import traceback
 
             traceback.print_exc()
+            self.statusBar().showMessage("PBR calculation failed")
 
     def calibrate_probabilities(self):
         """Calibrate regime prediction probabilities"""
