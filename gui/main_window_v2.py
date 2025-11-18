@@ -2041,6 +2041,9 @@ Features: {len(self.regime_predictor.feature_names)}
             return
 
         self.statusBar().showMessage("Running robustness tests (this may take a minute)...")
+        print("\n" + "="*70)
+        print("ROBUSTNESS TEST DIAGNOSTICS")
+        print("="*70)
 
         try:
             from models.regime_robustness import (
@@ -2051,15 +2054,23 @@ Features: {len(self.regime_predictor.feature_names)}
             # Get price data for benchmark
             df = self.df_dict["daily"]
             prices = df["Close"]
-            benchmark_returns = prices.pct_change().dropna().values
+
+            print(f"Total daily price data: {len(prices)} days")
+            print(f"Date range: {df.index[0]} to {df.index[-1]}")
 
             # Calculate strategy returns from equity curve if available
             strategy_returns = None
+            equity_curve = None
 
             if self.last_equity_curve is not None and len(self.last_equity_curve) > 1:
                 # Calculate returns from equity curve
-                equity_series = pd.Series(self.last_equity_curve)
+                equity_curve = self.last_equity_curve
+                equity_series = pd.Series(equity_curve)
                 strategy_returns = equity_series.pct_change().dropna().values
+                print(f"\nEquity curve length: {len(equity_curve)} days")
+                print(f"Equity curve start: {equity_curve[0]:.2f}, end: {equity_curve[-1]:.2f}")
+                print(f"Total return: {(equity_curve[-1]/equity_curve[0] - 1)*100:.2f}%")
+
             elif self.last_trade_log is not None and len(self.last_trade_log) > 0:
                 # Try to reconstruct from trade log
                 if isinstance(self.last_trade_log, pd.DataFrame):
@@ -2071,8 +2082,9 @@ Features: {len(self.regime_predictor.feature_names)}
                     pnl_col = "pnl" if "pnl" in trades.columns else "PnL"
                     # Convert PnL to returns (assuming starting equity of 1000)
                     cumulative_pnl = trades[pnl_col].cumsum()
-                    equity = 1000.0 + cumulative_pnl
-                    strategy_returns = (equity.pct_change().dropna().values)
+                    equity_curve = 1000.0 + cumulative_pnl
+                    strategy_returns = pd.Series(equity_curve).pct_change().dropna().values
+                    print(f"\nReconstructed equity from trade log: {len(equity_curve)} periods")
 
             if strategy_returns is None or len(strategy_returns) < 30:
                 QMessageBox.warning(
@@ -2083,10 +2095,28 @@ Features: {len(self.regime_predictor.feature_names)}
                 )
                 return
 
-            # Align lengths (use shorter series)
+            # CRITICAL FIX: Get benchmark returns for the SAME period as the equity curve
+            # The equity curve covers the last N days of the backtest period
+            equity_length = len(equity_curve)
+
+            # Get the last N days of price data (matching equity curve length)
+            prices_aligned = prices.iloc[-equity_length:]
+            benchmark_returns = prices_aligned.pct_change().dropna().values
+
+            # Recalculate strategy returns to match length
+            strategy_returns = equity_series.pct_change().dropna().values
+
+            print(f"\nAligned data:")
+            print(f"  Strategy returns: {len(strategy_returns)} periods")
+            print(f"  Benchmark returns: {len(benchmark_returns)} periods")
+            print(f"  Benchmark period: {prices_aligned.index[0]} to {prices_aligned.index[-1]}")
+
+            # They should now have the same length (both have one less due to pct_change)
             min_len = min(len(strategy_returns), len(benchmark_returns))
-            strategy_returns = strategy_returns[-min_len:]
-            benchmark_returns = benchmark_returns[-min_len:]
+            strategy_returns = strategy_returns[:min_len]
+            benchmark_returns = benchmark_returns[:min_len]
+
+            print(f"  Final aligned length: {min_len} periods")
 
             if min_len < 30:
                 QMessageBox.warning(
@@ -2096,7 +2126,27 @@ Features: {len(self.regime_predictor.feature_names)}
                 )
                 return
 
+            # Calculate and display basic statistics
+            strategy_mean = np.mean(strategy_returns) * 252 * 100  # Annualized %
+            benchmark_mean = np.mean(benchmark_returns) * 252 * 100  # Annualized %
+            strategy_std = np.std(strategy_returns) * np.sqrt(252) * 100
+            benchmark_std = np.std(benchmark_returns) * np.sqrt(252) * 100
+
+            print(f"\nStrategy stats (annualized):")
+            print(f"  Mean return: {strategy_mean:.2f}%")
+            print(f"  Volatility: {strategy_std:.2f}%")
+            print(f"  Sharpe: {strategy_mean/strategy_std if strategy_std > 0 else 0:.3f}")
+
+            print(f"\nBenchmark stats (annualized):")
+            print(f"  Mean return: {benchmark_mean:.2f}%")
+            print(f"  Volatility: {benchmark_std:.2f}%")
+            print(f"  Sharpe: {benchmark_mean/benchmark_std if benchmark_std > 0 else 0:.3f}")
+
+            excess_mean = (np.mean(strategy_returns) - np.mean(benchmark_returns)) * 252 * 100
+            print(f"\nExcess return: {excess_mean:.2f}% annualized")
+
             # Run White's Reality Check (reduced bootstrap for GUI performance)
+            print("\n" + "="*70)
             wrc = WhiteRealityCheck(n_bootstrap=500, block_size=10)
             wrc_result = wrc.test(
                 strategy_returns=strategy_returns,
@@ -2110,13 +2160,30 @@ Features: {len(self.regime_predictor.feature_names)}
                 strategy_returns - benchmark_returns
             )
 
+            print(f"\nSharpe Ratio CI calculated:")
+            print(f"  Point: {sharpe:.3f}, CI: [{sharpe_lower:.3f}, {sharpe_upper:.3f}]")
+            print("="*70 + "\n")
+
             # Display results
             text = "Robustness Tests\n\n"
             text += f"Sample Size: {len(strategy_returns)} periods\n"
-            text += f"Bootstrap Samples: 500\n\n"
+            text += f"Bootstrap Samples: 500\n"
+            text += f"Time Period: {prices_aligned.index[0].date()} to {prices_aligned.index[-1].date()}\n\n"
+
+            text += f"Strategy Performance (Annualized):\n"
+            text += f"  Return: {strategy_mean:.2f}%\n"
+            text += f"  Volatility: {strategy_std:.2f}%\n"
+            text += f"  Sharpe: {strategy_mean/strategy_std if strategy_std > 0 else 0:.3f}\n\n"
+
+            text += f"Benchmark Performance (Annualized):\n"
+            text += f"  Return: {benchmark_mean:.2f}%\n"
+            text += f"  Volatility: {benchmark_std:.2f}%\n"
+            text += f"  Sharpe: {benchmark_mean/benchmark_std if benchmark_std > 0 else 0:.3f}\n\n"
+
+            text += f"Excess Return: {excess_mean:.2f}% annualized\n\n"
 
             text += "White's Reality Check:\n"
-            text += f"  Test Statistic: {wrc_result.test_statistic:.4f}\n"
+            text += f"  Test Statistic: {wrc_result.test_statistic:.6f}\n"
             text += f"  P-value: {wrc_result.p_value:.4f}\n"
             icon = "✅" if wrc_result.is_significant else "❌"
             text += f"  {icon} Result: {'SIGNIFICANT' if wrc_result.is_significant else 'NOT SIGNIFICANT'}\n"
@@ -2126,13 +2193,15 @@ Features: {len(self.regime_predictor.feature_names)}
             text += f"  Point Estimate: {sharpe:.3f}\n"
             text += f"  95% CI: [{sharpe_lower:.3f}, {sharpe_upper:.3f}]\n\n"
 
-            # Overall verdict
-            if wrc_result.is_significant and sharpe > 0:
-                verdict = "✅ ROBUST: Strategy shows statistically significant outperformance"
-            elif wrc_result.is_significant:
+            # Overall verdict - FIX THE LOGIC
+            if wrc_result.is_significant and sharpe > 1.0:
+                verdict = "✅ ROBUST: Strategy shows statistically significant outperformance with strong Sharpe ratio"
+            elif wrc_result.is_significant and sharpe > 0:
+                verdict = "⚠️ WEAK: Strategy is significant but Sharpe ratio is low (< 1.0). May not be profitable after costs."
+            elif wrc_result.is_significant and sharpe < 0:
                 verdict = "❌ SIGNIFICANT UNDERPERFORMANCE: Strategy loses money"
             else:
-                verdict = "⚠️ NOT ROBUST: Performance may be due to luck or overfitting"
+                verdict = "❌ NOT ROBUST: Performance may be due to luck or overfitting"
 
             text += f"Verdict: {verdict}\n\n"
             text += f"Interpretation:\n{wrc_result.interpretation}"
