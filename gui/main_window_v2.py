@@ -76,6 +76,7 @@ class MainWindow(QMainWindow):
         self.current_ticker: str = ""
         self.data_source: str = "yfinance"
         self.last_trade_log: Optional[pd.DataFrame] = None
+        self.last_equity_curve: Optional[np.ndarray] = None
         self.best_params: Optional[Dict] = None
         self.best_results: Optional[pd.DataFrame] = None
 
@@ -1257,6 +1258,12 @@ class MainWindow(QMainWindow):
             if "trade_log" in best:
                 self.last_trade_log = best["trade_log"]
 
+            # Store equity curve for robustness tests
+            if "equity_curve" in best:
+                equity = best["equity_curve"]
+                if equity is not None and not (isinstance(equity, float) and np.isnan(equity)):
+                    self.last_equity_curve = equity
+
             # Update the results display panel
             self._update_results_display(best)
 
@@ -1935,10 +1942,19 @@ Features: {len(self.regime_predictor.feature_names)}
 
     def check_multi_horizon_agreement(self):
         """Check multi-horizon prediction agreement"""
-        if not self.regime_detector or not self.df_dict or "daily" not in self.df_dict:
+        print("DEBUG: check_multi_horizon_agreement called")
+
+        if not self.regime_detector:
+            print("DEBUG: No regime detector")
+            QMessageBox.warning(self, "No Data", "Load data and detect regime first")
+            return
+
+        if not self.df_dict or "daily" not in self.df_dict:
+            print("DEBUG: No daily data")
             QMessageBox.warning(self, "No Data", "Load data first")
             return
 
+        print("DEBUG: Starting multi-horizon agreement analysis")
         self.statusBar().showMessage("Checking multi-horizon agreement...")
 
         try:
@@ -1999,12 +2015,15 @@ Features: {len(self.regime_predictor.feature_names)}
 
             text += f"\nRecommendation: {analysis.recommendation}"
 
+            print("DEBUG: Multi-horizon agreement analysis complete, displaying results")
             self.institutional_display.append(text)
             self.institutional_display.append("\n" + "=" * 50 + "\n")
 
             self.statusBar().showMessage("Multi-horizon check complete")
+            print("DEBUG: Multi-horizon agreement completed successfully")
 
         except Exception as e:
+            print(f"DEBUG: Multi-horizon agreement error: {e}")
             QMessageBox.critical(self, "Agreement Error", str(e))
             import traceback
 
@@ -2131,10 +2150,19 @@ Features: {len(self.regime_predictor.feature_names)}
 
     def run_regime_diagnostics(self):
         """Run regime stability and persistence diagnostics"""
-        if not self.regime_detector or not self.df_dict or "daily" not in self.df_dict:
+        print("DEBUG: run_regime_diagnostics called")
+
+        if not self.regime_detector:
+            print("DEBUG: No regime detector")
+            QMessageBox.warning(self, "No Data", "Load data and detect regime first")
+            return
+
+        if not self.df_dict or "daily" not in self.df_dict:
+            print("DEBUG: No daily data")
             QMessageBox.warning(self, "No Data", "Load data first")
             return
 
+        print("DEBUG: Starting regime diagnostics analysis")
         self.statusBar().showMessage("Running regime diagnostics...")
 
         try:
@@ -2215,12 +2243,15 @@ Features: {len(self.regime_predictor.feature_names)}
 
             text += f"\nAssessment: {assessment}"
 
+            print("DEBUG: Regime diagnostics analysis complete, displaying results")
             self.institutional_display.append(text)
             self.institutional_display.append("\n" + "=" * 50 + "\n")
 
             self.statusBar().showMessage("Regime diagnostics complete")
+            print("DEBUG: Regime diagnostics completed successfully")
 
         except Exception as e:
+            print(f"DEBUG: Regime diagnostics error: {e}")
             QMessageBox.critical(self, "Diagnostics Error", str(e))
             import traceback
             traceback.print_exc()
