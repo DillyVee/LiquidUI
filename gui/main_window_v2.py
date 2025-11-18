@@ -1698,7 +1698,7 @@ Plots saved to: {Paths.RESULTS_DIR}/walk_forward/
 
     def detect_market_regime(self):
         """Detect current market regime using specified lookback period"""
-        if not self.regime_detector or not self.df_dict or "daily" not in self.df_dict:
+        if not self.df_dict or "daily" not in self.df_dict:
             QMessageBox.warning(self, "No Data", "Load data first")
             return
 
@@ -1716,6 +1716,19 @@ Plots saved to: {Paths.RESULTS_DIR}/walk_forward/
             else:
                 prices_to_use = prices
 
+            # Reinitialize detector with windows scaled to lookback period
+            # This ensures feature calculation windows are appropriate for the data size
+            vol_window = max(10, int(lookback_days / 10))  # ~10% of lookback
+            trend_fast = max(20, int(lookback_days / 5))   # ~20% of lookback
+            trend_slow = max(50, int(lookback_days / 1.25)) # ~80% of lookback
+
+            self.regime_detector = MarketRegimeDetector(
+                vol_window=vol_window,
+                trend_window_fast=trend_fast,
+                trend_window_slow=trend_slow,
+                regime_memory=min(252, lookback_days)
+            )
+
             # Detect regime
             regime_state = self.regime_detector.detect_regime(prices_to_use)
             self.current_regime_state = regime_state
@@ -1730,10 +1743,15 @@ Duration: {regime_state.regime_duration} days
 Next Predicted: {regime_state.predicted_next_regime.value.upper()}
 Transition Probability: {regime_state.transition_probability:.2%}
 Suggested Position Size: {regime_state.suggested_position_size:.2f}x
+
+Detection Windows:
+  Volatility: {vol_window} days
+  Trend Fast: {trend_fast} days
+  Trend Slow: {trend_slow} days
 """
 
             self.regime_display.setText(text)
-            self.statusBar().showMessage(f"Regime detected using {lookback_days} days")
+            self.statusBar().showMessage(f"Regime detected using {lookback_days} days (vol={vol_window}, fast={trend_fast}, slow={trend_slow})")
 
         except Exception as e:
             QMessageBox.critical(self, "Regime Detection Error", str(e))
