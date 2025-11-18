@@ -768,7 +768,7 @@ class MainWindow(QMainWindow):
         comm_layout.addWidget(QLabel("Commission (%):"))
         self.commission_pct_spin = QDoubleSpinBox()
         self.commission_pct_spin.setRange(0.0, 1.0)
-        self.commission_pct_spin.setValue(self.transaction_costs.commission_pct * 100)
+        self.commission_pct_spin.setValue(self.transaction_costs.COMMISSION_PCT * 100)
         self.commission_pct_spin.setSingleStep(0.01)
         self.commission_pct_spin.setSuffix("%")
         self.commission_pct_spin.valueChanged.connect(self.on_transaction_costs_changed)
@@ -780,7 +780,7 @@ class MainWindow(QMainWindow):
         slip_layout.addWidget(QLabel("Slippage (%):"))
         self.slippage_pct_spin = QDoubleSpinBox()
         self.slippage_pct_spin.setRange(0.0, 1.0)
-        self.slippage_pct_spin.setValue(self.transaction_costs.slippage_pct * 100)
+        self.slippage_pct_spin.setValue(self.transaction_costs.SLIPPAGE_PCT * 100)
         self.slippage_pct_spin.setSingleStep(0.01)
         self.slippage_pct_spin.setSuffix("%")
         self.slippage_pct_spin.valueChanged.connect(self.on_transaction_costs_changed)
@@ -792,7 +792,7 @@ class MainWindow(QMainWindow):
         spread_layout.addWidget(QLabel("Spread (%):"))
         self.spread_pct_spin = QDoubleSpinBox()
         self.spread_pct_spin.setRange(0.0, 1.0)
-        self.spread_pct_spin.setValue(self.transaction_costs.spread_pct * 100)
+        self.spread_pct_spin.setValue(self.transaction_costs.SPREAD_PCT * 100)
         self.spread_pct_spin.setSingleStep(0.01)
         self.spread_pct_spin.setSuffix("%")
         self.spread_pct_spin.valueChanged.connect(self.on_transaction_costs_changed)
@@ -1816,9 +1816,9 @@ Confidence: {prediction['confidence']:.2%}
 
     def on_transaction_costs_changed(self):
         """Handle transaction cost changes"""
-        self.transaction_costs.commission_pct = self.commission_pct_spin.value() / 100
-        self.transaction_costs.slippage_pct = self.slippage_pct_spin.value() / 100
-        self.transaction_costs.spread_pct = self.spread_pct_spin.value() / 100
+        self.transaction_costs.COMMISSION_PCT = self.commission_pct_spin.value() / 100
+        self.transaction_costs.SLIPPAGE_PCT = self.slippage_pct_spin.value() / 100
+        self.transaction_costs.SPREAD_PCT = self.spread_pct_spin.value() / 100
 
     def set_costs_for_stocks(self):
         """Set transaction costs for stocks"""
