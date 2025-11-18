@@ -1413,10 +1413,15 @@ class MainWindow(QMainWindow):
             if not self.df_dict or not self.current_ticker:
                 return None
 
-            # Get price data from the selected timeframe
-            timeframe = self.timeframe_combo.currentText().lower()
+            # Get price data from the selected timeframe (default to daily)
+            timeframe = "daily"  # Default to daily timeframe
             if timeframe not in self.df_dict:
-                timeframe = "daily"  # Default fallback
+                # Try to find any available timeframe
+                available_tfs = list(self.df_dict.keys())
+                if available_tfs:
+                    timeframe = available_tfs[0]
+                else:
+                    return None
 
             df = self.df_dict.get(timeframe)
             if df is None or df.empty:
@@ -1751,15 +1756,18 @@ Suggested Position Size: {regime_state.suggested_position_size:.2f}x
             # Train the predictor with both prices and returns
             results = self.regime_predictor.train(prices, returns)
 
+            # Extract accuracy metrics from PredictionPerformance dataclass
+            avg_accuracy = (results.accuracy_1day + results.accuracy_5day + results.accuracy_20day) / 3
+
             text = f"""
 Regime Predictor Trained:
 
-Training Accuracy: {results.get('accuracy', 0.0):.2%}
-Cross-Val Score: {results.get('cv_score', 0.0):.2%}
+Training Accuracy: {self.regime_predictor.train_accuracy:.2%}
+Validation Accuracy: {self.regime_predictor.test_accuracy:.2%}
+Multi-horizon Accuracy: {avg_accuracy:.2%}
 
-Model: {results.get('model_type', 'Random Forest')}
-Features: {results.get('n_features', 0)}
-Training Samples: {results.get('n_samples', 0)}
+Model: Random Forest
+Features: {len(self.regime_predictor.feature_names)}
 """
 
             self.prediction_display.setText(text)
@@ -1774,7 +1782,7 @@ Training Samples: {results.get('n_samples', 0)}
 
     def calculate_pbr(self):
         """Calculate Probability of Backtested Returns"""
-        if not self.best_results or self.best_results.empty:
+        if self.best_results is None or self.best_results.empty:
             QMessageBox.warning(self, "No Results", "Run optimization first")
             return
 
@@ -2005,7 +2013,7 @@ Training Samples: {results.get('n_samples', 0)}
 
     def run_robustness_tests(self):
         """Run White's Reality Check and Hansen's SPA"""
-        if not self.best_results or self.best_results.empty:
+        if self.best_results is None or self.best_results.empty:
             QMessageBox.warning(self, "No Results", "Run optimization first")
             return
 
