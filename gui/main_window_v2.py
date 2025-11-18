@@ -1698,7 +1698,7 @@ Plots saved to: {Paths.RESULTS_DIR}/walk_forward/
 
     def detect_market_regime(self):
         """Detect current market regime using specified lookback period"""
-        if not self.regime_detector or not self.df_dict or "daily" not in self.df_dict:
+        if not self.df_dict or "daily" not in self.df_dict:
             QMessageBox.warning(self, "No Data", "Load data first")
             return
 
@@ -1716,6 +1716,19 @@ Plots saved to: {Paths.RESULTS_DIR}/walk_forward/
             else:
                 prices_to_use = prices
 
+            # Reinitialize detector with windows scaled to lookback period
+            # This ensures feature calculation windows are appropriate for the data size
+            vol_window = max(10, int(lookback_days / 10))  # ~10% of lookback
+            trend_fast = max(20, int(lookback_days / 5))   # ~20% of lookback
+            trend_slow = max(50, int(lookback_days / 1.25)) # ~80% of lookback
+
+            self.regime_detector = MarketRegimeDetector(
+                vol_window=vol_window,
+                trend_window_fast=trend_fast,
+                trend_window_slow=trend_slow,
+                regime_memory=min(252, lookback_days)
+            )
+
             # Detect regime
             regime_state = self.regime_detector.detect_regime(prices_to_use)
             self.current_regime_state = regime_state
@@ -1730,10 +1743,15 @@ Duration: {regime_state.regime_duration} days
 Next Predicted: {regime_state.predicted_next_regime.value.upper()}
 Transition Probability: {regime_state.transition_probability:.2%}
 Suggested Position Size: {regime_state.suggested_position_size:.2f}x
+
+Detection Windows:
+  Volatility: {vol_window} days
+  Trend Fast: {trend_fast} days
+  Trend Slow: {trend_slow} days
 """
 
             self.regime_display.setText(text)
-            self.statusBar().showMessage(f"Regime detected using {lookback_days} days")
+            self.statusBar().showMessage(f"Regime detected using {lookback_days} days (vol={vol_window}, fast={trend_fast}, slow={trend_slow})")
 
         except Exception as e:
             QMessageBox.critical(self, "Regime Detection Error", str(e))
@@ -2145,6 +2163,23 @@ Features: {len(self.regime_predictor.feature_names)}
             text += f"  Point Estimate: {sharpe:.3f}\n"
             text += f"  95% CI: [{sharpe_lower:.3f}, {sharpe_upper:.3f}]\n\n"
 
+            # Overall verdict - must check both significance AND confidence interval
+            # A strategy is only robust if:
+            # 1. White's RC shows significance (p < 0.05)
+            # 2. Sharpe ratio CI excludes zero (lower bound > 0)
+            # 3. Sharpe ratio is meaningfully positive (> 0.5 annualized)
+            ci_excludes_zero = sharpe_lower > 0
+            meaningful_sharpe = sharpe > 0.5  # At least 0.5 Sharpe for "robust"
+
+            if wrc_result.is_significant and ci_excludes_zero and sharpe > 0:
+                if meaningful_sharpe:
+                    verdict = "✅ ROBUST: Strategy shows statistically significant outperformance"
+                else:
+                    verdict = "⚠️ MARGINALLY SIGNIFICANT: Statistically significant but Sharpe ratio is low"
+            elif wrc_result.is_significant and sharpe < 0:
+                verdict = "❌ SIGNIFICANT UNDERPERFORMANCE: Strategy loses money"
+            elif not ci_excludes_zero:
+                verdict = "⚠️ NOT ROBUST: Confidence interval includes zero - performance not statistically different from random"
             # Overall verdict with proper thresholds
             # Sharpe ratio thresholds:
             # < 0.5: Poor

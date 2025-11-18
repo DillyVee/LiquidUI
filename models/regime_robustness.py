@@ -94,12 +94,22 @@ class WhiteRealityCheck:
         # Calculate excess returns over benchmark
         excess_returns = strategy_returns - benchmark_returns
 
-        # Test statistic: mean excess return (Sharpe would be alternative)
-        observed_statistic = np.mean(excess_returns)
+        # Test statistic: t-statistic of excess returns
+        # This accounts for both mean and uncertainty
+        n = len(excess_returns)
+        mean_excess = np.mean(excess_returns)
+        std_excess = np.std(excess_returns, ddof=1)
+
+        if std_excess > 0:
+            observed_statistic = mean_excess / (std_excess / np.sqrt(n))
+        else:
+            observed_statistic = 0.0
 
         print(f"\n{'='*70}")
         print(f"WHITE'S REALITY CHECK")
         print(f"{'='*70}")
+        print(f"Observed excess return: {mean_excess:.6f} (t-stat: {observed_statistic:.4f})")
+        print(f"Running {self.n_bootstrap} bootstrap simulations...")
         print(f"\nDIAGNOSTICS:")
         print(f"  Sample size: {len(strategy_returns)}")
         print(f"  Strategy mean return: {np.mean(strategy_returns):.6f}")
@@ -118,8 +128,18 @@ class WhiteRealityCheck:
             # Recenter to enforce null hypothesis (mean = 0)
             bootstrap_excess_centered = bootstrap_excess - np.mean(bootstrap_excess)
 
-            # Calculate statistic on bootstrap sample
-            bootstrap_stat = np.mean(bootstrap_excess_centered)
+            # Calculate t-statistic on bootstrap sample (not just mean)
+            # This preserves variability even after recentering
+            n = len(bootstrap_excess_centered)
+            mean_boot = np.mean(bootstrap_excess_centered)
+            std_boot = np.std(bootstrap_excess_centered, ddof=1)
+
+            # Use t-statistic to capture both mean and uncertainty
+            if std_boot > 0:
+                bootstrap_stat = mean_boot / (std_boot / np.sqrt(n))
+            else:
+                bootstrap_stat = 0.0
+
             bootstrap_statistics.append(bootstrap_stat)
 
         bootstrap_statistics = np.array(bootstrap_statistics)
@@ -201,17 +221,17 @@ class WhiteRealityCheck:
         if is_significant:
             if statistic > 0:
                 return (
-                    f"✅ ROBUST: Strategy shows statistically significant outperformance "
-                    f"(p={p_value:.3f}). Performance is unlikely due to data mining."
+                    f"✅ STATISTICALLY SIGNIFICANT: Strategy's excess return has t-statistic={statistic:.3f} "
+                    f"with p={p_value:.3f}. This suggests skill, but also check Sharpe ratio confidence interval."
                 )
             else:
                 return (
                     f"❌ UNDERPERFORMANCE: Strategy significantly underperforms "
-                    f"(p={p_value:.3f})."
+                    f"(t-stat={statistic:.3f}, p={p_value:.3f})."
                 )
         else:
             return (
-                f"⚠️  NOT ROBUST: Cannot reject null hypothesis (p={p_value:.3f}). "
+                f"⚠️  NOT ROBUST: Cannot reject null hypothesis (t-stat={statistic:.3f}, p={p_value:.3f}). "
                 f"Performance may be due to luck or data mining."
             )
 
@@ -280,16 +300,28 @@ class HansenSPATest:
             [strat - benchmark_returns for strat in all_strategies]
         )
 
-        # Find best strategy
-        mean_performance = np.mean(relative_performance, axis=1)
-        best_idx = np.argmax(mean_performance)
-        best_performance = mean_performance[best_idx]
+        # Find best strategy using t-statistic (not just mean)
+        t_statistics = []
+        for perf in relative_performance:
+            n = len(perf)
+            mean_perf = np.mean(perf)
+            std_perf = np.std(perf, ddof=1)
+            if std_perf > 0:
+                t_stat = mean_perf / (std_perf / np.sqrt(n))
+            else:
+                t_stat = 0.0
+            t_statistics.append(t_stat)
+
+        t_statistics = np.array(t_statistics)
+        best_idx = np.argmax(t_statistics)
+        best_t_statistic = t_statistics[best_idx]
+        best_mean_performance = np.mean(relative_performance[best_idx])
 
         print(f"\n{'='*70}")
         print(f"HANSEN'S SUPERIOR PREDICTIVE ABILITY (SPA) TEST")
         print(f"{'='*70}")
         print(f"Number of strategies tested: {n_strategies}")
-        print(f"Best strategy excess return: {best_performance:.4f}")
+        print(f"Best strategy excess return: {best_mean_performance:.6f} (t-stat: {best_t_statistic:.4f})")
         print(f"Running {self.n_bootstrap} bootstrap simulations...")
 
         # Bootstrap under null (no strategy beats benchmark)
@@ -297,26 +329,37 @@ class HansenSPATest:
 
         for b in range(self.n_bootstrap):
             # Bootstrap each strategy
-            bootstrap_perfs = []
+            bootstrap_t_stats = []
             for strat_perf in relative_performance:
                 boot_sample = self._stationary_block_bootstrap(strat_perf)
                 # Recenter to enforce null
                 boot_centered = boot_sample - np.mean(strat_perf)
-                bootstrap_perfs.append(np.mean(boot_centered))
+
+                # Calculate t-statistic (not just mean)
+                n = len(boot_centered)
+                mean_boot = np.mean(boot_centered)
+                std_boot = np.std(boot_centered, ddof=1)
+
+                if std_boot > 0:
+                    t_boot = mean_boot / (std_boot / np.sqrt(n))
+                else:
+                    t_boot = 0.0
+
+                bootstrap_t_stats.append(t_boot)
 
             # Maximum across strategies (accounts for multiple testing)
-            max_stat = np.max(bootstrap_perfs)
+            max_stat = np.max(bootstrap_t_stats)
             bootstrap_max_stats.append(max_stat)
 
         bootstrap_max_stats = np.array(bootstrap_max_stats)
 
-        # P-value: fraction of bootstrap maxima >= observed best
-        p_value = np.mean(bootstrap_max_stats >= best_performance)
+        # P-value: fraction of bootstrap maxima >= observed best t-statistic
+        p_value = np.mean(bootstrap_max_stats >= best_t_statistic)
 
         is_significant = p_value < 0.05
 
         interpretation = self._interpret_spa_result(
-            best_performance, p_value, is_significant, n_strategies
+            best_t_statistic, p_value, is_significant, n_strategies
         )
 
         print(f"\nP-value: {p_value:.4f}")
@@ -324,7 +367,7 @@ class HansenSPATest:
         print(f"{'='*70}\n")
 
         return RobustnessTestResults(
-            test_statistic=float(best_performance),
+            test_statistic=float(best_t_statistic),
             p_value=float(p_value),
             is_significant=is_significant,
             null_hypothesis="No strategy beats benchmark",
@@ -355,14 +398,14 @@ class HansenSPATest:
         """Generate interpretation"""
         if is_significant:
             return (
-                f"✅ SUPERIOR PREDICTIVE ABILITY: Best strategy significantly "
-                f"outperforms benchmark (p={p_value:.3f}) even after accounting for "
+                f"✅ SUPERIOR PREDICTIVE ABILITY: Best strategy has t-statistic={statistic:.3f} "
+                f"and significantly outperforms benchmark (p={p_value:.3f}) even after accounting for "
                 f"{n_strategies} strategies tested. Performance is robust."
             )
         else:
             return (
                 f"⚠️  NO SUPERIOR ABILITY: Cannot conclude that any strategy beats "
-                f"benchmark (p={p_value:.3f}). Observed performance may be due to "
+                f"benchmark (t-stat={statistic:.3f}, p={p_value:.3f}). Observed performance may be due to "
                 f"data mining across {n_strategies} tested strategies."
             )
 
