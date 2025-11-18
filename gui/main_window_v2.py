@@ -534,6 +534,22 @@ class MainWindow(QMainWindow):
         basic_group = QGroupBox("Basic Regime Detection")
         basic_layout = QVBoxLayout()
 
+        # Lookback days control
+        lookback_layout = QHBoxLayout()
+        lookback_label = QLabel("Lookback Days:")
+        lookback_label.setStyleSheet("font-weight: bold;")
+        self.regime_lookback_spin = QSpinBox()
+        self.regime_lookback_spin.setRange(20, 1000)
+        self.regime_lookback_spin.setValue(252)  # Default 1 year
+        self.regime_lookback_spin.setSuffix(" days")
+        self.regime_lookback_spin.setToolTip(
+            "Number of historical days to analyze for regime detection (20-1000)"
+        )
+        lookback_layout.addWidget(lookback_label)
+        lookback_layout.addWidget(self.regime_lookback_spin)
+        lookback_layout.addStretch()
+        basic_layout.addLayout(lookback_layout)
+
         self.detect_regime_btn = QPushButton("🔍 Detect Current Market Regime")
         self.detect_regime_btn.setStyleSheet(
             f"background-color: {COLOR_SUCCESS}; font-weight: bold; padding: 12px;"
@@ -1314,7 +1330,7 @@ class MainWindow(QMainWindow):
             traceback.print_exc()
 
     def _plot_results(self, best: pd.Series):
-        """Plot equity curve with buy/sell signals"""
+        """Plot equity curve with buy/sell signals and buy & hold comparison"""
         self.results_figure.clear()
 
         # Check if equity curve exists and is not NaN
@@ -1329,10 +1345,26 @@ class MainWindow(QMainWindow):
 
         trade_log = best.get("trade_log")
 
+        # Calculate buy & hold equity curve
+        buy_hold_equity = self._calculate_buy_hold_equity(len(equity))
+
         # Main plot
         ax1 = self.results_figure.add_subplot(211, facecolor="#1e1e1e")
-        ax1.plot(equity, color="#4CAF50", linewidth=2, label="Equity")
-        ax1.set_title("Equity Curve", color="white", fontweight="bold")
+        ax1.plot(equity, color="#4CAF50", linewidth=2, label="Strategy", zorder=2)
+
+        # Plot buy & hold
+        if buy_hold_equity is not None:
+            ax1.plot(
+                buy_hold_equity,
+                color="#FFA500",
+                linewidth=2,
+                linestyle="--",
+                label="Buy & Hold",
+                alpha=0.8,
+                zorder=1,
+            )
+
+        ax1.set_title("Equity Curve vs Buy & Hold", color="white", fontweight="bold")
         ax1.set_ylabel("Equity", color="white")
         ax1.tick_params(colors="white")
         ax1.grid(True, alpha=0.2, color="white")
@@ -1343,20 +1375,79 @@ class MainWindow(QMainWindow):
         # For now, we'll skip the markers until we have the proper index mapping
         # TODO: Add trade markers by matching Entry_Date/Exit_Date to equity curve indices
 
-        # Drawdown plot
+        # Drawdown plot - show both strategy and buy & hold
         ax2 = self.results_figure.add_subplot(212, facecolor="#1e1e1e")
+
+        # Strategy drawdown
         running_max = np.maximum.accumulate(equity)
         drawdown = (equity - running_max) / running_max * 100
         ax2.fill_between(range(len(drawdown)), drawdown, 0, color="#F44336", alpha=0.3)
-        ax2.plot(drawdown, color="#F44336", linewidth=1)
-        ax2.set_title("Drawdown %", color="white", fontweight="bold")
+        ax2.plot(drawdown, color="#F44336", linewidth=1, label="Strategy DD")
+
+        # Buy & hold drawdown
+        if buy_hold_equity is not None:
+            bh_running_max = np.maximum.accumulate(buy_hold_equity)
+            bh_drawdown = (buy_hold_equity - bh_running_max) / bh_running_max * 100
+            ax2.plot(
+                bh_drawdown,
+                color="#FFA500",
+                linewidth=1,
+                linestyle="--",
+                label="Buy & Hold DD",
+                alpha=0.7,
+            )
+
+        ax2.set_title("Drawdown % Comparison", color="white", fontweight="bold")
         ax2.set_xlabel("Time", color="white")
         ax2.set_ylabel("Drawdown %", color="white")
         ax2.tick_params(colors="white")
         ax2.grid(True, alpha=0.2, color="white")
+        ax2.legend(facecolor="#2d2d2d", edgecolor="#3a3a3a", labelcolor="white")
 
         self.results_figure.tight_layout()
         self.results_canvas.draw()
+
+    def _calculate_buy_hold_equity(self, n_periods: int) -> Optional[np.ndarray]:
+        """Calculate buy & hold equity curve for comparison"""
+        try:
+            if not self.df_dict or not self.current_ticker:
+                return None
+
+            # Get price data from the selected timeframe
+            timeframe = self.timeframe_combo.currentText().lower()
+            if timeframe not in self.df_dict:
+                timeframe = "daily"  # Default fallback
+
+            df = self.df_dict.get(timeframe)
+            if df is None or df.empty:
+                return None
+
+            # Calculate returns
+            prices = df["Close"].values
+            if len(prices) < 2:
+                return None
+
+            # Ensure we match the length of the strategy equity curve
+            n_use = min(len(prices), n_periods)
+            prices = prices[-n_use:]
+
+            # Calculate buy & hold equity (starting at 1000 like strategy)
+            initial_equity = 1000.0
+            price_returns = prices / prices[0]  # Normalize to 1.0 at start
+            buy_hold = initial_equity * price_returns
+
+            # Pad with initial value if needed to match length
+            if len(buy_hold) < n_periods:
+                padding = np.full(n_periods - len(buy_hold), initial_equity)
+                buy_hold = np.concatenate([padding, buy_hold])
+
+            return buy_hold
+
+        except Exception as e:
+            print(f"Failed to calculate buy & hold: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
 
     def show_psr_report(self):
         """Show detailed PSR report"""
@@ -1412,7 +1503,7 @@ Parameters:
     # =============================================================================
 
     def run_monte_carlo(self):
-        """Run Monte Carlo simulation"""
+        """Run comprehensive Monte Carlo simulation with full quant metrics"""
         if self.last_trade_log is None or (
             isinstance(self.last_trade_log, pd.DataFrame) and self.last_trade_log.empty
         ):
@@ -1427,10 +1518,13 @@ Parameters:
             )
             return
 
-        self.statusBar().showMessage("Running Monte Carlo simulation...")
+        self.statusBar().showMessage("Running comprehensive Monte Carlo analysis...")
 
         try:
-            from optimization import MonteCarloSimulator
+            from optimization.monte_carlo import (
+                MonteCarloSimulator,
+                AdvancedMonteCarloAnalyzer,
+            )
 
             n_sims = self.mc_simulations_spin.value()
 
@@ -1440,46 +1534,25 @@ Parameters:
             else:
                 trades = self.last_trade_log
 
-            # Run Monte Carlo
-            results = MonteCarloSimulator.simulate_trade_randomization(
+            # Run basic Monte Carlo
+            basic_results = MonteCarloSimulator.simulate_trade_randomization(
                 trades=trades, n_simulations=n_sims, initial_equity=1000.0
             )
 
-            # Calculate percentage returns from equity
-            orig_pct = (
-                (results.original_equity / 1000.0 - 1) * 100
-                if results.original_equity
-                else 0
+            # Calculate advanced metrics
+            advanced_metrics = AdvancedMonteCarloAnalyzer.calculate_advanced_metrics(
+                basic_results, initial_equity=1000.0, risk_free_rate=0.0
             )
-            mean_pct = (results.mean_equity / 1000.0 - 1) * 100
-            median_pct = (results.median_equity / 1000.0 - 1) * 100
-            p5_pct = (results.percentile_5 / 1000.0 - 1) * 100
-            p95_pct = (results.percentile_95 / 1000.0 - 1) * 100
 
-            # Show summary
-            msg = f"""
-Monte Carlo Simulation Results ({n_sims} simulations)
+            # Generate comprehensive report
+            full_report = AdvancedMonteCarloAnalyzer.generate_enhanced_report(
+                basic_results, advanced_metrics, initial_equity=1000.0
+            )
 
-Original Strategy:
-  Final Equity: ${results.original_equity:,.2f}
-  Return: {orig_pct:+.2f}%
+            # Create visualization window
+            self._show_monte_carlo_results(basic_results, advanced_metrics, full_report)
 
-Simulated Outcomes:
-  Mean Return: {mean_pct:+.2f}%
-  Median Return: {median_pct:+.2f}%
-
-  5th Percentile: {p5_pct:+.2f}%
-  95th Percentile: {p95_pct:+.2f}%
-
-  Std Dev: ${results.std_dev:,.2f}
-  Min: ${results.min_equity:,.2f}
-  Max: ${results.max_equity:,.2f}
-
-Probability of Profit: {results.probability_profit:.2%}
-"""
-
-            QMessageBox.information(self, "Monte Carlo Results", msg)
-            self.statusBar().showMessage("Monte Carlo completed")
+            self.statusBar().showMessage("Monte Carlo analysis completed")
 
         except Exception as e:
             QMessageBox.critical(
@@ -1489,6 +1562,48 @@ Probability of Profit: {results.probability_profit:.2%}
 
             traceback.print_exc()
             self.statusBar().showMessage("Monte Carlo failed")
+
+    def _show_monte_carlo_results(self, basic_results, advanced_metrics, report):
+        """Display comprehensive Monte Carlo results in a new window"""
+        from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QTextEdit, QPushButton
+        from optimization.monte_carlo import AdvancedMonteCarloAnalyzer
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Comprehensive Monte Carlo Analysis")
+        dialog.setGeometry(100, 100, 1400, 900)
+        dialog.setStyleSheet(MAIN_STYLESHEET)
+
+        layout = QVBoxLayout()
+
+        # Add text report
+        report_text = QTextEdit()
+        report_text.setReadOnly(True)
+        report_text.setPlainText(report)
+        report_text.setStyleSheet(
+            "font-family: monospace; font-size: 11px; background-color: #1e1e1e; color: white;"
+        )
+        layout.addWidget(report_text)
+
+        # Add visualization
+        try:
+            fig = AdvancedMonteCarloAnalyzer.plot_enhanced_distributions(
+                basic_results, advanced_metrics, "Monte Carlo Analysis - Full Suite"
+            )
+            canvas = FigureCanvas(fig)
+            layout.addWidget(canvas)
+        except Exception as e:
+            print(f"Failed to create visualization: {e}")
+
+        # Close button
+        btn_layout = QHBoxLayout()
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.close)
+        btn_layout.addStretch()
+        btn_layout.addWidget(close_btn)
+        layout.addLayout(btn_layout)
+
+        dialog.setLayout(layout)
+        dialog.exec()
 
     # =============================================================================
     # WALK-FORWARD
@@ -1570,7 +1685,7 @@ Plots saved to: {Paths.RESULTS_DIR}/walk_forward/
     # =============================================================================
 
     def detect_market_regime(self):
-        """Detect current market regime"""
+        """Detect current market regime using specified lookback period"""
         if not self.regime_detector or not self.df_dict or "daily" not in self.df_dict:
             QMessageBox.warning(self, "No Data", "Load data first")
             return
@@ -1580,12 +1695,21 @@ Plots saved to: {Paths.RESULTS_DIR}/walk_forward/
             df = self.df_dict["daily"]
             prices = df["Close"]
 
+            # Get lookback days from spinner
+            lookback_days = self.regime_lookback_spin.value()
+
+            # Use only the specified lookback period
+            if len(prices) > lookback_days:
+                prices_to_use = prices.iloc[-lookback_days:]
+            else:
+                prices_to_use = prices
+
             # Detect regime
-            regime_state = self.regime_detector.detect_regime(prices)
+            regime_state = self.regime_detector.detect_regime(prices_to_use)
             self.current_regime_state = regime_state
 
             text = f"""
-Current Market Regime:
+Current Market Regime (using {lookback_days} days):
 
 Regime: {regime_state.current_regime.value.upper()}
 Confidence: {regime_state.confidence:.2%}
@@ -1597,7 +1721,7 @@ Suggested Position Size: {regime_state.suggested_position_size:.2f}x
 """
 
             self.regime_display.setText(text)
-            self.statusBar().showMessage("Regime detected")
+            self.statusBar().showMessage(f"Regime detected using {lookback_days} days")
 
         except Exception as e:
             QMessageBox.critical(self, "Regime Detection Error", str(e))
@@ -1621,8 +1745,11 @@ Suggested Position Size: {regime_state.suggested_position_size:.2f}x
             df = self.df_dict["daily"]
             prices = df["Close"]
 
-            # Train the predictor
-            results = self.regime_predictor.train(prices)
+            # Calculate returns (required by train method)
+            returns = prices.pct_change().fillna(0)
+
+            # Train the predictor with both prices and returns
+            results = self.regime_predictor.train(prices, returns)
 
             text = f"""
 Regime Predictor Trained:
@@ -1657,9 +1784,19 @@ Training Samples: {results.get('n_samples', 0)}
             # Extract metrics from optimization results
             best = self.best_results.iloc[0]
 
-            backtest_sharpe = best.get("Sharpe_Ratio", 0.0)
-            backtest_return = best.get("Percent_Gain_%", 0.0) / 100.0  # Convert to decimal
+            # Safely extract metrics with defaults
+            backtest_sharpe = float(best.get("Sharpe_Ratio", 0.0))
+            backtest_return = float(best.get("Percent_Gain_%", 0.0)) / 100.0  # Convert to decimal
             n_trades = int(best.get("Trade_Count", 0))
+
+            # Validate we have minimum required data
+            if n_trades == 0:
+                QMessageBox.warning(
+                    self,
+                    "Insufficient Data",
+                    "No trades found in optimization results"
+                )
+                return
 
             # Count optimized parameters (MN1, MN2, Entry, Exit, On, Off = 6)
             n_parameters = 6
@@ -1679,6 +1816,10 @@ Training Samples: {results.get('n_samples', 0)}
                 current_regime_stability=regime_stability,
             )
 
+            # Validate pbr_details is a dict
+            if not isinstance(pbr_details, dict):
+                raise ValueError(f"Expected dict from calculate_pbr, got {type(pbr_details)}")
+
             # Update display
             self.pbr_display.setText(f"PBR Score: {pbr_score:.1%}")
 
@@ -1693,20 +1834,23 @@ Training Samples: {results.get('n_samples', 0)}
             text += f"  Number of Trades: {n_trades}\n"
             text += f"  Parameters: {n_parameters}\n\n"
             text += f"Contributing Factors:\n"
-            text += f"  Sharpe Factor: {pbr_details['sharpe_contribution']:.1%}\n"
-            text += f"  Sample Size: {pbr_details['sample_size_factor']:.1%}\n"
-            text += f"  Overfitting Penalty: {pbr_details['overfitting_factor']:.1%}\n"
+
+            # Safely extract detail keys
+            text += f"  Sharpe Factor: {pbr_details.get('sharpe_contribution', 0.0):.1%}\n"
+            text += f"  Sample Size: {pbr_details.get('sample_size_factor', 0.0):.1%}\n"
+            text += f"  Overfitting Penalty: {pbr_details.get('overfitting_factor', 0.0):.1%}\n"
 
             self.institutional_display.append(text)
             self.institutional_display.append("\n" + "=" * 50 + "\n")
 
-            self.statusBar().showMessage("PBR calculated")
+            self.statusBar().showMessage("PBR calculated successfully")
 
         except Exception as e:
-            QMessageBox.critical(self, "PBR Error", str(e))
+            error_msg = f"Failed to calculate PBR:\n{str(e)}"
+            QMessageBox.critical(self, "PBR Error", error_msg)
             import traceback
-
             traceback.print_exc()
+            self.statusBar().showMessage("PBR calculation failed")
 
     def calibrate_probabilities(self):
         """Calibrate regime prediction probabilities"""
