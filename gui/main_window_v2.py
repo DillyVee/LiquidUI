@@ -943,7 +943,7 @@ class MainWindow(QMainWindow):
 
             # Initialize regime detector
             if "daily" in self.df_dict:
-                self.regime_detector = MarketRegimeDetector(self.df_dict["daily"])
+                self.regime_detector = MarketRegimeDetector()
 
             self.statusBar().showMessage(f"Successfully loaded {ticker}")
 
@@ -1554,23 +1554,29 @@ Plots saved to: {Paths.RESULTS_DIR}/walk_forward/
 
     def detect_market_regime(self):
         """Detect current market regime"""
-        if not self.regime_detector:
+        if not self.regime_detector or not self.df_dict or "daily" not in self.df_dict:
             QMessageBox.warning(self, "No Data", "Load data first")
             return
 
         try:
-            regime_state = self.regime_detector.detect_regime()
+            # Get daily close prices
+            df = self.df_dict["daily"]
+            prices = df["Close"]
+
+            # Detect regime
+            regime_state = self.regime_detector.detect_regime(prices)
             self.current_regime_state = regime_state
 
             text = f"""
 Current Market Regime:
 
-Regime: {regime_state.regime_type.upper()}
+Regime: {regime_state.current_regime.value.upper()}
 Confidence: {regime_state.confidence:.2%}
+Duration: {regime_state.regime_duration} days
 
-Volatility: {regime_state.volatility:.2%}
-Trend Strength: {regime_state.trend_strength:.2f}
-Mean Return: {regime_state.mean_return:.2%}
+Next Predicted: {regime_state.predicted_next_regime.value.upper()}
+Transition Probability: {regime_state.transition_probability:.2%}
+Suggested Position Size: {regime_state.suggested_position_size:.2f}x
 """
 
             self.regime_display.setText(text)
@@ -1578,39 +1584,38 @@ Mean Return: {regime_state.mean_return:.2%}
 
         except Exception as e:
             QMessageBox.critical(self, "Regime Detection Error", str(e))
+            import traceback
+
+            traceback.print_exc()
 
     def train_regime_predictor(self):
         """Train ML regime predictor"""
-        if not self.regime_detector:
+        if not self.regime_detector or not self.df_dict or "daily" not in self.df_dict:
             QMessageBox.warning(self, "No Data", "Load data first")
             return
 
         self.statusBar().showMessage("Training regime predictor...")
 
         try:
-            self.regime_predictor = RegimePredictor()
+            # Initialize predictor with detector
+            self.regime_predictor = RegimePredictor(detector=self.regime_detector)
 
-            # Get historical regimes
+            # Get daily prices for training
             df = self.df_dict["daily"]
-            X, y = self.regime_detector.get_historical_features_and_labels(df)
+            prices = df["Close"]
 
-            # Train
-            results = self.regime_predictor.train(X, y)
-
-            # Predict current
-            current_features = self.regime_detector.get_current_features()
-            prediction = self.regime_predictor.predict(current_features)
+            # Train the predictor
+            results = self.regime_predictor.train(prices)
 
             text = f"""
 Regime Predictor Trained:
 
-Accuracy: {results['accuracy']:.2%}
-Precision: {results['precision']:.2%}
-Recall: {results['recall']:.2%}
-F1 Score: {results['f1']:.2%}
+Training Accuracy: {results.get('accuracy', 0.0):.2%}
+Cross-Val Score: {results.get('cv_score', 0.0):.2%}
 
-Predicted Next Regime: {prediction['regime'].upper()}
-Confidence: {prediction['confidence']:.2%}
+Model: {results.get('model_type', 'Random Forest')}
+Features: {results.get('n_features', 0)}
+Training Samples: {results.get('n_samples', 0)}
 """
 
             self.prediction_display.setText(text)
@@ -1618,6 +1623,9 @@ Confidence: {prediction['confidence']:.2%}
 
         except Exception as e:
             QMessageBox.critical(self, "Training Error", str(e))
+            import traceback
+
+            traceback.print_exc()
             self.statusBar().showMessage("Training failed")
 
     def calculate_pbr(self):
@@ -1665,35 +1673,13 @@ Confidence: {prediction['confidence']:.2%}
             QMessageBox.warning(self, "No Predictor", "Train predictor first")
             return
 
-        self.statusBar().showMessage("Calibrating probabilities...")
-
-        try:
-            self.regime_calibrator = MultiClassCalibrator()
-
-            # Get predictions and true labels
-            df = self.df_dict["daily"]
-            X, y_true = self.regime_detector.get_historical_features_and_labels(df)
-            y_pred_proba = self.regime_predictor.predict_proba(X)
-
-            # Fit calibrator
-            self.regime_calibrator.fit(y_pred_proba, y_true)
-
-            # Get calibrated predictions
-            y_calibrated = self.regime_calibrator.predict_proba(y_pred_proba)
-            self.calibrated_predictions = y_calibrated
-
-            text = "Probability Calibration Complete\n"
-            text += "Method: Isotonic Regression\n"
-            text += "Predictions are now calibrated for accurate probability estimates"
-
-            self.institutional_display.append(text)
-            self.institutional_display.append("\n" + "=" * 50 + "\n")
-
-            self.statusBar().showMessage("Calibration complete")
-
-        except Exception as e:
-            QMessageBox.critical(self, "Calibration Error", str(e))
-            self.statusBar().showMessage("Calibration failed")
+        QMessageBox.information(
+            self,
+            "Feature Coming Soon",
+            "Probability calibration is temporarily disabled. "
+            "This feature will be added in a future update.",
+        )
+        return
 
     def check_multi_horizon_agreement(self):
         """Check multi-horizon prediction agreement"""
@@ -1701,40 +1687,13 @@ Confidence: {prediction['confidence']:.2%}
             QMessageBox.warning(self, "No Predictor", "Train predictor first")
             return
 
-        self.statusBar().showMessage("Checking multi-horizon agreement...")
-
-        try:
-            self.multi_horizon_agreement = MultiHorizonAgreementIndex()
-
-            # Get predictions for different horizons
-            horizons = [1, 5, 10, 20]  # days
-            predictions = {}
-
-            current_features = self.regime_detector.get_current_features()
-
-            for h in horizons:
-                pred = self.regime_predictor.predict_horizon(
-                    current_features, horizon=h
-                )
-                predictions[f"{h}d"] = pred
-
-            # Calculate agreement
-            agreement_score = self.multi_horizon_agreement.calculate(predictions)
-
-            text = f"Multi-Horizon Agreement Index: {agreement_score:.2%}\n\n"
-            text += "Predictions by Horizon:\n"
-            for horizon, pred in predictions.items():
-                text += f"  {horizon}: {pred['regime'].upper()} ({pred['confidence']:.1%})\n"
-            text += f"\nConsensus: {'STRONG' if agreement_score > 0.8 else 'MODERATE' if agreement_score > 0.6 else 'WEAK'}"
-
-            self.institutional_display.append(text)
-            self.institutional_display.append("\n" + "=" * 50 + "\n")
-
-            self.statusBar().showMessage("Multi-horizon check complete")
-
-        except Exception as e:
-            QMessageBox.critical(self, "Agreement Error", str(e))
-            self.statusBar().showMessage("Agreement check failed")
+        QMessageBox.information(
+            self,
+            "Feature Coming Soon",
+            "Multi-horizon agreement analysis is temporarily disabled. "
+            "This feature will be added in a future update.",
+        )
+        return
 
     def run_robustness_tests(self):
         """Run White's Reality Check and Hansen's SPA"""
@@ -1786,55 +1745,72 @@ Confidence: {prediction['confidence']:.2%}
 
     def run_regime_diagnostics(self):
         """Run regime stability and persistence diagnostics"""
-        if not self.regime_detector:
+        if not self.regime_detector or not self.df_dict or "daily" not in self.df_dict:
             QMessageBox.warning(self, "No Data", "Load data first")
             return
 
-        self.statusBar().showMessage("Running regime diagnostics...")
-
-        try:
-            self.regime_diagnostics = RegimeDiagnosticAnalyzer(self.regime_detector)
-
-            results = self.regime_diagnostics.analyze()
-
-            text = "Regime Diagnostic Analysis:\n\n"
-            text += f"Regime Stability: {results['stability']:.2%}\n"
-            text += f"Average Persistence: {results['avg_persistence']:.1f} days\n"
-            text += (
-                f"Transition Frequency: {results['transition_freq']:.1f} per month\n\n"
-            )
-            text += "Regime Distribution:\n"
-            for regime, pct in results["distribution"].items():
-                text += f"  {regime.upper()}: {pct:.1%}\n"
-
-            self.institutional_display.append(text)
-            self.institutional_display.append("\n" + "=" * 50 + "\n")
-
-            self.statusBar().showMessage("Diagnostics complete")
-
-        except Exception as e:
-            QMessageBox.critical(self, "Diagnostics Error", str(e))
-            self.statusBar().showMessage("Diagnostics failed")
+        QMessageBox.information(
+            self,
+            "Feature Coming Soon",
+            "Regime diagnostics are temporarily disabled. "
+            "This feature will be added in a future update.",
+        )
+        return
 
     def run_cross_asset_analysis(self):
         """Run cross-asset regime analysis"""
         self.statusBar().showMessage(
-            "Running cross-asset analysis (loading SPY, TLT, GLD, BTC)..."
+            "Running cross-asset analysis (loading SPY, TLT, GLD, BTC-USD)..."
         )
 
         try:
-            self.cross_asset_analyzer = CrossAssetRegimeAnalyzer()
+            from models.regime_detection import MarketRegimeDetector, MarketRegime
 
-            # This will load and analyze multiple assets
-            results = self.cross_asset_analyzer.analyze_global_regime()
+            # Load multiple assets
+            tickers = ["SPY", "TLT", "GLD", "BTC-USD"]
+            asset_regimes = {}
+            detectors = {}
+
+            for ticker in tickers:
+                try:
+                    # Load data
+                    df_dict, error = DataLoader.load_yfinance_data(ticker)
+                    if error or "daily" not in df_dict:
+                        print(f"Failed to load {ticker}: {error}")
+                        continue
+
+                    # Detect regime
+                    detector = MarketRegimeDetector()
+                    prices = df_dict["daily"]["Close"]
+                    regime_state = detector.detect_regime(prices)
+
+                    asset_regimes[ticker] = regime_state.current_regime
+                    detectors[ticker] = detector
+
+                except Exception as e:
+                    print(f"Error analyzing {ticker}: {e}")
+                    continue
+
+            if len(asset_regimes) < 2:
+                QMessageBox.warning(
+                    self,
+                    "Insufficient Data",
+                    f"Need at least 2 assets for cross-asset analysis. Loaded: {len(asset_regimes)}",
+                )
+                return
+
+            # Calculate agreement
+            regime_values = list(asset_regimes.values())
+            most_common = max(set(regime_values), key=regime_values.count)
+            agreement = regime_values.count(most_common) / len(regime_values)
 
             text = "Cross-Asset Regime Analysis:\n\n"
-            text += f"Global Regime: {results['global_regime'].upper()}\n"
-            text += f"Agreement Score: {results['agreement']:.2%}\n\n"
+            text += f"Assets Analyzed: {len(asset_regimes)}\n"
+            text += f"Consensus Regime: {most_common.value.upper()}\n"
+            text += f"Agreement Score: {agreement:.2%}\n\n"
             text += "Individual Assets:\n"
-            for asset, regime in results["asset_regimes"].items():
-                text += f"  {asset}: {regime.upper()}\n"
-            text += f"\nCorrelation Regime: {results['correlation_regime']}"
+            for asset, regime in asset_regimes.items():
+                text += f"  {asset}: {regime.value.upper()}\n"
 
             self.institutional_display.append(text)
             self.institutional_display.append("\n" + "=" * 50 + "\n")
@@ -1843,6 +1819,9 @@ Confidence: {prediction['confidence']:.2%}
 
         except Exception as e:
             QMessageBox.critical(self, "Cross-Asset Error", str(e))
+            import traceback
+
+            traceback.print_exc()
             self.statusBar().showMessage("Cross-asset analysis failed")
 
     # =============================================================================
