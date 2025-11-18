@@ -1166,7 +1166,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(100)
         self.phase_label.setText("Optimization complete!")
 
-        # Plot results and show summary
+        # Plot results and update display
         if not df_results.empty:
             best = df_results.iloc[0]
             self._plot_results(best)
@@ -1175,14 +1175,15 @@ class MainWindow(QMainWindow):
             if "trade_log" in best:
                 self.last_trade_log = best["trade_log"]
 
-            # Show results summary
-            self._show_results_summary(best)
+            # Update the results display panel
+            self._update_results_display(best)
 
         self.statusBar().showMessage("Optimization completed successfully")
 
-    def _show_results_summary(self, best: pd.Series):
-        """Display optimization results summary in a message box"""
+    def _update_results_display(self, best: pd.Series):
+        """Update the optimization results display panel"""
         try:
+            # Extract metrics
             psr = best.get("PSR", 0.0)
             sharpe = best.get("Sharpe_Ratio", 0.0)
             sortino = best.get("Sortino_Ratio", 0.0)
@@ -1191,32 +1192,47 @@ class MainWindow(QMainWindow):
             profit_factor = best.get("Profit_Factor", 0.0)
             trades = best.get("Trade_Count", 0)
 
-            msg = f"""
-Optimization Complete!
+            # Update metric labels
+            self.psr_label.setText(f"{psr:.3f}")
+            self.sharpe_label.setText(f"{sharpe:.2f}")
+            self.sortino_label.setText(f"{sortino:.2f}")
 
-📊 Performance Metrics:
-  PSR: {psr:.3f} ({psr*100:.1f}%)
-  Sharpe Ratio: {sharpe:.2f}
-  Sortino Ratio: {sortino:.2f}
+            # Extract parameters (handle timeframe suffix)
+            mn1 = best.get(
+                "MN1_daily", best.get("MN1_hourly", best.get("MN1_5min", "N/A"))
+            )
+            mn2 = best.get(
+                "MN2_daily", best.get("MN2_hourly", best.get("MN2_5min", "N/A"))
+            )
+            entry = best.get(
+                "Entry_daily", best.get("Entry_hourly", best.get("Entry_5min", "N/A"))
+            )
+            exit_thresh = best.get(
+                "Exit_daily", best.get("Exit_hourly", best.get("Exit_5min", "N/A"))
+            )
+            on = best.get("On_daily", best.get("On_hourly", best.get("On_5min", "N/A")))
+            off = best.get(
+                "Off_daily", best.get("Off_hourly", best.get("Off_5min", "N/A"))
+            )
 
-  Total Return: {total_return:.2f}%
-  Max Drawdown: {max_dd:.2f}%
-  Profit Factor: {profit_factor:.2f}
-  Total Trades: {trades}
+            # Build detailed results text
+            text = "✅ Optimization Complete!\n\n"
+            text += f"📊 Performance Metrics:\n"
+            text += f"  PSR: {psr:.3f} ({psr*100:.1f}%) | Sharpe: {sharpe:.2f} | Sortino: {sortino:.2f}\n"
+            text += f"  Return: {total_return:.2f}% | Max DD: {max_dd:.2f}% | PF: {profit_factor:.2f}\n"
+            text += f"  Total Trades: {trades}\n\n"
+            text += f"⚙️  Best Parameters:\n"
+            text += f"  MN1: {mn1} | MN2: {mn2}\n"
+            text += f"  Entry: {entry} | Exit: {exit_thresh}\n"
+            text += f"  ON: {on} | OFF: {off}"
 
-⚙️  Best Parameters:
-  MN1: {best.get('MN1_daily', 'N/A')}
-  MN2: {best.get('MN2_daily', 'N/A')}
-  Entry: {best.get('Entry_daily', 'N/A')}
-  Exit: {best.get('Exit_daily', 'N/A')}
-  ON: {best.get('On_daily', 'N/A')}
-  OFF: {best.get('Off_daily', 'N/A')}
+            self.best_params_label.setText(text)
 
-View the equity curve chart below for visual results.
-"""
-            QMessageBox.information(self, "Optimization Results", msg)
         except Exception as e:
-            print(f"Error displaying results summary: {e}")
+            print(f"Error updating results display: {e}")
+            import traceback
+
+            traceback.print_exc()
 
     def _plot_results(self, best: pd.Series):
         """Plot equity curve with buy/sell signals"""
