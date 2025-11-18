@@ -658,7 +658,12 @@ Win Rate Std Dev:       {advanced_metrics.win_rate_std*100:.1f}%
 
         final_equities = np.array([sim[-1] for sim in basic_results.simulations])
 
-        ax1.hist(final_equities, bins=50, color="#2979ff", alpha=0.7, edgecolor="white")
+        # Determine appropriate number of bins based on data range
+        data_range = final_equities.max() - final_equities.min()
+        n_unique = len(np.unique(final_equities))
+        n_bins = min(50, max(10, n_unique))  # Use fewer bins if little variation
+
+        ax1.hist(final_equities, bins=n_bins, color="#2979ff", alpha=0.7, edgecolor="white")
         ax1.axvline(
             basic_results.original_equity,
             color="#00ff00",
@@ -705,7 +710,9 @@ Win Rate Std Dev:       {advanced_metrics.win_rate_std*100:.1f}%
             dd = (peak - sim) / peak * 100
             max_drawdowns.append(np.max(dd))
 
-        ax2.hist(max_drawdowns, bins=50, color="#ff4444", alpha=0.7, edgecolor="white")
+        # Adaptive bins for drawdown
+        n_bins_dd = min(50, max(10, len(np.unique(max_drawdowns))))
+        ax2.hist(max_drawdowns, bins=n_bins_dd, color="#ff4444", alpha=0.7, edgecolor="white")
         ax2.axvline(
             advanced_metrics.max_drawdown_mean,
             color="#FFA500",
@@ -742,7 +749,9 @@ Win Rate Std Dev:       {advanced_metrics.win_rate_std*100:.1f}%
                 )
                 sharpe_ratios.append(np.clip(sharpe, -5, 10))
 
-        ax3.hist(sharpe_ratios, bins=50, color="#00ff88", alpha=0.7, edgecolor="white")
+        # Adaptive bins for Sharpe
+        n_bins_sharpe = min(50, max(10, len(np.unique(sharpe_ratios)))) if sharpe_ratios else 10
+        ax3.hist(sharpe_ratios, bins=n_bins_sharpe, color="#00ff88", alpha=0.7, edgecolor="white")
         ax3.axvline(
             advanced_metrics.sharpe_mean,
             color="#FFA500",
@@ -805,9 +814,11 @@ Win Rate Std Dev:       {advanced_metrics.win_rate_std*100:.1f}%
 
         returns_pct = ((final_equities - 1000) / 1000) * 100
 
+        # Adaptive bins for returns
+        n_bins_returns = min(50, max(10, len(np.unique(returns_pct))))
         n, bins, patches = ax5.hist(
             returns_pct,
-            bins=50,
+            bins=n_bins_returns,
             density=True,
             color="#2979ff",
             alpha=0.7,
@@ -860,7 +871,9 @@ Win Rate Std Dev:       {advanced_metrics.win_rate_std*100:.1f}%
                 wr = np.sum(returns > 0) / len(returns)
                 win_rates.append(wr * 100)
 
-        ax7.hist(win_rates, bins=30, color="#00ff88", alpha=0.7, edgecolor="white")
+        # Adaptive bins for win rates
+        n_bins_wr = min(30, max(10, len(np.unique(win_rates)))) if win_rates else 10
+        ax7.hist(win_rates, bins=n_bins_wr, color="#00ff88", alpha=0.7, edgecolor="white")
         ax7.axvline(
             advanced_metrics.win_rate_mean * 100,
             color="#FFA500",
@@ -893,8 +906,10 @@ Win Rate Std Dev:       {advanced_metrics.win_rate_std*100:.1f}%
                     calmar_ratios.append(calmar)
 
         if calmar_ratios:
+            # Adaptive bins for Calmar
+            n_bins_calmar = min(50, max(10, len(np.unique(calmar_ratios))))
             ax8.hist(
-                calmar_ratios, bins=50, color="#9c27b0", alpha=0.7, edgecolor="white"
+                calmar_ratios, bins=n_bins_calmar, color="#9c27b0", alpha=0.7, edgecolor="white"
             )
             ax8.axvline(
                 advanced_metrics.calmar_mean,
