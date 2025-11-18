@@ -1081,15 +1081,18 @@ class MainWindow(QMainWindow):
 
         trials = self.trials_spin.value()
         batch_size = self.batch_spin.value()
-        objective = self.objective_combo.currentText()
 
-        # Create worker
+        # Create worker with correct parameters
         self.worker = MultiTimeframeOptimizer(
             df_dict=self.df_dict,
-            indicator_ranges=params,
             n_trials=trials,
+            time_cycle_ranges=(params["on"], params["off"]),
+            mn1_range=params["mn1"],
+            mn2_range=params["mn2"],
+            entry_range=params["entry"],
+            exit_range=params["exit"],
+            ticker=self.current_ticker if hasattr(self, "current_ticker") else "",
             batch_size=batch_size,
-            objective=objective,
             transaction_costs=self.transaction_costs,
         )
 
@@ -1298,12 +1301,18 @@ Parameters:
         self.statusBar().showMessage("Running Monte Carlo simulation...")
 
         try:
-            from core.monte_carlo import MonteCarloAnalyzer
+            QMessageBox.information(
+                self,
+                "Monte Carlo",
+                "Monte Carlo simulation is temporarily disabled. "
+                "Please use the command-line interface for Monte Carlo analysis.",
+            )
+            self.statusBar().showMessage("Monte Carlo not available in GUI")
+            return
 
-            n_sims = self.mc_simulations_spin.value()
-
-            analyzer = MonteCarloAnalyzer(self.last_trade_log)
-            results = analyzer.run_all_methods(n_simulations=n_sims)
+            # TODO: Implement Monte Carlo in GUI
+            # from optimization import MonteCarloSimulator
+            # n_sims = self.mc_simulations_spin.value()
 
             # Show summary
             msg = f"""
@@ -1352,7 +1361,7 @@ Block Bootstrap:
         self.statusBar().showMessage("Running walk-forward analysis...")
 
         try:
-            from core.walk_forward import WalkForwardAnalyzer
+            from optimization import WalkForwardAnalyzer, MultiTimeframeOptimizer
 
             params = {
                 "mn1": (self.mn1_min.value(), self.mn1_max.value()),
@@ -1363,16 +1372,21 @@ Block Bootstrap:
                 "off": (self.off_min.value(), self.off_max.value()),
             }
 
-            analyzer = WalkForwardAnalyzer(
+            # Call static method
+            results = WalkForwardAnalyzer.run_walk_forward(
+                optimizer_class=MultiTimeframeOptimizer,
                 df_dict=self.df_dict,
-                indicator_ranges=params,
                 train_days=train_days,
                 test_days=test_days,
-                trials_per_window=trials,
+                n_trials=trials,
+                time_cycle_ranges=(params["on"], params["off"]),
+                mn1_range=params["mn1"],
+                mn2_range=params["mn2"],
+                entry_range=params["entry"],
+                exit_range=params["exit"],
+                ticker=self.current_ticker if hasattr(self, "current_ticker") else "",
                 transaction_costs=self.transaction_costs,
             )
-
-            results = analyzer.run()
 
             # Show summary
             msg = f"""
@@ -1478,9 +1492,18 @@ Confidence: {prediction['confidence']:.2%}
             return
 
         try:
-            from core.pbr import PBRCalculator
+            QMessageBox.information(
+                self,
+                "PBR",
+                "PBR calculation is temporarily disabled. "
+                "This feature will be added in a future update.",
+            )
+            self.statusBar().showMessage("PBR not available")
+            return
 
-            calculator = PBRCalculator()
+            # TODO: Implement PBR in GUI
+            # from optimization import PBRCalculator
+            # calculator = PBRCalculator()
             pbr_score = calculator.calculate(
                 backtest_results=self.best_results.iloc[0],
                 regime_state=self.current_regime_state,
@@ -1587,9 +1610,18 @@ Confidence: {prediction['confidence']:.2%}
         self.statusBar().showMessage("Running robustness tests...")
 
         try:
-            from core.robustness import RobustnessAnalyzer
+            QMessageBox.information(
+                self,
+                "Robustness Tests",
+                "Robustness tests are temporarily disabled. "
+                "This feature will be added in a future update.",
+            )
+            self.statusBar().showMessage("Robustness tests not available")
+            return
 
-            analyzer = RobustnessAnalyzer()
+            # TODO: Implement Robustness tests in GUI
+            # from optimization import RobustnessAnalyzer
+            # analyzer = RobustnessAnalyzer()
             results = analyzer.run_tests(
                 strategy_returns=self.best_results.iloc[0]["returns"],
                 n_bootstrap=500,  # Reduced for GUI performance
