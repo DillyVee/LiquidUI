@@ -867,23 +867,23 @@ class MainWindow(QMainWindow):
 
         # Set default values
         if param_name == "mn1":
-            min_spin.setValue(IndicatorRanges.MN1_MIN)
-            max_spin.setValue(IndicatorRanges.MN1_MAX)
+            min_spin.setValue(IndicatorRanges.MN1_RANGE[0])
+            max_spin.setValue(IndicatorRanges.MN1_RANGE[1])
         elif param_name == "mn2":
-            min_spin.setValue(IndicatorRanges.MN2_MIN)
-            max_spin.setValue(IndicatorRanges.MN2_MAX)
+            min_spin.setValue(IndicatorRanges.MN2_RANGE[0])
+            max_spin.setValue(IndicatorRanges.MN2_RANGE[1])
         elif param_name == "entry":
-            min_spin.setValue(IndicatorRanges.ENTRY_MIN)
-            max_spin.setValue(IndicatorRanges.ENTRY_MAX)
+            min_spin.setValue(IndicatorRanges.ENTRY_RANGE[0])
+            max_spin.setValue(IndicatorRanges.ENTRY_RANGE[1])
         elif param_name == "exit":
-            min_spin.setValue(IndicatorRanges.EXIT_MIN)
-            max_spin.setValue(IndicatorRanges.EXIT_MAX)
+            min_spin.setValue(IndicatorRanges.EXIT_RANGE[0])
+            max_spin.setValue(IndicatorRanges.EXIT_RANGE[1])
         elif param_name == "on":
-            min_spin.setValue(IndicatorRanges.ON_MIN)
-            max_spin.setValue(IndicatorRanges.ON_MAX)
+            min_spin.setValue(IndicatorRanges.ON_RANGE[0])
+            max_spin.setValue(IndicatorRanges.ON_RANGE[1])
         elif param_name == "off":
-            min_spin.setValue(IndicatorRanges.OFF_MIN)
-            max_spin.setValue(IndicatorRanges.OFF_MAX)
+            min_spin.setValue(IndicatorRanges.OFF_RANGE[0])
+            max_spin.setValue(IndicatorRanges.OFF_RANGE[1])
 
     # =============================================================================
     # DATA LOADING METHODS
