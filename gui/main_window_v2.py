@@ -287,14 +287,22 @@ class MainWindow(QMainWindow):
         params_group = QGroupBox("Strategy Parameter Ranges")
         params_layout = QVBoxLayout()
 
-        self._add_param_range(params_layout, "MN1 (Fast Moving Average)", "mn1")
-        self._add_param_range(params_layout, "MN2 (Slow Moving Average)", "mn2")
+        self._add_param_range(params_layout, "MN1 (RSI1 Length)", "mn1")
+        self._add_param_range(params_layout, "MN2 (RSI2 Length)", "mn2")
         self._add_param_range(
             params_layout, "Entry Threshold", "entry", is_decimal=True
         )
         self._add_param_range(params_layout, "Exit Threshold", "exit", is_decimal=True)
         self._add_param_range(params_layout, "On Cycle", "on")
         self._add_param_range(params_layout, "Off Cycle", "off")
+
+        # Add note about START parameter
+        start_note = QLabel(
+            "Note: START cycle range is auto-calculated as 0 to (ON + OFF)"
+        )
+        start_note.setStyleSheet("font-size: 10px; color: #888; font-style: italic;")
+        start_note.setWordWrap(True)
+        params_layout.addWidget(start_note)
 
         params_group.setLayout(params_layout)
         left_layout.addWidget(params_group)
@@ -1146,9 +1154,9 @@ class MainWindow(QMainWindow):
         # Update full display
         text = f"Best Parameters Found:\n"
         text += f"PSR: {psr:.3f} | Sharpe: {sharpe:.3f} | Sortino: {sortino:.3f}\n"
-        text += f"MN1: {best_params.get('mn1', 0)} | MN2: {best_params.get('mn2', 0)}\n"
+        text += f"RSI1 Length (MN1): {best_params.get('mn1', 0)} | RSI2 Length (MN2): {best_params.get('mn2', 0)}\n"
         text += f"Entry: {best_params.get('entry', 0):.2f} | Exit: {best_params.get('exit', 0):.2f}\n"
-        text += f"On: {best_params.get('on', 0)} | Off: {best_params.get('off', 0)}"
+        text += f"Time Cycle - ON: {best_params.get('on', 0)} | OFF: {best_params.get('off', 0)} | START: {best_params.get('start', 0)}"
 
         self.best_params_label.setText(text)
 
@@ -1214,6 +1222,9 @@ class MainWindow(QMainWindow):
             off = best.get(
                 "Off_daily", best.get("Off_hourly", best.get("Off_5min", "N/A"))
             )
+            start = best.get(
+                "Start_daily", best.get("Start_hourly", best.get("Start_5min", "N/A"))
+            )
 
             # Build detailed results text
             text = "✅ Optimization Complete!\n\n"
@@ -1222,9 +1233,11 @@ class MainWindow(QMainWindow):
             text += f"  Return: {total_return:.2f}% | Max DD: {max_dd:.2f}% | PF: {profit_factor:.2f}\n"
             text += f"  Total Trades: {trades}\n\n"
             text += f"⚙️  Best Parameters:\n"
-            text += f"  MN1: {mn1} | MN2: {mn2}\n"
-            text += f"  Entry: {entry} | Exit: {exit_thresh}\n"
-            text += f"  ON: {on} | OFF: {off}"
+            text += f"  RSI1 Length (MN1): {mn1}\n"
+            text += f"  RSI2 Length (MN2): {mn2}\n"
+            text += f"  Entry Threshold: {entry}\n"
+            text += f"  Exit Threshold: {exit_thresh}\n"
+            text += f"  Time Cycle: ON={on}, OFF={off}, START={start}"
 
             self.best_params_label.setText(text)
 
