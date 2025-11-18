@@ -110,6 +110,13 @@ class WhiteRealityCheck:
         print(f"{'='*70}")
         print(f"Observed excess return: {mean_excess:.6f} (t-stat: {observed_statistic:.4f})")
         print(f"Running {self.n_bootstrap} bootstrap simulations...")
+        print(f"\nDIAGNOSTICS:")
+        print(f"  Sample size: {len(strategy_returns)}")
+        print(f"  Strategy mean return: {np.mean(strategy_returns):.6f}")
+        print(f"  Benchmark mean return: {np.mean(benchmark_returns):.6f}")
+        print(f"  Observed excess return: {observed_statistic:.6f}")
+        print(f"  Excess return std: {np.std(excess_returns):.6f}")
+        print(f"\nRunning {self.n_bootstrap} bootstrap simulations...")
 
         # Bootstrap distribution under null (no skill)
         bootstrap_statistics = []
@@ -140,14 +147,20 @@ class WhiteRealityCheck:
         # Calculate p-value: fraction of bootstrap samples >= observed
         p_value = np.mean(bootstrap_statistics >= observed_statistic)
 
+        print(f"\nBOOTSTRAP RESULTS:")
+        print(f"  Bootstrap mean: {np.mean(bootstrap_statistics):.6f}")
+        print(f"  Bootstrap std: {np.std(bootstrap_statistics):.6f}")
+        print(f"  Bootstrap min/max: [{np.min(bootstrap_statistics):.6f}, {np.max(bootstrap_statistics):.6f}]")
+        print(f"  Observed vs bootstrap: {observed_statistic:.6f} vs {np.mean(bootstrap_statistics):.6f}")
+
         # Adjust for multiple testing if alternative strategies provided
         if alternative_strategies is not None:
             n_strategies = len(alternative_strategies) + 1
             # Bonferroni correction
             p_value_adjusted = min(p_value * n_strategies, 1.0)
             print(
-                f"Data mining adjustment: {n_strategies} strategies tested, "
-                f"p-value: {p_value:.4f} → {p_value_adjusted:.4f}"
+                f"\nData mining adjustment: {n_strategies} strategies tested, "
+                f"p-value: {p_value:.6f} → {p_value_adjusted:.6f}"
             )
             p_value = p_value_adjusted
 
@@ -157,7 +170,7 @@ class WhiteRealityCheck:
             observed_statistic, p_value, is_significant
         )
 
-        print(f"\nP-value: {p_value:.4f}")
+        print(f"\nP-value: {p_value:.6f} (raw: {p_value})")
         print(f"Result: {'✅ SIGNIFICANT' if is_significant else '❌ NOT SIGNIFICANT'}")
         print(f"{'='*70}\n")
 
