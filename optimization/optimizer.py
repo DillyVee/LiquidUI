@@ -718,7 +718,10 @@ class MultiTimeframeOptimizer(QThread):
                 if tf in self.best_params_per_tf:
                     base_params.update(self.best_params_per_tf[tf])
 
-            base_eq_curve, base_trade_count = self.simulate_multi_tf(base_params)
+            # Get equity curve AND trade log for GUI display
+            base_eq_curve, base_trade_count, base_trades = self.simulate_multi_tf(
+                base_params, return_trades=True
+            )
 
             if base_eq_curve is None:
                 raise ValueError("Final simulation failed")
@@ -752,6 +755,16 @@ class MultiTimeframeOptimizer(QThread):
 
             # Load all results for display
             df_results = pd.read_csv(results_path)
+
+            # Add equity curve and trade log to first row for GUI display
+            if len(df_results) > 0:
+                # Use .at for single value assignment of complex objects
+                df_results.at[0, "equity_curve"] = base_eq_curve
+                if base_trades:
+                    trade_log_df = pd.DataFrame(base_trades)
+                    df_results.at[0, "trade_log"] = trade_log_df
+                else:
+                    df_results.at[0, "trade_log"] = pd.DataFrame()
 
             print(f"\n{'='*60}")
             print(f"OPTIMIZATION COMPLETE")

@@ -1181,10 +1181,16 @@ class MainWindow(QMainWindow):
         """Plot equity curve with buy/sell signals"""
         self.results_figure.clear()
 
-        if "equity_curve" not in best or best["equity_curve"] is None:
+        # Check if equity curve exists and is not NaN
+        if "equity_curve" not in best:
             return
 
         equity = best["equity_curve"]
+
+        # Handle NaN or None values
+        if equity is None or (isinstance(equity, float) and np.isnan(equity)):
+            return
+
         trade_log = best.get("trade_log")
 
         # Main plot
@@ -1197,30 +1203,9 @@ class MainWindow(QMainWindow):
         ax1.legend(facecolor="#2d2d2d", edgecolor="#3a3a3a", labelcolor="white")
 
         # Add buy/sell markers if we have trade log
-        if trade_log is not None and not trade_log.empty:
-            buys = trade_log[trade_log["side"] == "buy"]
-            sells = trade_log[trade_log["side"] == "sell"]
-
-            if not buys.empty:
-                ax1.scatter(
-                    buys.index,
-                    equity[buys.index],
-                    color="#2196F3",
-                    marker="^",
-                    s=100,
-                    label="Buy",
-                    zorder=5,
-                )
-            if not sells.empty:
-                ax1.scatter(
-                    sells.index,
-                    equity[sells.index],
-                    color="#F44336",
-                    marker="v",
-                    s=100,
-                    label="Sell",
-                    zorder=5,
-                )
+        # Note: Trade log has Entry_Date/Exit_Date format, not buy/sell with index
+        # For now, we'll skip the markers until we have the proper index mapping
+        # TODO: Add trade markers by matching Entry_Date/Exit_Date to equity curve indices
 
         # Drawdown plot
         ax2 = self.results_figure.add_subplot(212, facecolor="#1e1e1e")
