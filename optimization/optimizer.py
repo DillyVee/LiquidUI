@@ -753,18 +753,16 @@ class MultiTimeframeOptimizer(QThread):
 
             print(f"\n✅ Complete results saved to: {results_path}")
 
-            # Load all results for display
-            df_results = pd.read_csv(results_path)
+            # Build results DataFrame for GUI with equity curve and trade log
+            # Create a new DataFrame instead of loading from CSV to avoid issues with complex objects
+            final_result_for_gui = final_result.copy()
+            final_result_for_gui["equity_curve"] = base_eq_curve
+            if base_trades:
+                final_result_for_gui["trade_log"] = pd.DataFrame(base_trades)
+            else:
+                final_result_for_gui["trade_log"] = pd.DataFrame()
 
-            # Add equity curve and trade log to first row for GUI display
-            if len(df_results) > 0:
-                # Use .at for single value assignment of complex objects
-                df_results.at[0, "equity_curve"] = base_eq_curve
-                if base_trades:
-                    trade_log_df = pd.DataFrame(base_trades)
-                    df_results.at[0, "trade_log"] = trade_log_df
-                else:
-                    df_results.at[0, "trade_log"] = pd.DataFrame()
+            df_results = pd.DataFrame([final_result_for_gui])
 
             print(f"\n{'='*60}")
             print(f"OPTIMIZATION COMPLETE")
