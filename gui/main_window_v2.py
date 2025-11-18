@@ -13,6 +13,7 @@ from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QGroupBox,
     QHBoxLayout,
@@ -533,6 +534,17 @@ class MainWindow(QMainWindow):
         # Basic regime detection
         basic_group = QGroupBox("Basic Regime Detection")
         basic_layout = QVBoxLayout()
+
+        # Lookback days parameter
+        lookback_layout = QHBoxLayout()
+        lookback_layout.addWidget(QLabel("Lookback Days:"))
+        self.regime_lookback_spin = QSpinBox()
+        self.regime_lookback_spin.setRange(20, 1000)
+        self.regime_lookback_spin.setValue(252)  # 1 year default
+        self.regime_lookback_spin.setToolTip("Number of days of historical data to use for regime detection")
+        lookback_layout.addWidget(self.regime_lookback_spin)
+        lookback_layout.addStretch()
+        basic_layout.addLayout(lookback_layout)
 
         self.detect_regime_btn = QPushButton("🔍 Detect Current Market Regime")
         self.detect_regime_btn.setStyleSheet(
@@ -1314,7 +1326,7 @@ class MainWindow(QMainWindow):
             traceback.print_exc()
 
     def _plot_results(self, best: pd.Series):
-        """Plot equity curve with buy/sell signals"""
+        """Plot equity curve with buy-and-hold comparison"""
         self.results_figure.clear()
 
         # Check if equity curve exists and is not NaN
@@ -1331,17 +1343,35 @@ class MainWindow(QMainWindow):
 
         # Main plot
         ax1 = self.results_figure.add_subplot(211, facecolor="#1e1e1e")
-        ax1.plot(equity, color="#4CAF50", linewidth=2, label="Equity")
+        ax1.plot(equity, color="#4CAF50", linewidth=2, label="Strategy")
+
+        # Calculate and plot buy-and-hold if we have price data
+        if self.df_dict and "daily" in self.df_dict:
+            try:
+                df = self.df_dict["daily"]
+                # Align length with equity curve
+                if len(df) >= len(equity):
+                    # Use the last N bars matching equity curve length
+                    prices = df["Close"].iloc[-len(equity):].values
+                    # Normalize to start at same equity as strategy (1000)
+                    initial_equity = 1000.0
+                    buy_hold = (prices / prices[0]) * initial_equity
+                    ax1.plot(
+                        buy_hold,
+                        color="#2196F3",
+                        linewidth=2,
+                        linestyle="--",
+                        alpha=0.7,
+                        label="Buy & Hold",
+                    )
+            except Exception as e:
+                print(f"Could not plot buy-and-hold: {e}")
+
         ax1.set_title("Equity Curve", color="white", fontweight="bold")
-        ax1.set_ylabel("Equity", color="white")
+        ax1.set_ylabel("Equity ($)", color="white")
         ax1.tick_params(colors="white")
         ax1.grid(True, alpha=0.2, color="white")
         ax1.legend(facecolor="#2d2d2d", edgecolor="#3a3a3a", labelcolor="white")
-
-        # Add buy/sell markers if we have trade log
-        # Note: Trade log has Entry_Date/Exit_Date format, not buy/sell with index
-        # For now, we'll skip the markers until we have the proper index mapping
-        # TODO: Add trade markers by matching Entry_Date/Exit_Date to equity curve indices
 
         # Drawdown plot
         ax2 = self.results_figure.add_subplot(212, facecolor="#1e1e1e")
@@ -1412,7 +1442,7 @@ Parameters:
     # =============================================================================
 
     def run_monte_carlo(self):
-        """Run Monte Carlo simulation"""
+        """Run comprehensive Monte Carlo simulation with full quant metrics"""
         if self.last_trade_log is None or (
             isinstance(self.last_trade_log, pd.DataFrame) and self.last_trade_log.empty
         ):
@@ -1427,10 +1457,13 @@ Parameters:
             )
             return
 
-        self.statusBar().showMessage("Running Monte Carlo simulation...")
+        self.statusBar().showMessage("Running comprehensive Monte Carlo analysis...")
 
         try:
-            from optimization import MonteCarloSimulator
+            from optimization.monte_carlo import (
+                MonteCarloSimulator,
+                AdvancedMonteCarloAnalyzer,
+            )
 
             n_sims = self.mc_simulations_spin.value()
 
@@ -1440,45 +1473,46 @@ Parameters:
             else:
                 trades = self.last_trade_log
 
-            # Run Monte Carlo
+            # Run basic Monte Carlo
             results = MonteCarloSimulator.simulate_trade_randomization(
                 trades=trades, n_simulations=n_sims, initial_equity=1000.0
             )
 
-            # Calculate percentage returns from equity
-            orig_pct = (
-                (results.original_equity / 1000.0 - 1) * 100
-                if results.original_equity
-                else 0
+            # Calculate advanced metrics (drawdowns, VaR, Sharpe distribution, etc.)
+            advanced_metrics = AdvancedMonteCarloAnalyzer.calculate_advanced_metrics(
+                results, initial_equity=1000.0, risk_free_rate=0.02
             )
-            mean_pct = (results.mean_equity / 1000.0 - 1) * 100
-            median_pct = (results.median_equity / 1000.0 - 1) * 100
-            p5_pct = (results.percentile_5 / 1000.0 - 1) * 100
-            p95_pct = (results.percentile_95 / 1000.0 - 1) * 100
 
-            # Show summary
-            msg = f"""
-Monte Carlo Simulation Results ({n_sims} simulations)
+            # Generate comprehensive report
+            report = AdvancedMonteCarloAnalyzer.generate_enhanced_report(
+                results, advanced_metrics, initial_equity=1000.0
+            )
 
-Original Strategy:
-  Final Equity: ${results.original_equity:,.2f}
-  Return: {orig_pct:+.2f}%
+            # Display in a scrollable text widget
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Comprehensive Monte Carlo Analysis")
+            dialog.resize(800, 700)
 
-Simulated Outcomes:
-  Mean Return: {mean_pct:+.2f}%
-  Median Return: {median_pct:+.2f}%
+            layout = QVBoxLayout()
 
-  5th Percentile: {p5_pct:+.2f}%
-  95th Percentile: {p95_pct:+.2f}%
+            # Add text display
+            text_display = QTextEdit()
+            text_display.setReadOnly(True)
+            text_display.setFont(QFont("Courier", 9))
+            text_display.setStyleSheet(
+                "background-color: #1e1e1e; color: white; padding: 10px;"
+            )
+            text_display.setText(report)
+            layout.addWidget(text_display)
 
-  Std Dev: ${results.std_dev:,.2f}
-  Min: ${results.min_equity:,.2f}
-  Max: ${results.max_equity:,.2f}
+            # Add close button
+            close_btn = QPushButton("Close")
+            close_btn.clicked.connect(dialog.accept)
+            layout.addWidget(close_btn)
 
-Probability of Profit: {results.probability_profit:.2%}
-"""
+            dialog.setLayout(layout)
+            dialog.exec()
 
-            QMessageBox.information(self, "Monte Carlo Results", msg)
             self.statusBar().showMessage("Monte Carlo completed")
 
         except Exception as e:
@@ -1576,17 +1610,27 @@ Plots saved to: {Paths.RESULTS_DIR}/walk_forward/
             return
 
         try:
+            # Get lookback days from UI
+            lookback_days = self.regime_lookback_spin.value()
+
             # Get daily close prices
             df = self.df_dict["daily"]
             prices = df["Close"]
 
+            # Use last N days for regime detection
+            if len(prices) > lookback_days:
+                prices_to_use = prices.iloc[-lookback_days:]
+            else:
+                prices_to_use = prices
+
             # Detect regime
-            regime_state = self.regime_detector.detect_regime(prices)
+            regime_state = self.regime_detector.detect_regime(prices_to_use)
             self.current_regime_state = regime_state
 
             text = f"""
 Current Market Regime:
 
+Lookback Period: {lookback_days} days ({len(prices_to_use)} bars used)
 Regime: {regime_state.current_regime.value.upper()}
 Confidence: {regime_state.confidence:.2%}
 Duration: {regime_state.regime_duration} days
@@ -1597,7 +1641,7 @@ Suggested Position Size: {regime_state.suggested_position_size:.2f}x
 """
 
             self.regime_display.setText(text)
-            self.statusBar().showMessage("Regime detected")
+            self.statusBar().showMessage(f"Regime detected (using {len(prices_to_use)} days)")
 
         except Exception as e:
             QMessageBox.critical(self, "Regime Detection Error", str(e))
@@ -1617,22 +1661,26 @@ Suggested Position Size: {regime_state.suggested_position_size:.2f}x
             # Initialize predictor with detector
             self.regime_predictor = RegimePredictor(detector=self.regime_detector)
 
-            # Get daily prices for training
+            # Get daily prices and calculate returns for training
             df = self.df_dict["daily"]
             prices = df["Close"]
+            returns = prices.pct_change().dropna()
 
-            # Train the predictor
-            results = self.regime_predictor.train(prices)
+            # Align prices with returns (drop first NaN)
+            prices_aligned = prices.iloc[1:]
+
+            # Train the predictor with both prices and returns
+            performance = self.regime_predictor.train(prices_aligned, returns)
 
             text = f"""
 Regime Predictor Trained:
 
-Training Accuracy: {results.get('accuracy', 0.0):.2%}
-Cross-Val Score: {results.get('cv_score', 0.0):.2%}
+Training Accuracy: {self.regime_predictor.train_accuracy:.2%}
+Validation Accuracy: {self.regime_predictor.test_accuracy:.2%}
 
-Model: {results.get('model_type', 'Random Forest')}
-Features: {results.get('n_features', 0)}
-Training Samples: {results.get('n_samples', 0)}
+Model: Random Forest
+Prediction Horizon: {self.regime_predictor.prediction_horizon} days
+Training Complete: {'✅ Yes' if self.regime_predictor.is_trained else '❌ No'}
 """
 
             self.prediction_display.setText(text)
