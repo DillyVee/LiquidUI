@@ -1139,24 +1139,82 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(value)
 
     def update_best_label(self, best_params: Dict):
-        """Update best parameters display"""
+        """Update best parameters display during optimization"""
         self.best_params = best_params
 
-        # Update metrics
-        psr = best_params.get("psr", 0.0)
-        sharpe = best_params.get("sharpe_ratio", 0.0)
-        sortino = best_params.get("sortino_ratio", 0.0)
+        # Extract metrics (handle both lowercase and uppercase keys)
+        psr = best_params.get("PSR", best_params.get("psr", 0.0))
+        sharpe = best_params.get("Sharpe_Ratio", best_params.get("sharpe_ratio", 0.0))
+        sortino = best_params.get(
+            "Sortino_Ratio", best_params.get("sortino_ratio", 0.0)
+        )
 
+        # Update large metric labels
         self.psr_label.setText(f"{psr:.3f}")
-        self.sharpe_label.setText(f"{sharpe:.3f}")
-        self.sortino_label.setText(f"{sortino:.3f}")
+        self.sharpe_label.setText(f"{sharpe:.2f}")
+        self.sortino_label.setText(f"{sortino:.2f}")
 
-        # Update full display
+        # Extract parameters (handle timeframe suffixes)
+        mn1 = best_params.get(
+            "MN1_daily",
+            best_params.get(
+                "MN1_hourly", best_params.get("MN1_5min", best_params.get("mn1", "N/A"))
+            ),
+        )
+        mn2 = best_params.get(
+            "MN2_daily",
+            best_params.get(
+                "MN2_hourly", best_params.get("MN2_5min", best_params.get("mn2", "N/A"))
+            ),
+        )
+        entry = best_params.get(
+            "Entry_daily",
+            best_params.get(
+                "Entry_hourly",
+                best_params.get("Entry_5min", best_params.get("entry", "N/A")),
+            ),
+        )
+        exit_thresh = best_params.get(
+            "Exit_daily",
+            best_params.get(
+                "Exit_hourly",
+                best_params.get("Exit_5min", best_params.get("exit", "N/A")),
+            ),
+        )
+        on = best_params.get(
+            "On_daily",
+            best_params.get(
+                "On_hourly", best_params.get("On_5min", best_params.get("on", "N/A"))
+            ),
+        )
+        off = best_params.get(
+            "Off_daily",
+            best_params.get(
+                "Off_hourly", best_params.get("Off_5min", best_params.get("off", "N/A"))
+            ),
+        )
+        start = best_params.get(
+            "Start_daily",
+            best_params.get(
+                "Start_hourly",
+                best_params.get("Start_5min", best_params.get("start", "N/A")),
+            ),
+        )
+
+        # Build display text with proper formatting
         text = f"Best Parameters Found:\n"
-        text += f"PSR: {psr:.3f} | Sharpe: {sharpe:.3f} | Sortino: {sortino:.3f}\n"
-        text += f"RSI1 Length (MN1): {best_params.get('mn1', 0)} | RSI2 Length (MN2): {best_params.get('mn2', 0)}\n"
-        text += f"Entry: {best_params.get('entry', 0):.2f} | Exit: {best_params.get('exit', 0):.2f}\n"
-        text += f"Time Cycle - ON: {best_params.get('on', 0)} | OFF: {best_params.get('off', 0)} | START: {best_params.get('start', 0)}"
+        text += f"PSR: {psr:.3f} | Sharpe: {sharpe:.2f} | Sortino: {sortino:.2f}\n"
+        text += f"RSI1 Length (MN1): {mn1} | RSI2 Length (MN2): {mn2}\n"
+
+        # Format entry/exit with decimal if numeric
+        entry_str = f"{entry:.1f}" if isinstance(entry, (int, float)) else entry
+        exit_str = (
+            f"{exit_thresh:.1f}"
+            if isinstance(exit_thresh, (int, float))
+            else exit_thresh
+        )
+        text += f"Entry: {entry_str} | Exit: {exit_str}\n"
+        text += f"Time Cycle - ON: {on} | OFF: {off} | START: {start}"
 
         self.best_params_label.setText(text)
 
@@ -1226,6 +1284,14 @@ class MainWindow(QMainWindow):
                 "Start_daily", best.get("Start_hourly", best.get("Start_5min", "N/A"))
             )
 
+            # Format entry/exit with decimal if numeric
+            entry_str = f"{entry:.1f}" if isinstance(entry, (int, float)) else entry
+            exit_str = (
+                f"{exit_thresh:.1f}"
+                if isinstance(exit_thresh, (int, float))
+                else exit_thresh
+            )
+
             # Build detailed results text
             text = "✅ Optimization Complete!\n\n"
             text += f"📊 Performance Metrics:\n"
@@ -1235,8 +1301,8 @@ class MainWindow(QMainWindow):
             text += f"⚙️  Best Parameters:\n"
             text += f"  RSI1 Length (MN1): {mn1}\n"
             text += f"  RSI2 Length (MN2): {mn2}\n"
-            text += f"  Entry Threshold: {entry}\n"
-            text += f"  Exit Threshold: {exit_thresh}\n"
+            text += f"  Entry Threshold: {entry_str}\n"
+            text += f"  Exit Threshold: {exit_str}\n"
             text += f"  Time Cycle: ON={on}, OFF={off}, START={start}"
 
             self.best_params_label.setText(text)
