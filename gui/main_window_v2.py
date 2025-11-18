@@ -1083,10 +1083,16 @@ class MainWindow(QMainWindow):
         batch_size = self.batch_spin.value()
 
         # Create worker with correct parameters
+        time_cycle_ranges = (
+            params["on"],  # on_range
+            params["off"],  # off_range
+            (0, params["on"][1] + params["off"][1]),  # start_range
+        )
+
         self.worker = MultiTimeframeOptimizer(
             df_dict=self.df_dict,
             n_trials=trials,
-            time_cycle_ranges=(params["on"], params["off"]),
+            time_cycle_ranges=time_cycle_ranges,
             mn1_range=params["mn1"],
             mn2_range=params["mn2"],
             entry_range=params["entry"],
@@ -1373,13 +1379,19 @@ Block Bootstrap:
             }
 
             # Call static method
+            time_cycle_ranges = (
+                params["on"],  # on_range
+                params["off"],  # off_range
+                (0, params["on"][1] + params["off"][1]),  # start_range
+            )
+
             results = WalkForwardAnalyzer.run_walk_forward(
                 optimizer_class=MultiTimeframeOptimizer,
                 df_dict=self.df_dict,
                 train_days=train_days,
                 test_days=test_days,
                 n_trials=trials,
-                time_cycle_ranges=(params["on"], params["off"]),
+                time_cycle_ranges=time_cycle_ranges,
                 mn1_range=params["mn1"],
                 mn2_range=params["mn2"],
                 entry_range=params["entry"],
