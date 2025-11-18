@@ -2096,6 +2096,25 @@ Features: {len(self.regime_predictor.feature_names)}
                 )
                 return
 
+            # Print diagnostics
+            print("\n" + "="*70)
+            print("ROBUSTNESS TEST DATA DIAGNOSTICS")
+            print("="*70)
+            print(f"Sample size: {len(strategy_returns)}")
+            print(f"Strategy returns - mean: {np.mean(strategy_returns):.6f}, std: {np.std(strategy_returns):.6f}")
+            print(f"Benchmark returns - mean: {np.mean(benchmark_returns):.6f}, std: {np.std(benchmark_returns):.6f}")
+            print(f"Excess returns - mean: {np.mean(strategy_returns - benchmark_returns):.6f}")
+
+            # Calculate Sharpe ratios with safety checks
+            strat_std = np.std(strategy_returns)
+            bench_std = np.std(benchmark_returns)
+            strat_sharpe = (np.mean(strategy_returns) / strat_std * np.sqrt(252)) if strat_std > 0 else 0.0
+            bench_sharpe = (np.mean(benchmark_returns) / bench_std * np.sqrt(252)) if bench_std > 0 else 0.0
+
+            print(f"Strategy Sharpe (annualized): {strat_sharpe:.3f}")
+            print(f"Benchmark Sharpe (annualized): {bench_sharpe:.3f}")
+            print("="*70 + "\n")
+
             # Run White's Reality Check (reduced bootstrap for GUI performance)
             wrc = WhiteRealityCheck(n_bootstrap=500, block_size=10)
             wrc_result = wrc.test(
@@ -2116,8 +2135,8 @@ Features: {len(self.regime_predictor.feature_names)}
             text += f"Bootstrap Samples: 500\n\n"
 
             text += "White's Reality Check:\n"
-            text += f"  Test Statistic: {wrc_result.test_statistic:.4f}\n"
-            text += f"  P-value: {wrc_result.p_value:.4f}\n"
+            text += f"  Test Statistic: {wrc_result.test_statistic:.6f}\n"
+            text += f"  P-value: {wrc_result.p_value:.6f}\n"
             icon = "✅" if wrc_result.is_significant else "❌"
             text += f"  {icon} Result: {'SIGNIFICANT' if wrc_result.is_significant else 'NOT SIGNIFICANT'}\n"
             text += f"  Null: {wrc_result.null_hypothesis}\n\n"
@@ -2126,11 +2145,23 @@ Features: {len(self.regime_predictor.feature_names)}
             text += f"  Point Estimate: {sharpe:.3f}\n"
             text += f"  95% CI: [{sharpe_lower:.3f}, {sharpe_upper:.3f}]\n\n"
 
-            # Overall verdict
-            if wrc_result.is_significant and sharpe > 0:
-                verdict = "✅ ROBUST: Strategy shows statistically significant outperformance"
-            elif wrc_result.is_significant:
+            # Overall verdict with proper thresholds
+            # Sharpe ratio thresholds:
+            # < 0.5: Poor
+            # 0.5-1.0: Acceptable
+            # 1.0-2.0: Good
+            # > 2.0: Excellent
+
+            if wrc_result.is_significant and sharpe > 1.0 and sharpe_lower > 0:
+                verdict = "✅ ROBUST: Strategy shows statistically significant outperformance with good Sharpe ratio"
+            elif wrc_result.is_significant and sharpe > 0.5 and sharpe_lower > 0:
+                verdict = "⚠️ MODERATELY ROBUST: Statistically significant but modest Sharpe ratio"
+            elif wrc_result.is_significant and sharpe > 0:
+                verdict = "⚠️ WEAK SIGNAL: Statistically significant but very low Sharpe ratio - be cautious"
+            elif wrc_result.is_significant and sharpe <= 0:
                 verdict = "❌ SIGNIFICANT UNDERPERFORMANCE: Strategy loses money"
+            elif sharpe_lower < 0 < sharpe_upper:
+                verdict = "❌ NOT ROBUST: Confidence interval includes zero - no reliable edge"
             else:
                 verdict = "⚠️ NOT ROBUST: Performance may be due to luck or overfitting"
 
