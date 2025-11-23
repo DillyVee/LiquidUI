@@ -497,8 +497,17 @@ class MultiTimeframeOptimizer(QThread):
                             return 0.0
 
                         sharpe = PSRCalculator.calculate_sharpe_from_equity(eq_curve)
-                        trade_penalty = min(trades / 50.0, 1.0)
-                        score = sharpe - trade_penalty
+
+                        # Reward having enough trades for statistical confidence
+                        # Previously penalized MORE trades (backwards!)
+                        if trades < 10:
+                            trade_multiplier = 0.0  # Insufficient trades
+                        elif trades < 30:
+                            trade_multiplier = trades / 30.0  # Scale up to 30
+                        else:
+                            trade_multiplier = 1.0  # Sufficient statistical power
+
+                        score = sharpe * trade_multiplier
 
                         # Update progress
                         batch_progress = batch_idx / batches_per_phase
@@ -617,7 +626,7 @@ class MultiTimeframeOptimizer(QThread):
                         # Run simulation once and cache results
                         eq_curve, trade_count = self.simulate_multi_tf(params)
 
-                        if eq_curve is None or len(eq_curve) < 50 or trade_count < 10:
+                        if eq_curve is None or len(eq_curve) < 50:
                             psr, sharpe = 0.0, 0.0
                         else:
                             # Calculate PSR and Sharpe from cached equity curve
@@ -651,6 +660,18 @@ class MultiTimeframeOptimizer(QThread):
                                     sharpe = np.clip(sharpe, -5, 10)
                                 else:
                                     sharpe = 0.0
+
+                            # Apply smooth trade count multiplier (not hard cutoff)
+                            # Rewards having enough trades for statistical confidence
+                            if trade_count < 10:
+                                trade_multiplier = 0.0  # Insufficient trades
+                            elif trade_count < 30:
+                                trade_multiplier = (trade_count - 10) / 20.0  # 0.0 to 1.0
+                            else:
+                                trade_multiplier = 1.0  # Sufficient statistical power
+
+                            psr = psr * trade_multiplier
+                            sharpe = sharpe * trade_multiplier
 
                         # Store for batch saving (no need to re-simulate!)
                         trial.set_user_attr("params", params)
