@@ -1,0 +1,455 @@
+//@version=5
+strategy("LiquidUI - Institutional Regime Detection Strategy",
+         shorttitle="Regime Strategy",
+         overlay=true,
+         initial_capital=100000,
+         default_qty_type=strategy.percent_of_equity,
+         commission_type=strategy.commission.percent,
+         commission_value=0.1,
+         slippage=2)
+
+// ============================================================================
+// REGIME DETECTION PARAMETERS
+// ============================================================================
+
+// Volatility Settings
+vol_window = input.int(20, "Volatility Window", minval=5, maxval=100, group="Regime Detection")
+vol_threshold_low = input.float(10.0, "Low Vol Threshold (%)", minval=1, maxval=50, group="Regime Detection") / 100
+vol_threshold_high = input.float(25.0, "High Vol Threshold (%)", minval=10, maxval=100, group="Regime Detection") / 100
+vol_threshold_crisis = input.float(50.0, "Crisis Vol Threshold (%)", minval=20, maxval=150, group="Regime Detection") / 100
+
+// Trend Settings
+trend_fast = input.int(50, "Fast MA Period", minval=10, maxval=200, group="Regime Detection")
+trend_slow = input.int(200, "Slow MA Period", minval=50, maxval=300, group="Regime Detection")
+
+// Return Thresholds
+return_threshold_bull = input.float(15.0, "Bull Return Threshold (%)", minval=5, maxval=50, group="Regime Detection") / 100
+return_threshold_bear = input.float(-10.0, "Bear Return Threshold (%)", minval=-50, maxval=-5, group="Regime Detection") / 100
+
+// Position Sizing Settings
+base_position_size = input.float(100.0, "Base Position Size (%)", minval=10, maxval=100, group="Position Sizing")
+max_leverage = input.float(2.0, "Max Leverage", minval=1.0, maxval=3.0, group="Position Sizing")
+min_position_size = input.float(10.0, "Min Position Size (%)", minval=5, maxval=50, group="Position Sizing")
+
+// Display Settings
+show_regime_bg = input.bool(true, "Show Regime Background", group="Display")
+show_labels = input.bool(true, "Show Regime Labels", group="Display")
+show_position_size = input.bool(true, "Show Position Size", group="Display")
+
+// ============================================================================
+// FEATURE CALCULATION FUNCTIONS
+// ============================================================================
+
+// Calculate annualized realized volatility
+calc_realized_vol(lookback) =>
+    returns = ta.change(close) / close[1]
+    vol = ta.stdev(returns, lookback) * math.sqrt(252)
+    vol
+
+// Calculate volatility trend
+calc_vol_trend(lookback) =>
+    vol_recent = ta.stdev(ta.change(close) / close[1], lookback)
+    vol_older = ta.stdev(ta.change(close) / close[1], lookback)[lookback]
+    vol_older > 0 ? (vol_recent - vol_older) / vol_older : 0.0
+
+// Calculate annualized returns
+calc_annualized_return(lookback) =>
+    if bar_index < lookback
+        0.0
+    else
+        price_change = close / close[lookback]
+        annualized = math.pow(price_change, 252.0 / lookback) - 1.0
+        // Clip to reasonable range
+        math.max(math.min(annualized, 10.0), -1.0)
+
+// Calculate RSI
+calc_rsi(length) =>
+    ta.rsi(close, length)
+
+// Calculate Rate of Change
+calc_roc(lookback) =>
+    if bar_index < lookback
+        0.0
+    else
+        price_change = (close - close[lookback]) / close[lookback]
+        math.max(math.min(price_change, 10.0), -1.0)
+
+// Calculate current drawdown
+calc_drawdown() =>
+    cummax = ta.cum(math.max(close, nz(cummax[1], close)))
+    dd = (close - cummax) / cummax
+    dd
+
+// Calculate max drawdown over period
+calc_max_drawdown(lookback) =>
+    cummax = ta.highest(close, lookback)
+    dd = ta.lowest((close - cummax) / cummax, lookback)
+    dd
+
+// ============================================================================
+// REGIME SCORING SYSTEM
+// ============================================================================
+
+// Calculate all regime features
+var float realized_vol = na
+var float vol_trend = na
+var float return_20d = na
+var float return_60d = na
+var float ma_fast = na
+var float ma_slow = na
+var float ma_trend = na
+var float price_vs_ma_fast = na
+var float price_vs_ma_slow = na
+var float rsi_val = na
+var float roc_20 = na
+var float current_dd = na
+var float max_dd_60 = na
+
+// Update features
+realized_vol := calc_realized_vol(vol_window)
+vol_trend := calc_vol_trend(vol_window)
+return_20d := calc_annualized_return(20)
+return_60d := calc_annualized_return(60)
+ma_fast := ta.sma(close, trend_fast)
+ma_slow := ta.sma(close, trend_slow)
+ma_trend := ma_slow > 0 ? (ma_fast - ma_slow) / ma_slow : 0.0
+price_vs_ma_fast := ma_fast > 0 ? (close - ma_fast) / ma_fast : 0.0
+price_vs_ma_slow := ma_slow > 0 ? (close - ma_slow) / ma_slow : 0.0
+rsi_val := calc_rsi(14)
+roc_20 := calc_roc(20)
+current_dd := calc_drawdown()
+max_dd_60 := calc_max_drawdown(60)
+
+// Score each regime (0-10 scale)
+score_bull() =>
+    score = 0.0
+    if realized_vol < vol_threshold_low
+        score += 2.0
+    if return_20d > return_threshold_bull
+        score += 3.0
+    if return_60d > return_threshold_bull
+        score += 2.0
+    if ma_trend > 0.05
+        score += 2.0
+    if rsi_val > 60
+        score += 1.0
+    score
+
+score_bear() =>
+    score = 0.0
+    if realized_vol > vol_threshold_low
+        score += 1.0
+    if return_20d < return_threshold_bear
+        score += 3.0
+    if return_60d < return_threshold_bear
+        score += 2.0
+    if ma_trend < -0.05
+        score += 2.0
+    if rsi_val < 40
+        score += 1.0
+    if current_dd < -0.10
+        score += 2.0
+    score
+
+score_high_vol() =>
+    score = 0.0
+    if realized_vol > vol_threshold_high
+        score += 3.0
+    if math.abs(ma_trend) < 0.03
+        score += 2.0
+    if math.abs(return_20d) < 0.10
+        score += 1.0
+    if vol_trend > 0.5
+        score += 2.0
+    score
+
+score_low_vol() =>
+    score = 0.0
+    if realized_vol < vol_threshold_low
+        score += 3.0
+    if math.abs(ma_trend) < 0.02
+        score += 2.0
+    if math.abs(return_20d) < 0.05
+        score += 2.0
+    if rsi_val >= 40 and rsi_val <= 60
+        score += 1.0
+    score
+
+score_crisis() =>
+    score = 0.0
+    if realized_vol > vol_threshold_crisis
+        score += 4.0
+    if current_dd < -0.20
+        score += 3.0
+    if return_20d < -0.30
+        score += 3.0
+    score
+
+// Calculate regime scores
+bull_score = score_bull()
+bear_score = score_bear()
+high_vol_score = score_high_vol()
+low_vol_score = score_low_vol()
+crisis_score = score_crisis()
+
+// Normalize scores to probabilities
+total_score = bull_score + bear_score + high_vol_score + low_vol_score + crisis_score
+bull_prob = total_score > 0 ? bull_score / total_score : 0.2
+bear_prob = total_score > 0 ? bear_score / total_score : 0.2
+high_vol_prob = total_score > 0 ? high_vol_score / total_score : 0.2
+low_vol_prob = total_score > 0 ? low_vol_score / total_score : 0.2
+crisis_prob = total_score > 0 ? crisis_score / total_score : 0.2
+
+// Determine current regime (highest probability)
+regime = bull_prob >= bear_prob and bull_prob >= high_vol_prob and bull_prob >= low_vol_prob and bull_prob >= crisis_prob ? 1 : // BULL
+         bear_prob >= high_vol_prob and bear_prob >= low_vol_prob and bear_prob >= crisis_prob ? 2 : // BEAR
+         high_vol_prob >= low_vol_prob and high_vol_prob >= crisis_prob ? 3 : // HIGH_VOL
+         low_vol_prob >= crisis_prob ? 4 : 5 // LOW_VOL or CRISIS
+
+// Calculate confidence using entropy
+calc_confidence() =>
+    probs = array.from(bull_prob, bear_prob, high_vol_prob, low_vol_prob, crisis_prob)
+    entropy = 0.0
+    for prob in probs
+        if prob > 0
+            entropy := entropy - prob * math.log(prob)
+    max_entropy = math.log(5.0) // 5 regimes
+    confidence = 1.0 - (entropy / max_entropy)
+    confidence
+
+confidence = calc_confidence()
+
+// ============================================================================
+// REGIME TRANSITION & DURATION TRACKING
+// ============================================================================
+
+// Track regime changes and duration
+var int prev_regime = na
+var int regime_duration = 0
+var float transition_prob = 0.7 // Default
+
+if na(prev_regime)
+    prev_regime := regime
+
+if regime == prev_regime
+    regime_duration += 1
+else
+    regime_duration := 1
+    prev_regime := regime
+
+// Estimate transition probability (simple persistence model)
+// Higher duration = higher probability of staying
+transition_prob := math.min(0.95, 0.5 + (regime_duration / 100.0))
+
+// ============================================================================
+// DYNAMIC POSITION SIZING
+// ============================================================================
+
+// Base position sizes by regime
+regime_base_size(r) =>
+    r == 1 ? 1.2 :  // BULL: 120%
+    r == 2 ? 0.5 :  // BEAR: 50%
+    r == 3 ? 0.6 :  // HIGH_VOL: 60%
+    r == 4 ? 1.0 :  // LOW_VOL: 100%
+    0.2             // CRISIS: 20%
+
+base_size = regime_base_size(regime)
+
+// Adjust by confidence (low confidence = move toward 100%)
+confidence_adj = base_size * confidence + 1.0 * (1.0 - confidence)
+
+// Adjust by transition probability (likely to change = move toward 100%)
+transition_adj = confidence_adj * transition_prob + 1.0 * (1.0 - transition_prob)
+
+// Clip to reasonable range
+position_size_multiplier = math.max(min_position_size / 100.0,
+                                    math.min(max_leverage, transition_adj))
+
+// Final position size as percentage
+final_position_size = base_position_size * position_size_multiplier
+
+// ============================================================================
+// PBR-INSPIRED CONFIDENCE SCORING
+// ============================================================================
+
+// Simplified PBR calculation for display
+calc_pbr_score() =>
+    // Factor 1: Regime confidence
+    regime_factor = confidence
+
+    // Factor 2: Regime stability (transition probability)
+    stability_factor = transition_prob
+
+    // Factor 3: Trend alignment (price vs MAs)
+    trend_factor = ma_trend > 0.05 ? 0.8 : ma_trend < -0.05 ? 0.3 : 0.6
+
+    // Factor 4: Volatility regime quality
+    vol_factor = realized_vol < vol_threshold_low ? 0.9 :
+                 realized_vol > vol_threshold_crisis ? 0.2 : 0.6
+
+    // Combined score (0-1)
+    pbr = math.pow(regime_factor, 0.3) *
+          math.pow(stability_factor, 0.3) *
+          math.pow(trend_factor, 0.2) *
+          math.pow(vol_factor, 0.2)
+
+    pbr
+
+pbr_score = calc_pbr_score()
+
+// ============================================================================
+// TRADING SIGNALS
+// ============================================================================
+
+// Long conditions: BULL regime with high confidence
+long_condition = regime == 1 and confidence > 0.6 and pbr_score > 0.5
+
+// Short conditions: BEAR or CRISIS regime with high confidence
+short_condition = (regime == 2 or regime == 5) and confidence > 0.6 and pbr_score > 0.4
+
+// Exit conditions: regime change or low confidence
+exit_long_condition = (regime != 1 or confidence < 0.4) and strategy.position_size > 0
+exit_short_condition = (regime != 2 and regime != 5 or confidence < 0.4) and strategy.position_size < 0
+
+// Execute trades with dynamic position sizing
+if long_condition and strategy.position_size == 0
+    strategy.entry("Long", strategy.long, qty=final_position_size)
+
+if short_condition and strategy.position_size == 0
+    strategy.entry("Short", strategy.short, qty=final_position_size)
+
+if exit_long_condition
+    strategy.close("Long")
+
+if exit_short_condition
+    strategy.close("Short")
+
+// ============================================================================
+// VISUALIZATION
+// ============================================================================
+
+// Plot moving averages
+plot(ma_fast, "Fast MA", color=color.blue, linewidth=1)
+plot(ma_slow, "Slow MA", color=color.orange, linewidth=2)
+
+// Regime background colors
+regime_color = regime == 1 ? color.new(color.green, 90) :   // BULL
+               regime == 2 ? color.new(color.red, 90) :      // BEAR
+               regime == 3 ? color.new(color.orange, 90) :   // HIGH_VOL
+               regime == 4 ? color.new(color.blue, 90) :     // LOW_VOL
+               color.new(color.purple, 90)                   // CRISIS
+
+bgcolor(show_regime_bg ? regime_color : na, title="Regime Background")
+
+// Regime labels
+regime_name = regime == 1 ? "BULL" :
+              regime == 2 ? "BEAR" :
+              regime == 3 ? "HIGH VOL" :
+              regime == 4 ? "LOW VOL" :
+              "CRISIS"
+
+regime_color_solid = regime == 1 ? color.green :
+                     regime == 2 ? color.red :
+                     regime == 3 ? color.orange :
+                     regime == 4 ? color.blue :
+                     color.purple
+
+// Show regime change labels
+if show_labels and regime != regime[1]
+    label.new(bar_index, high,
+              text=regime_name + "\nConf: " + str.tostring(confidence * 100, "#.0") + "%\nPBR: " + str.tostring(pbr_score * 100, "#.0") + "%",
+              style=label.style_label_down,
+              color=regime_color_solid,
+              textcolor=color.white,
+              size=size.small)
+
+// ============================================================================
+// INFORMATION TABLE
+// ============================================================================
+
+// Create info table
+var table info_table = table.new(position.top_right, 2, 12,
+                                 border_width=1,
+                                 border_color=color.gray,
+                                 frame_color=color.gray,
+                                 frame_width=1)
+
+if barstate.islast and show_position_size
+    // Header
+    table.cell(info_table, 0, 0, "Regime Analysis",
+               bgcolor=color.new(color.gray, 70),
+               text_color=color.white,
+               text_size=size.normal)
+    table.merge_cells(info_table, 0, 0, 1, 0)
+
+    // Current Regime
+    table.cell(info_table, 0, 1, "Current Regime",
+               bgcolor=color.new(color.gray, 90))
+    table.cell(info_table, 1, 1, regime_name,
+               bgcolor=color.new(regime_color_solid, 80),
+               text_color=color.white)
+
+    // Confidence
+    table.cell(info_table, 0, 2, "Confidence",
+               bgcolor=color.new(color.gray, 90))
+    table.cell(info_table, 1, 2, str.tostring(confidence * 100, "#.0") + "%",
+               text_color=confidence > 0.7 ? color.green : confidence > 0.5 ? color.orange : color.red)
+
+    // PBR Score
+    table.cell(info_table, 0, 3, "PBR Score",
+               bgcolor=color.new(color.gray, 90))
+    table.cell(info_table, 1, 3, str.tostring(pbr_score * 100, "#.0") + "%",
+               text_color=pbr_score > 0.7 ? color.green : pbr_score > 0.5 ? color.orange : color.red)
+
+    // Regime Duration
+    table.cell(info_table, 0, 4, "Duration",
+               bgcolor=color.new(color.gray, 90))
+    table.cell(info_table, 1, 4, str.tostring(regime_duration) + " bars")
+
+    // Transition Probability
+    table.cell(info_table, 0, 5, "Stay Prob",
+               bgcolor=color.new(color.gray, 90))
+    table.cell(info_table, 1, 5, str.tostring(transition_prob * 100, "#.0") + "%")
+
+    // Volatility
+    table.cell(info_table, 0, 6, "Volatility",
+               bgcolor=color.new(color.gray, 90))
+    table.cell(info_table, 1, 6, str.tostring(realized_vol * 100, "#.1") + "%")
+
+    // Position Size
+    table.cell(info_table, 0, 7, "Position Size",
+               bgcolor=color.new(color.gray, 90))
+    table.cell(info_table, 1, 7, str.tostring(final_position_size, "#.0") + "%",
+               text_color=color.blue)
+
+    // Separator
+    table.cell(info_table, 0, 8, "Probabilities",
+               bgcolor=color.new(color.gray, 70),
+               text_color=color.white)
+    table.merge_cells(info_table, 0, 8, 1, 8)
+
+    // Regime Probabilities
+    table.cell(info_table, 0, 9, "Bull", bgcolor=color.new(color.gray, 90))
+    table.cell(info_table, 1, 9, str.tostring(bull_prob * 100, "#.0") + "%",
+               bgcolor=color.new(color.green, 90))
+
+    table.cell(info_table, 0, 10, "Bear", bgcolor=color.new(color.gray, 90))
+    table.cell(info_table, 1, 10, str.tostring(bear_prob * 100, "#.0") + "%",
+               bgcolor=color.new(color.red, 90))
+
+    table.cell(info_table, 0, 11, "Crisis", bgcolor=color.new(color.gray, 90))
+    table.cell(info_table, 1, 11, str.tostring(crisis_prob * 100, "#.0") + "%",
+               bgcolor=color.new(color.purple, 90))
+
+// ============================================================================
+// ALERTS
+// ============================================================================
+
+alertcondition(long_condition, title="Regime BULL - Go Long",
+               message="BULL regime detected with {{timenow}} - Confidence: " + str.tostring(confidence * 100, "#.0") + "%")
+
+alertcondition(short_condition, title="Regime BEAR/CRISIS - Go Short",
+               message="BEAR/CRISIS regime detected with {{timenow}} - Confidence: " + str.tostring(confidence * 100, "#.0") + "%")
+
+alertcondition(regime == 5 and confidence > 0.7, title="CRISIS Regime Alert",
+               message="CRISIS regime detected with HIGH confidence - Reduce exposure!")
