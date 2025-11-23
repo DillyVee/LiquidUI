@@ -440,6 +440,32 @@ class MultiTimeframeOptimizer(QThread):
                     ),
                 )
 
+                # Pre-build base parameters once (optimization!)
+                base_params_cycle = {}
+                for prev_tf in self.timeframes[:tf_idx]:
+                    base_params_cycle.update(self.best_params_per_tf[prev_tf])
+
+                mn1_default = (self.mn1_range[0] + self.mn1_range[1]) // 2
+                mn2_default = (self.mn2_range[0] + self.mn2_range[1]) // 2
+                entry_default = (self.entry_range[0] + self.entry_range[1]) / 2
+                exit_default = (self.exit_range[0] + self.exit_range[1]) / 2
+
+                # Current timeframe defaults
+                base_params_cycle[f"MN1_{tf}"] = mn1_default
+                base_params_cycle[f"MN2_{tf}"] = mn2_default
+                base_params_cycle[f"Entry_{tf}"] = entry_default
+                base_params_cycle[f"Exit_{tf}"] = exit_default
+
+                # Future timeframes defaults
+                for future_tf in self.timeframes[tf_idx + 1 :]:
+                    base_params_cycle[f"MN1_{future_tf}"] = mn1_default
+                    base_params_cycle[f"MN2_{future_tf}"] = mn2_default
+                    base_params_cycle[f"Entry_{future_tf}"] = entry_default
+                    base_params_cycle[f"Exit_{future_tf}"] = exit_default
+                    base_params_cycle[f"On_{future_tf}"] = on_range[0]
+                    base_params_cycle[f"Off_{future_tf}"] = off_range[0]
+                    base_params_cycle[f"Start_{future_tf}"] = 0
+
                 # Run cycle optimization in batches
                 for batch_idx in range(batches_per_phase):
                     if self.stopped:
@@ -455,36 +481,15 @@ class MultiTimeframeOptimizer(QThread):
 
                         trial_count[0] += 1
 
-                        # Build params
-                        params = {}
+                        # Copy base params (fast shallow copy)
+                        params = base_params_cycle.copy()
 
-                        for prev_tf in self.timeframes[:tf_idx]:
-                            params.update(self.best_params_per_tf[prev_tf])
-
-                        mn1_default = (self.mn1_range[0] + self.mn1_range[1]) // 2
-                        mn2_default = (self.mn2_range[0] + self.mn2_range[1]) // 2
-                        entry_default = (self.entry_range[0] + self.entry_range[1]) / 2
-                        exit_default = (self.exit_range[0] + self.exit_range[1]) / 2
-
-                        params[f"MN1_{tf}"] = mn1_default
-                        params[f"MN2_{tf}"] = mn2_default
-                        params[f"Entry_{tf}"] = entry_default
-                        params[f"Exit_{tf}"] = exit_default
-
+                        # Only update current timeframe cycle params (trial-specific)
                         params[f"On_{tf}"] = trial.suggest_int(f"On_{tf}", *on_range)
                         params[f"Off_{tf}"] = trial.suggest_int(f"Off_{tf}", *off_range)
                         params[f"Start_{tf}"] = trial.suggest_int(
                             f"Start_{tf}", 0, on_range[1] + off_range[1]
                         )
-
-                        for future_tf in self.timeframes[tf_idx + 1 :]:
-                            params[f"MN1_{future_tf}"] = mn1_default
-                            params[f"MN2_{future_tf}"] = mn2_default
-                            params[f"Entry_{future_tf}"] = entry_default
-                            params[f"Exit_{future_tf}"] = exit_default
-                            params[f"On_{future_tf}"] = on_range[0]
-                            params[f"Off_{future_tf}"] = off_range[0]
-                            params[f"Start_{future_tf}"] = 0
 
                         eq_curve, trades = self.simulate_multi_tf(params)
 
@@ -492,8 +497,17 @@ class MultiTimeframeOptimizer(QThread):
                             return 0.0
 
                         sharpe = PSRCalculator.calculate_sharpe_from_equity(eq_curve)
-                        trade_penalty = min(trades / 50.0, 1.0)
-                        score = sharpe - trade_penalty
+
+                        # Reward having enough trades for statistical confidence
+                        # Previously penalized MORE trades (backwards!)
+                        if trades < 10:
+                            trade_multiplier = 0.0  # Insufficient trades
+                        elif trades < 30:
+                            trade_multiplier = trades / 30.0  # Scale up to 30
+                        else:
+                            trade_multiplier = 1.0  # Sufficient statistical power
+
+                        score = sharpe * trade_multiplier
 
                         # Update progress
                         batch_progress = batch_idx / batches_per_phase
@@ -554,6 +568,28 @@ class MultiTimeframeOptimizer(QThread):
                     ),
                 )
 
+                # Pre-build base parameters once (optimization!)
+                base_params_rsi = {}
+                for prev_tf in self.timeframes[:tf_idx]:
+                    base_params_rsi.update(self.best_params_per_tf[prev_tf])
+
+                base_params_rsi.update(best_cycle)
+
+                # Future timeframes defaults
+                for future_tf in self.timeframes[tf_idx + 1 :]:
+                    mn1_default = (self.mn1_range[0] + self.mn1_range[1]) // 2
+                    mn2_default = (self.mn2_range[0] + self.mn2_range[1]) // 2
+                    entry_default = (self.entry_range[0] + self.entry_range[1]) / 2
+                    exit_default = (self.exit_range[0] + self.exit_range[1]) / 2
+
+                    base_params_rsi[f"MN1_{future_tf}"] = mn1_default
+                    base_params_rsi[f"MN2_{future_tf}"] = mn2_default
+                    base_params_rsi[f"Entry_{future_tf}"] = entry_default
+                    base_params_rsi[f"Exit_{future_tf}"] = exit_default
+                    base_params_rsi[f"On_{future_tf}"] = on_range[0]
+                    base_params_rsi[f"Off_{future_tf}"] = off_range[0]
+                    base_params_rsi[f"Start_{future_tf}"] = 0
+
                 # Run RSI optimization in batches with CSV saves
                 for batch_idx in range(batches_per_phase):
                     if self.stopped:
@@ -570,12 +606,10 @@ class MultiTimeframeOptimizer(QThread):
 
                         trial_count[0] += 1
 
-                        params = {}
-                        for prev_tf in self.timeframes[:tf_idx]:
-                            params.update(self.best_params_per_tf[prev_tf])
+                        # Copy base params (fast shallow copy)
+                        params = base_params_rsi.copy()
 
-                        params.update(best_cycle)
-
+                        # Only update current timeframe RSI params (trial-specific)
                         params[f"MN1_{tf}"] = trial.suggest_int(
                             f"MN1_{tf}", *self.mn1_range
                         )
@@ -589,29 +623,62 @@ class MultiTimeframeOptimizer(QThread):
                             f"Exit_{tf}", *self.exit_range, step=0.5
                         )
 
-                        for future_tf in self.timeframes[tf_idx + 1 :]:
-                            mn1_default = (self.mn1_range[0] + self.mn1_range[1]) // 2
-                            mn2_default = (self.mn2_range[0] + self.mn2_range[1]) // 2
-                            entry_default = (
-                                self.entry_range[0] + self.entry_range[1]
-                            ) / 2
-                            exit_default = (self.exit_range[0] + self.exit_range[1]) / 2
+                        # Run simulation once and cache results
+                        eq_curve, trade_count = self.simulate_multi_tf(params)
 
-                            params[f"MN1_{future_tf}"] = mn1_default
-                            params[f"MN2_{future_tf}"] = mn2_default
-                            params[f"Entry_{future_tf}"] = entry_default
-                            params[f"Exit_{future_tf}"] = exit_default
-                            params[f"On_{future_tf}"] = on_range[0]
-                            params[f"Off_{future_tf}"] = off_range[0]
-                            params[f"Start_{future_tf}"] = 0
+                        if eq_curve is None or len(eq_curve) < 50:
+                            psr, sharpe = 0.0, 0.0
+                        else:
+                            # Calculate PSR and Sharpe from cached equity curve
+                            returns = np.diff(eq_curve) / eq_curve[:-1]
+                            returns = returns[~(np.isnan(returns) | np.isinf(returns))]
 
-                        # Calculate PSR
-                        psr, sharpe = self.calculate_psr(params)
+                            if len(returns) < 30:
+                                psr, sharpe = 0.0, 0.0
+                            else:
+                                # Get annualization factor
+                                if self.finest_tf == "daily":
+                                    ann_factor = 252.0
+                                elif self.finest_tf == "hourly":
+                                    ann_factor = 252.0 * 6.5
+                                else:  # 5min or 1min
+                                    ann_factor = 252.0 * 6.5 * 12
 
-                        # Store for batch saving
+                                # Calculate PSR
+                                psr = PSRCalculator.calculate_psr(
+                                    returns,
+                                    benchmark_sharpe=0.0,
+                                    annualization_factor=ann_factor,
+                                    trade_count=trade_count,
+                                )
+
+                                # Calculate Sharpe
+                                mean_ret = np.mean(returns)
+                                std_ret = np.std(returns, ddof=1)
+                                if std_ret > 0:
+                                    sharpe = (mean_ret / std_ret) * np.sqrt(ann_factor)
+                                    sharpe = np.clip(sharpe, -5, 10)
+                                else:
+                                    sharpe = 0.0
+
+                            # Apply smooth trade count multiplier (not hard cutoff)
+                            # Rewards having enough trades for statistical confidence
+                            if trade_count < 10:
+                                trade_multiplier = 0.0  # Insufficient trades
+                            elif trade_count < 30:
+                                trade_multiplier = (trade_count - 10) / 20.0  # 0.0 to 1.0
+                            else:
+                                trade_multiplier = 1.0  # Sufficient statistical power
+
+                            psr = psr * trade_multiplier
+                            sharpe = sharpe * trade_multiplier
+
+                        # Store for batch saving (no need to re-simulate!)
                         trial.set_user_attr("params", params)
-                        trial.set_user_attr("psr", psr)
-                        trial.set_user_attr("sharpe", sharpe)
+                        trial.set_user_attr("psr", float(psr))
+                        trial.set_user_attr("sharpe", float(sharpe))
+                        trial.set_user_attr("eq_curve", eq_curve)
+                        trial.set_user_attr("trade_count", trade_count)
 
                         # Update progress
                         batch_progress = batch_idx / batches_per_phase
@@ -656,8 +723,10 @@ class MultiTimeframeOptimizer(QThread):
                         if not params:
                             continue
 
-                        # Run full backtest for metrics
-                        eq_curve, trades = self.simulate_multi_tf(params)
+                        # Use cached results instead of re-simulating!
+                        eq_curve = trial.user_attrs.get("eq_curve")
+                        trade_count = trial.user_attrs.get("trade_count", 0)
+
                         if eq_curve is None:
                             continue
 
@@ -665,7 +734,7 @@ class MultiTimeframeOptimizer(QThread):
                         if metrics is None:
                             continue
 
-                        metrics["Trade_Count"] = trades
+                        metrics["Trade_Count"] = trade_count
                         metrics["PSR"] = trial.user_attrs.get("psr", 0.0)
                         metrics["Sharpe_Ratio"] = trial.user_attrs.get("sharpe", 0.0)
                         metrics["Batch"] = batch_idx + 1
