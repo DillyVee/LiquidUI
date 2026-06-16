@@ -201,8 +201,8 @@ class MainWindow(QMainWindow):
         # Create all tabs
         self.tabs.addTab(self._create_data_tab(), "📊 Data & Setup")
         self.tabs.addTab(self._create_strategy_tab(), "⚙️ Strategy Builder")
-        self.tabs.addTab(self._create_regime_tab(), "🏛️ Regime Analysis")
-        self.tabs.addTab(self._create_trading_tab(), "🔴 Live Trading")
+        # self.tabs.addTab(self._create_regime_tab(), "🏛️ Regime Analysis")  # hidden: restore to re-enable
+        # self.tabs.addTab(self._create_trading_tab(), "🔴 Live Trading")  # hidden: restore to re-enable
         self.tabs.addTab(self._create_settings_tab(), "⚙️ Settings")
 
         main_layout.addWidget(self.tabs)
@@ -449,47 +449,47 @@ class MainWindow(QMainWindow):
         """)
         opt_layout.addWidget(self.psr_btn)
 
-        # Monte Carlo button
-        self.monte_carlo_btn = QPushButton("🎲 Monte Carlo Simulation")
-        self.monte_carlo_btn.setEnabled(False)
-        self.monte_carlo_btn.setStyleSheet("""
-            QPushButton {
-                background: #9B59B6;
-                color: #ffffff;
-                font-weight: bold;
-                padding: 12px;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background: #8E44AD;
-            }
-            QPushButton:disabled {
-                background: #2d2d2d;
-                color: #666666;
-            }
-        """)
-        opt_layout.addWidget(self.monte_carlo_btn)
+        # Monte Carlo button — hidden: uncomment block below to re-enable
+        # self.monte_carlo_btn = QPushButton("🎲 Monte Carlo Simulation")
+        # self.monte_carlo_btn.setEnabled(False)
+        # self.monte_carlo_btn.setStyleSheet("""
+        #     QPushButton {
+        #         background: #9B59B6;
+        #         color: #ffffff;
+        #         font-weight: bold;
+        #         padding: 12px;
+        #         border-radius: 4px;
+        #     }
+        #     QPushButton:hover {
+        #         background: #8E44AD;
+        #     }
+        #     QPushButton:disabled {
+        #         background: #2d2d2d;
+        #         color: #666666;
+        #     }
+        # """)
+        # opt_layout.addWidget(self.monte_carlo_btn)
 
-        # Walk-Forward button
-        self.walk_forward_btn = QPushButton("📊 Walk-Forward Analysis")
-        self.walk_forward_btn.setEnabled(False)
-        self.walk_forward_btn.setStyleSheet("""
-            QPushButton {
-                background: #00BCD4;
-                color: #ffffff;
-                font-weight: bold;
-                padding: 12px;
-                border-radius: 4px;
-            }
-            QPushButton:hover {
-                background: #00ACC1;
-            }
-            QPushButton:disabled {
-                background: #2d2d2d;
-                color: #666666;
-            }
-        """)
-        opt_layout.addWidget(self.walk_forward_btn)
+        # Walk-Forward button — hidden: uncomment block below to re-enable
+        # self.walk_forward_btn = QPushButton("📊 Walk-Forward Analysis")
+        # self.walk_forward_btn.setEnabled(False)
+        # self.walk_forward_btn.setStyleSheet("""
+        #     QPushButton {
+        #         background: #00BCD4;
+        #         color: #ffffff;
+        #         font-weight: bold;
+        #         padding: 12px;
+        #         border-radius: 4px;
+        #     }
+        #     QPushButton:hover {
+        #         background: #00ACC1;
+        #     }
+        #     QPushButton:disabled {
+        #         background: #2d2d2d;
+        #         color: #666666;
+        #     }
+        # """)
+        # opt_layout.addWidget(self.walk_forward_btn)
 
         opt_group.setLayout(opt_layout)
         left_layout.addWidget(opt_group)
