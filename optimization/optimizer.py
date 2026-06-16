@@ -44,6 +44,9 @@ class MultiTimeframeOptimizer(QThread):
         timeframes: Optional[List[str]] = None,
         batch_size: int = 500,
         transaction_costs: Optional["TransactionCosts"] = None,
+        objective: str = "psr",
+        use_time_cycles: bool = True,
+        use_entry_exit: bool = True,
     ):
         super().__init__()
         self.df_dict = df_dict
@@ -56,6 +59,16 @@ class MultiTimeframeOptimizer(QThread):
         self.entry_range = entry_range
         self.exit_range = exit_range
         self.ticker = ticker
+
+        # Optimization objective (psr, sharpe, sortino, calmar, return, profit_factor)
+        self.objective = (objective or "psr").lower()
+
+        # Strategy component toggles. At least one must be active, otherwise the
+        # entry signal would never be constrained, so fall back to entry/exit rules.
+        self.use_time_cycles = use_time_cycles
+        self.use_entry_exit = use_entry_exit
+        if not self.use_time_cycles and not self.use_entry_exit:
+            self.use_entry_exit = True
         self.all_results = []
         self.best_params_per_tf = {}
         self.base_eq_curve = None
@@ -194,6 +207,66 @@ class MultiTimeframeOptimizer(QThread):
 
         return float(psr), float(sharpe)
 
+    def _annualization_factor(self) -> float:
+        """Annualization factor based on the finest timeframe."""
+        if self.finest_tf == "daily":
+            return 252.0
+        elif self.finest_tf == "hourly":
+            return 252.0 * 6.5
+        else:  # 5min / 1min
+            return 252.0 * 6.5 * 12
+
+    def _compute_objective_score(self, eq_curve, trade_count: int) -> float:
+        """Score an equity curve according to the configured optimization objective.
+
+        Supported objectives: psr, sharpe, sortino, calmar, return, profit_factor.
+        A trade-count multiplier is applied so strategies with too few trades are
+        penalized for lack of statistical confidence (consistent across objectives).
+        """
+        if eq_curve is None or len(eq_curve) < 50:
+            return 0.0
+
+        returns = np.diff(eq_curve) / eq_curve[:-1]
+        returns = returns[~(np.isnan(returns) | np.isinf(returns))]
+        if len(returns) < 30:
+            return 0.0
+
+        ann_factor = self._annualization_factor()
+        objective = self.objective
+
+        if objective == "sharpe":
+            score = PSRCalculator.calculate_sharpe_from_equity(eq_curve, ann_factor)
+        elif objective in ("sortino", "return", "profit_factor", "calmar"):
+            metrics = PerformanceMetrics.calculate_metrics(eq_curve)
+            if metrics is None:
+                return 0.0
+            if objective == "sortino":
+                score = metrics["Sortino_Ratio"]
+            elif objective == "return":
+                score = metrics["Percent_Gain_%"]
+            elif objective == "profit_factor":
+                score = metrics["Profit_Factor"]
+            else:  # calmar = total return / max drawdown
+                max_dd = abs(metrics["Max_Drawdown_%"])
+                score = metrics["Percent_Gain_%"] / max_dd if max_dd > 1e-9 else 0.0
+        else:  # default: psr
+            score = PSRCalculator.calculate_psr(
+                returns,
+                benchmark_sharpe=0.0,
+                annualization_factor=ann_factor,
+                trade_count=trade_count,
+            )
+
+        # Trade-count multiplier for statistical confidence
+        if trade_count < 10:
+            trade_multiplier = 0.0
+        elif trade_count < 30:
+            trade_multiplier = (trade_count - 10) / 20.0
+        else:
+            trade_multiplier = 1.0
+
+        return float(score * trade_multiplier)
+
     def simulate_multi_tf(self, params: Dict, return_trades: bool = False):
         """
         FIXED VERSION - Now properly returns trade log with actual returns
@@ -214,41 +287,51 @@ class MultiTimeframeOptimizer(QThread):
 
             # Calculate signals for each timeframe
             for tf in self.timeframes:
-                mn1 = int(params[f"MN1_{tf}"])
-                mn2 = int(params[f"MN2_{tf}"])
-                entry = params[f"Entry_{tf}"]
-                exit_val = params[f"Exit_{tf}"]
-
                 close_tf = self.np_data[tf]["close"]
 
-                # Vectorized RSI
-                rsi = PerformanceMetrics.compute_rsi_vectorized(close_tf, mn1)
-                rsi_smooth = PerformanceMetrics.smooth_vectorized(rsi, mn2)
+                # Entry/exit (RSI) component — only when enabled
+                if self.use_entry_exit:
+                    mn1 = int(params[f"MN1_{tf}"])
+                    mn2 = int(params[f"MN2_{tf}"])
+                    entry = params[f"Entry_{tf}"]
+                    exit_val = params[f"Exit_{tf}"]
 
-                # Vectorized cycle
-                on = int(params[f"On_{tf}"])
-                off = int(params[f"Off_{tf}"])
-                start = int(params[f"Start_{tf}"])
-                cycle = ((np.arange(len(close_tf)) - start) % (on + off)) < on
+                    rsi = PerformanceMetrics.compute_rsi_vectorized(close_tf, mn1)
+                    rsi_smooth = PerformanceMetrics.smooth_vectorized(rsi, mn2)
 
-                # Map to finest timeframe
+                # Time-cycle component — only when enabled
+                if self.use_time_cycles:
+                    on = int(params[f"On_{tf}"])
+                    off = int(params[f"Off_{tf}"])
+                    start = int(params[f"Start_{tf}"])
+                    cycle = ((np.arange(len(close_tf)) - start) % (on + off)) < on
+
+                # Map signals from this timeframe onto the finest timeframe
                 if tf != self.finest_tf:
                     indices = self.tf_indices[tf]
                     valid_mask = indices >= 0
-                    indices_clipped = np.clip(indices, 0, len(rsi_smooth) - 1)
-                    rsi_smooth_mapped = np.zeros(n_bars)
-                    cycle_mapped = np.zeros(n_bars, dtype=bool)
-                    rsi_smooth_mapped[valid_mask] = rsi_smooth[
-                        indices_clipped[valid_mask]
-                    ]
-                    cycle_mapped[valid_mask] = cycle[indices_clipped[valid_mask]]
+                    indices_clipped = np.clip(indices, 0, len(close_tf) - 1)
+                    if self.use_entry_exit:
+                        rsi_smooth_mapped = np.zeros(n_bars)
+                        rsi_smooth_mapped[valid_mask] = rsi_smooth[
+                            indices_clipped[valid_mask]
+                        ]
+                    if self.use_time_cycles:
+                        cycle_mapped = np.zeros(n_bars, dtype=bool)
+                        cycle_mapped[valid_mask] = cycle[indices_clipped[valid_mask]]
                 else:
-                    rsi_smooth_mapped = rsi_smooth
-                    cycle_mapped = cycle
+                    if self.use_entry_exit:
+                        rsi_smooth_mapped = rsi_smooth
+                    if self.use_time_cycles:
+                        cycle_mapped = cycle
 
-                # Signals
-                enter_signal &= (rsi_smooth_mapped < entry) & cycle_mapped
-                exit_signal |= (rsi_smooth_mapped > exit_val) | (~cycle_mapped)
+                # Combine enabled components into entry/exit signals
+                if self.use_entry_exit:
+                    enter_signal &= rsi_smooth_mapped < entry
+                    exit_signal |= rsi_smooth_mapped > exit_val
+                if self.use_time_cycles:
+                    enter_signal &= cycle_mapped
+                    exit_signal |= ~cycle_mapped
 
             # Backtest simulation
             equity_curve = np.zeros(n_bars)
@@ -496,18 +579,8 @@ class MultiTimeframeOptimizer(QThread):
                         if eq_curve is None or len(eq_curve) < 50:
                             return 0.0
 
-                        sharpe = PSRCalculator.calculate_sharpe_from_equity(eq_curve)
-
-                        # Reward having enough trades for statistical confidence
-                        # Previously penalized MORE trades (backwards!)
-                        if trades < 10:
-                            trade_multiplier = 0.0  # Insufficient trades
-                        elif trades < 30:
-                            trade_multiplier = trades / 30.0  # Scale up to 30
-                        else:
-                            trade_multiplier = 1.0  # Sufficient statistical power
-
-                        score = sharpe * trade_multiplier
+                        # Score the user-selected objective (psr by default)
+                        score = self._compute_objective_score(eq_curve, trades)
 
                         # Update progress
                         batch_progress = batch_idx / batches_per_phase
@@ -693,7 +766,9 @@ class MultiTimeframeOptimizer(QThread):
                         ) * 100
                         self.progress.emit(int(total_progress))
 
-                        return psr
+                        # PSR/Sharpe above are kept for reporting; the search is
+                        # driven by the user-selected objective (psr by default).
+                        return self._compute_objective_score(eq_curve, trade_count)
 
                     # Run batch with parallel processing
                     rsi_study.optimize(

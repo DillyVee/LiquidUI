@@ -65,6 +65,16 @@ from trading import AlpacaLiveTrader, ALPACA_AVAILABLE
 class MainWindow(QMainWindow):
     """Professional multi-tab trading platform GUI"""
 
+    # ------------------------------------------------------------------
+    # Feature flags — flip any of these to True to restore a hidden feature.
+    # The underlying tab/widget builders and handlers all remain in the code;
+    # these flags only control whether the feature is shown in the GUI.
+    # ------------------------------------------------------------------
+    SHOW_REGIME_TAB = False
+    SHOW_LIVE_TRADING_TAB = False
+    SHOW_MONTE_CARLO = False
+    SHOW_WALK_FORWARD = False
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("LiquidUI - Professional Trading Platform")
@@ -146,18 +156,22 @@ class MainWindow(QMainWindow):
         """
         )
 
-        # Create all tabs
+        # Create core tabs (always shown)
         self.tab1 = self._create_data_tab()
         self.tab2 = self._create_strategy_tab()
-        self.tab3 = self._create_regime_tab()
-        self.tab4 = self._create_trading_tab()
         self.tab5 = self._create_settings_tab()
 
-        # Add tabs to widget
         self.tabs.addTab(self.tab1, "📊 Data & Setup")
         self.tabs.addTab(self.tab2, "⚙️ Strategy Optimization")
-        self.tabs.addTab(self.tab3, "🏛️ Regime Analysis")
-        self.tabs.addTab(self.tab4, "🔴 Live Trading")
+
+        # Optional tabs — controlled by feature flags
+        if self.SHOW_REGIME_TAB:
+            self.tab3 = self._create_regime_tab()
+            self.tabs.addTab(self.tab3, "🏛️ Regime Analysis")
+        if self.SHOW_LIVE_TRADING_TAB:
+            self.tab4 = self._create_trading_tab()
+            self.tabs.addTab(self.tab4, "🔴 Live Trading")
+
         self.tabs.addTab(self.tab5, "⚙️ Settings")
 
         main_layout.addWidget(self.tabs)
@@ -337,10 +351,27 @@ class MainWindow(QMainWindow):
         obj_layout = QHBoxLayout()
         obj_layout.addWidget(QLabel("Objective:"))
         self.objective_combo = QComboBox()
-        self.objective_combo.addItems(["psr", "sharpe", "sortino", "calmar"])
+        self.objective_combo.addItems(
+            ["psr", "sharpe", "sortino", "calmar", "return", "profit_factor"]
+        )
         obj_layout.addWidget(self.objective_combo)
         obj_layout.addStretch()
         opt_layout.addLayout(obj_layout)
+
+        # Strategy component toggles — choose which signals drive entries/exits
+        self.use_time_cycles_cb = QCheckBox("Use Time Cycles")
+        self.use_time_cycles_cb.setChecked(True)
+        self.use_time_cycles_cb.setToolTip(
+            "Include the ON/OFF time-cycle filter when generating entries and exits"
+        )
+        opt_layout.addWidget(self.use_time_cycles_cb)
+
+        self.use_entry_exit_cb = QCheckBox("Use Entry/Exit Rules")
+        self.use_entry_exit_cb.setChecked(True)
+        self.use_entry_exit_cb.setToolTip(
+            "Include the RSI entry/exit threshold rules when generating entries and exits"
+        )
+        opt_layout.addWidget(self.use_entry_exit_cb)
 
         opt_group.setLayout(opt_layout)
         left_layout.addWidget(opt_group)
@@ -351,7 +382,7 @@ class MainWindow(QMainWindow):
 
         # PSR Optimization
         opt_btn_layout = QHBoxLayout()
-        self.start_btn = QPushButton("▶️ START PSR OPTIMIZATION")
+        self.start_btn = QPushButton("▶️ START OPTIMIZATION")
         self.start_btn.setStyleSheet(
             f"background-color: {COLOR_SUCCESS}; font-weight: bold; padding: 15px; font-size: 14px;"
         )
@@ -377,56 +408,58 @@ class MainWindow(QMainWindow):
         self.phase_label.setStyleSheet("color: #888; font-style: italic;")
         btn_layout.addWidget(self.phase_label)
 
-        # Monte Carlo
-        self.monte_carlo_btn = QPushButton("🎲 Run Monte Carlo Simulation")
-        self.monte_carlo_btn.clicked.connect(self.run_monte_carlo)
-        btn_layout.addWidget(self.monte_carlo_btn)
+        # Monte Carlo (hidden by default — see SHOW_MONTE_CARLO feature flag)
+        if self.SHOW_MONTE_CARLO:
+            self.monte_carlo_btn = QPushButton("🎲 Run Monte Carlo Simulation")
+            self.monte_carlo_btn.clicked.connect(self.run_monte_carlo)
+            btn_layout.addWidget(self.monte_carlo_btn)
 
-        # Monte Carlo simulations
-        mc_layout = QHBoxLayout()
-        mc_layout.addWidget(QLabel("MC Simulations:"))
-        self.mc_simulations_spin = QSpinBox()
-        self.mc_simulations_spin.setRange(100, 10000)
-        self.mc_simulations_spin.setValue(1000)
-        mc_layout.addWidget(self.mc_simulations_spin)
-        mc_layout.addStretch()
-        btn_layout.addLayout(mc_layout)
+            # Monte Carlo simulations
+            mc_layout = QHBoxLayout()
+            mc_layout.addWidget(QLabel("MC Simulations:"))
+            self.mc_simulations_spin = QSpinBox()
+            self.mc_simulations_spin.setRange(100, 10000)
+            self.mc_simulations_spin.setValue(1000)
+            mc_layout.addWidget(self.mc_simulations_spin)
+            mc_layout.addStretch()
+            btn_layout.addLayout(mc_layout)
 
-        # Walk-Forward Analysis
-        self.walk_forward_btn = QPushButton("📈 Run Walk-Forward Analysis")
-        self.walk_forward_btn.clicked.connect(self.run_walk_forward)
-        btn_layout.addWidget(self.walk_forward_btn)
+        # Walk-Forward Analysis (hidden by default — see SHOW_WALK_FORWARD flag)
+        if self.SHOW_WALK_FORWARD:
+            self.walk_forward_btn = QPushButton("📈 Run Walk-Forward Analysis")
+            self.walk_forward_btn.clicked.connect(self.run_walk_forward)
+            btn_layout.addWidget(self.walk_forward_btn)
 
-        # WF settings
-        wf_layout = QVBoxLayout()
-        train_layout = QHBoxLayout()
-        train_layout.addWidget(QLabel("Train Days:"))
-        self.wf_train_days_spin = QSpinBox()
-        self.wf_train_days_spin.setRange(30, 730)
-        self.wf_train_days_spin.setValue(180)
-        train_layout.addWidget(self.wf_train_days_spin)
-        train_layout.addStretch()
-        wf_layout.addLayout(train_layout)
+            # WF settings
+            wf_layout = QVBoxLayout()
+            train_layout = QHBoxLayout()
+            train_layout.addWidget(QLabel("Train Days:"))
+            self.wf_train_days_spin = QSpinBox()
+            self.wf_train_days_spin.setRange(30, 730)
+            self.wf_train_days_spin.setValue(180)
+            train_layout.addWidget(self.wf_train_days_spin)
+            train_layout.addStretch()
+            wf_layout.addLayout(train_layout)
 
-        test_layout = QHBoxLayout()
-        test_layout.addWidget(QLabel("Test Days:"))
-        self.wf_test_days_spin = QSpinBox()
-        self.wf_test_days_spin.setRange(7, 365)
-        self.wf_test_days_spin.setValue(30)
-        test_layout.addWidget(self.wf_test_days_spin)
-        test_layout.addStretch()
-        wf_layout.addLayout(test_layout)
+            test_layout = QHBoxLayout()
+            test_layout.addWidget(QLabel("Test Days:"))
+            self.wf_test_days_spin = QSpinBox()
+            self.wf_test_days_spin.setRange(7, 365)
+            self.wf_test_days_spin.setValue(30)
+            test_layout.addWidget(self.wf_test_days_spin)
+            test_layout.addStretch()
+            wf_layout.addLayout(test_layout)
 
-        trials_layout = QHBoxLayout()
-        trials_layout.addWidget(QLabel("WF Trials:"))
-        self.wf_trials_spin = QSpinBox()
-        self.wf_trials_spin.setRange(50, 5000)
-        self.wf_trials_spin.setValue(500)
-        trials_layout.addWidget(self.wf_trials_spin)
-        trials_layout.addStretch()
-        wf_layout.addLayout(trials_layout)
+            trials_layout = QHBoxLayout()
+            trials_layout.addWidget(QLabel("WF Trials:"))
+            self.wf_trials_spin = QSpinBox()
+            self.wf_trials_spin.setRange(50, 5000)
+            self.wf_trials_spin.setValue(500)
+            trials_layout.addWidget(self.wf_trials_spin)
+            trials_layout.addStretch()
+            wf_layout.addLayout(trials_layout)
 
-        btn_layout.addLayout(wf_layout)
+            btn_layout.addLayout(wf_layout)
 
         btn_group.setLayout(btn_layout)
         left_layout.addWidget(btn_group)
@@ -1106,6 +1139,18 @@ class MainWindow(QMainWindow):
 
         trials = self.trials_spin.value()
         batch_size = self.batch_spin.value()
+        objective = self.objective_combo.currentText()
+
+        # Strategy component toggles
+        use_time_cycles = self.use_time_cycles_cb.isChecked()
+        use_entry_exit = self.use_entry_exit_cb.isChecked()
+        if not use_time_cycles and not use_entry_exit:
+            QMessageBox.warning(
+                self,
+                "No Strategy Components",
+                "Enable at least one of 'Use Time Cycles' or 'Use Entry/Exit Rules'.",
+            )
+            return
 
         # Create worker with correct parameters
         time_cycle_ranges = (
@@ -1125,6 +1170,9 @@ class MainWindow(QMainWindow):
             ticker=self.current_ticker if hasattr(self, "current_ticker") else "",
             batch_size=batch_size,
             transaction_costs=self.transaction_costs,
+            objective=objective,
+            use_time_cycles=use_time_cycles,
+            use_entry_exit=use_entry_exit,
         )
 
         # Connect signals
