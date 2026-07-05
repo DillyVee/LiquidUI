@@ -14,7 +14,6 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
-from scipy import stats
 
 
 @dataclass
@@ -150,8 +149,12 @@ class WhiteRealityCheck:
         print(f"\nBOOTSTRAP RESULTS:")
         print(f"  Bootstrap mean: {np.mean(bootstrap_statistics):.6f}")
         print(f"  Bootstrap std: {np.std(bootstrap_statistics):.6f}")
-        print(f"  Bootstrap min/max: [{np.min(bootstrap_statistics):.6f}, {np.max(bootstrap_statistics):.6f}]")
-        print(f"  Observed vs bootstrap: {observed_statistic:.6f} vs {np.mean(bootstrap_statistics):.6f}")
+        print(
+            f"  Bootstrap min/max: [{np.min(bootstrap_statistics):.6f}, {np.max(bootstrap_statistics):.6f}]"
+        )
+        print(
+            f"  Observed vs bootstrap: {observed_statistic:.6f} vs {np.mean(bootstrap_statistics):.6f}"
+        )
 
         # Adjust for multiple testing if alternative strategies provided
         if alternative_strategies is not None:
@@ -166,9 +169,7 @@ class WhiteRealityCheck:
 
         is_significant = p_value < 0.05
 
-        interpretation = self._interpret_result(
-            observed_statistic, p_value, is_significant
-        )
+        interpretation = self._interpret_result(observed_statistic, p_value, is_significant)
 
         print(f"\nP-value: {p_value:.6f} (raw: {p_value})")
         print(f"Result: {'✅ SIGNIFICANT' if is_significant else '❌ NOT SIGNIFICANT'}")
@@ -214,9 +215,7 @@ class WhiteRealityCheck:
 
         return np.array(bootstrap_sample[:n])
 
-    def _interpret_result(
-        self, statistic: float, p_value: float, is_significant: bool
-    ) -> str:
+    def _interpret_result(self, statistic: float, p_value: float, is_significant: bool) -> str:
         """Generate interpretation of test result"""
         if is_significant:
             if statistic > 0:
@@ -288,17 +287,14 @@ class HansenSPATest:
         for i, strat in enumerate(all_strategies):
             if len(strat) != len(benchmark_returns):
                 raise ValueError(
-                    f"Strategy {i} has length {len(strat)}, "
-                    f"expected {len(benchmark_returns)}"
+                    f"Strategy {i} has length {len(strat)}, " f"expected {len(benchmark_returns)}"
                 )
             if not np.isfinite(strat).all():
                 raise ValueError(f"Strategy {i} contains NaN or inf values")
 
         # Performance relative to benchmark for all strategies
         n_strategies = len(all_strategies)
-        relative_performance = np.array(
-            [strat - benchmark_returns for strat in all_strategies]
-        )
+        relative_performance = np.array([strat - benchmark_returns for strat in all_strategies])
 
         # Find best strategy using t-statistic (not just mean)
         t_statistics = []
@@ -321,7 +317,9 @@ class HansenSPATest:
         print(f"HANSEN'S SUPERIOR PREDICTIVE ABILITY (SPA) TEST")
         print(f"{'='*70}")
         print(f"Number of strategies tested: {n_strategies}")
-        print(f"Best strategy excess return: {best_mean_performance:.6f} (t-stat: {best_t_statistic:.4f})")
+        print(
+            f"Best strategy excess return: {best_mean_performance:.6f} (t-stat: {best_t_statistic:.4f})"
+        )
         print(f"Running {self.n_bootstrap} bootstrap simulations...")
 
         # Bootstrap under null (no strategy beats benchmark)
@@ -532,17 +530,13 @@ def run_full_robustness_suite(
 
     # 1. White's Reality Check
     wrc = WhiteRealityCheck(n_bootstrap=n_bootstrap)
-    results["whites_rc"] = wrc.test(
-        strategy_returns, benchmark_returns, alternative_strategies
-    )
+    results["whites_rc"] = wrc.test(strategy_returns, benchmark_returns, alternative_strategies)
 
     # 2. Hansen's SPA Test (if alternatives provided)
     if alternative_strategies is not None:
         all_strategies = [strategy_returns] + alternative_strategies
         spa = HansenSPATest(n_bootstrap=n_bootstrap)
-        results["hansen_spa"] = spa.test(
-            strategy_returns, benchmark_returns, all_strategies
-        )
+        results["hansen_spa"] = spa.test(strategy_returns, benchmark_returns, all_strategies)
 
     # 3. Sharpe Ratio Confidence Interval
     bootstrap = BlockBootstrapValidator(n_bootstrap=n_bootstrap)
@@ -585,13 +579,9 @@ def interpret_robustness_results(results: Dict[str, RobustnessTestResults]) -> s
 
     # Count significant tests
     significant_count = sum(
-        1
-        for r in results.values()
-        if isinstance(r, RobustnessTestResults) and r.is_significant
+        1 for r in results.values() if isinstance(r, RobustnessTestResults) and r.is_significant
     )
-    total_tests = sum(
-        1 for r in results.values() if isinstance(r, RobustnessTestResults)
-    )
+    total_tests = sum(1 for r in results.values() if isinstance(r, RobustnessTestResults))
 
     report += f"\n✅ Significant Tests: {significant_count}/{total_tests}\n\n"
 
@@ -604,11 +594,17 @@ def interpret_robustness_results(results: Dict[str, RobustnessTestResults]) -> s
 
     # Overall verdict
     if significant_count == total_tests:
-        verdict = "✅ HIGHLY ROBUST: Strategy passes all statistical tests. Suitable for live trading."
+        verdict = (
+            "✅ HIGHLY ROBUST: Strategy passes all statistical tests. Suitable for live trading."
+        )
     elif significant_count >= total_tests / 2:
-        verdict = "⚠️  MODERATELY ROBUST: Strategy passes most tests. Use with caution and monitoring."
+        verdict = (
+            "⚠️  MODERATELY ROBUST: Strategy passes most tests. Use with caution and monitoring."
+        )
     else:
-        verdict = "❌ NOT ROBUST: Strategy fails most tests. High risk of data mining. DO NOT TRADE."
+        verdict = (
+            "❌ NOT ROBUST: Strategy fails most tests. High risk of data mining. DO NOT TRADE."
+        )
 
     report += f"\n{'═'*62}\n"
     report += f"FINAL VERDICT:\n{verdict}\n"

@@ -7,8 +7,6 @@ from typing import Dict, Optional, Tuple
 import pandas as pd
 import yfinance as yf
 
-from config.settings import OptimizationConfig
-
 
 class DataLoader:
     """Handle data loading from various sources"""
@@ -49,102 +47,76 @@ class DataLoader:
         """
         symbol = cls.normalize_ticker(symbol)
         end_date = datetime.datetime.today()
-        
+
         try:
             print(f"\n📥 Downloading data for {symbol}...")
-            
-            is_crypto = cls.is_crypto(symbol)
-            if is_crypto:
+
+            if cls.is_crypto(symbol):
                 print(f"  📊 Crypto detected")
-            
-            # Load daily data (10 years max)
-            start_daily = end_date - datetime.timedelta(days=10*365)
-            print(f"  Daily: {start_daily.date()} to {end_date.date()}")
-            df_daily = yf.download(
-                symbol, 
-                start=start_daily.strftime("%Y-%m-%d"),
-                end=end_date.strftime("%Y-%m-%d"), 
-                interval="1d",
-                progress=False, 
-                auto_adjust=True
-            )
-            
+
+            # Daily data is required (10 years max)
+            df_daily = cls._download(symbol, end_date, interval="1d", days=10 * 365)
             if df_daily.empty:
                 return {}, f"No data found for {symbol}. Check ticker format."
-            
-            # Load hourly data (~730 days max)
-            start_hourly = end_date - datetime.timedelta(days=729)
-            print(f"  Hourly: {start_hourly.date()} to {end_date.date()}")
-            df_hourly = yf.download(
-                symbol,
-                start=start_hourly.strftime("%Y-%m-%d"),
-                end=end_date.strftime("%Y-%m-%d"),
-                interval="1h",
-                progress=False,
-                auto_adjust=True
+
+            df_dict = {'daily': cls._process_dataframe(df_daily)}
+
+            # Intraday data is optional - Yahoo limits how far back it goes
+            # (hourly ~730 days, 5-minute ~60 days) and it is not available
+            # for all tickers
+            df_hourly = cls._download(
+                symbol, end_date, interval="1h", days=729, retry_days=89
             )
-            
-            # Retry hourly with shorter window if needed
-            if df_hourly.empty and not df_daily.empty:
-                print(f"  ⚠ Retrying hourly with 90-day window...")
-                start_hourly = end_date - datetime.timedelta(days=89)
-                df_hourly = yf.download(
-                    symbol,
-                    start=start_hourly.strftime("%Y-%m-%d"),
-                    end=end_date.strftime("%Y-%m-%d"),
-                    interval="1h",
-                    progress=False,
-                    auto_adjust=True
-                )
-            
-            if df_hourly.empty:
-                return {}, f"Could not load hourly data for {symbol}"
-            
-            # Load 5-minute data (~60 days max)
-            start_5min = end_date - datetime.timedelta(days=59)
-            print(f"  5-minute: {start_5min.date()} to {end_date.date()}")
-            df_5min = yf.download(
-                symbol,
-                start=start_5min.strftime("%Y-%m-%d"),
-                end=end_date.strftime("%Y-%m-%d"),
-                interval="5m",
-                progress=False,
-                auto_adjust=True
+            if not df_hourly.empty:
+                df_dict['hourly'] = cls._process_dataframe(df_hourly)
+
+            df_5min = cls._download(
+                symbol, end_date, interval="5m", days=59, retry_days=29
             )
-            
-            # Retry 5min with shorter window if needed
-            if df_5min.empty:
-                print(f"  ⚠ Retrying 5-minute with 30-day window...")
-                start_5min = end_date - datetime.timedelta(days=29)
-                df_5min = yf.download(
-                    symbol,
-                    start=start_5min.strftime("%Y-%m-%d"),
-                    end=end_date.strftime("%Y-%m-%d"),
-                    interval="5m",
-                    progress=False,
-                    auto_adjust=True
-                )
-            
-            # Process dataframes
-            df_daily = cls._process_dataframe(df_daily)
-            df_hourly = cls._process_dataframe(df_hourly)
-            
-            df_dict = {
-                'daily': df_daily,
-                'hourly': df_hourly
-            }
-            
             if not df_5min.empty:
-                df_5min = cls._process_dataframe(df_5min)
-                df_dict['5min'] = df_5min
-                print(f"  ✓ 5-minute: {len(df_5min)} bars")
-            
-            print(f"✓ Loaded {symbol}: Daily={len(df_daily)}, Hourly={len(df_hourly)}")
-            
+                df_dict['5min'] = cls._process_dataframe(df_5min)
+
+            summary = ", ".join(f"{tf}={len(df)}" for tf, df in df_dict.items())
+            print(f"✓ Loaded {symbol}: {summary}")
+
             return df_dict, ""
-            
+
         except Exception as e:
             return {}, f"Failed to load {symbol}: {str(e)}"
+
+    @staticmethod
+    def _download(
+        symbol: str,
+        end_date: datetime.datetime,
+        interval: str,
+        days: int,
+        retry_days: Optional[int] = None,
+    ) -> pd.DataFrame:
+        """Download one interval from Yahoo, optionally retrying a shorter window"""
+        start = end_date - datetime.timedelta(days=days)
+        print(f"  {interval}: {start.date()} to {end_date.date()}")
+        df = yf.download(
+            symbol,
+            start=start.strftime("%Y-%m-%d"),
+            end=end_date.strftime("%Y-%m-%d"),
+            interval=interval,
+            progress=False,
+            auto_adjust=True,
+        )
+
+        if df.empty and retry_days is not None:
+            print(f"  ⚠ Retrying {interval} with {retry_days}-day window...")
+            start = end_date - datetime.timedelta(days=retry_days)
+            df = yf.download(
+                symbol,
+                start=start.strftime("%Y-%m-%d"),
+                end=end_date.strftime("%Y-%m-%d"),
+                interval=interval,
+                progress=False,
+                auto_adjust=True,
+            )
+
+        return df
     
     @staticmethod
     def _process_dataframe(df: pd.DataFrame) -> pd.DataFrame:
@@ -166,7 +138,7 @@ class DataLoader:
 
         # Ensure timezone-naive
         if 'Datetime' in df.columns:
-            if pd.api.types.is_datetime64tz_dtype(df['Datetime']):
+            if isinstance(df['Datetime'].dtype, pd.DatetimeTZDtype):
                 df['Datetime'] = df['Datetime'].dt.tz_localize(None)
 
         # Data quality validation

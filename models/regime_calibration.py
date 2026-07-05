@@ -56,9 +56,7 @@ class ProbabilityCalibrator:
         self.calibrators = {}  # One per regime
         self.is_fitted = False
 
-    def fit(
-        self, predicted_probs: np.ndarray, true_labels: np.ndarray, regime_idx: int
-    ):
+    def fit(self, predicted_probs: np.ndarray, true_labels: np.ndarray, regime_idx: int):
         """
         Fit calibration model for specific regime
 
@@ -188,9 +186,7 @@ class ProbabilityCalibrator:
                 n_samples = np.sum(mask)
 
                 # ECE: weighted absolute difference
-                ece += (n_samples / len(predicted_probs)) * abs(
-                    avg_predicted - avg_actual
-                )
+                ece += (n_samples / len(predicted_probs)) * abs(avg_predicted - avg_actual)
 
                 # MCE: maximum absolute difference
                 mce = max(mce, abs(avg_predicted - avg_actual))
@@ -224,9 +220,7 @@ class MultiClassCalibrator:
             method: 'isotonic' or 'platt'
         """
         self.method = method
-        self.calibrators = {
-            i: ProbabilityCalibrator(method) for i in range(len(MarketRegime))
-        }
+        self.calibrators = {i: ProbabilityCalibrator(method) for i in range(len(MarketRegime))}
         self.is_fitted = False
 
     def fit(self, predicted_probs: np.ndarray, true_labels: np.ndarray):
@@ -249,9 +243,7 @@ class MultiClassCalibrator:
             probs_for_regime = predicted_probs[:, regime_idx]
 
             # Fit calibrator
-            self.calibrators[regime_idx].fit(
-                probs_for_regime, binary_labels, regime_idx
-            )
+            self.calibrators[regime_idx].fit(probs_for_regime, binary_labels, regime_idx)
 
             # Evaluate before/after
             metrics_before = self.calibrators[regime_idx].evaluate_calibration(
@@ -260,17 +252,13 @@ class MultiClassCalibrator:
 
             regime_name = list(MarketRegime)[regime_idx].value
             print(f"\n{regime_name.upper()}")
-            print(
-                f"  Before: Brier={metrics_before.brier_score:.3f}, ECE={metrics_before.ece:.3f}"
-            )
+            print(f"  Before: Brier={metrics_before.brier_score:.3f}, ECE={metrics_before.ece:.3f}")
 
         self.is_fitted = True
         print(f"\n✅ Calibration complete!")
         print(f"{'='*70}\n")
 
-    def calibrate(
-        self, predicted_probs: Dict[MarketRegime, float]
-    ) -> Dict[MarketRegime, float]:
+    def calibrate(self, predicted_probs: Dict[MarketRegime, float]) -> Dict[MarketRegime, float]:
         """
         Calibrate regime probabilities
 
@@ -285,7 +273,6 @@ class MultiClassCalibrator:
 
         # Convert to index-based dict
         regime_to_idx = {regime: i for i, regime in enumerate(MarketRegime)}
-        idx_probs = {regime_to_idx[r]: p for r, p in predicted_probs.items()}
 
         # Calibrate each
         calibrated_idx = {}

@@ -7,11 +7,10 @@ risk-adjusted returns, and statistical tests.
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
-import pandas as pd
 from scipy import stats
 from scipy.stats import kurtosistest, skewtest
 
@@ -135,16 +134,12 @@ class AdvancedMonteCarloAnalyzer:
         ]
 
         # 1. VALUE AT RISK METRICS
-        var_95, var_99, cvar_95, cvar_99 = (
-            AdvancedMonteCarloAnalyzer._calculate_var_metrics(
-                returns_pct, final_equities, initial_equity
-            )
+        var_95, var_99, cvar_95, cvar_99 = AdvancedMonteCarloAnalyzer._calculate_var_metrics(
+            returns_pct, final_equities, initial_equity
         )
 
         # 2. DRAWDOWN METRICS
-        dd_metrics = AdvancedMonteCarloAnalyzer._calculate_drawdown_metrics(
-            results.simulations
-        )
+        dd_metrics = AdvancedMonteCarloAnalyzer._calculate_drawdown_metrics(results.simulations)
 
         # 3. RISK-ADJUSTED RETURN METRICS
         risk_adj_metrics = AdvancedMonteCarloAnalyzer._calculate_risk_adjusted_metrics(
@@ -152,8 +147,8 @@ class AdvancedMonteCarloAnalyzer:
         )
 
         # 4. DISTRIBUTION CHARACTERISTICS
-        skew, kurt, skew_pval, kurt_pval = (
-            AdvancedMonteCarloAnalyzer._calculate_distribution_stats(returns_pct)
+        skew, kurt, skew_pval, kurt_pval = AdvancedMonteCarloAnalyzer._calculate_distribution_stats(
+            returns_pct
         )
 
         # 5. PATH DEPENDENCY
@@ -163,12 +158,8 @@ class AdvancedMonteCarloAnalyzer:
 
         # 6. CONFIDENCE INTERVALS
         mean_return_ci = AdvancedMonteCarloAnalyzer._bootstrap_ci(returns_pct)
-        sharpe_ci = AdvancedMonteCarloAnalyzer._bootstrap_ci(
-            risk_adj_metrics["sharpe_ratios"]
-        )
-        max_dd_ci = AdvancedMonteCarloAnalyzer._bootstrap_ci(
-            dd_metrics["max_drawdowns"]
-        )
+        sharpe_ci = AdvancedMonteCarloAnalyzer._bootstrap_ci(risk_adj_metrics["sharpe_ratios"])
+        max_dd_ci = AdvancedMonteCarloAnalyzer._bootstrap_ci(dd_metrics["max_drawdowns"])
 
         # 7. TAIL RISK
         tail_ratio = (
@@ -271,9 +262,7 @@ class AdvancedMonteCarloAnalyzer:
             in_drawdown = drawdown > 0.01  # More than 1% drawdown
             if np.any(in_drawdown):
                 # Find consecutive drawdown periods
-                dd_periods = np.diff(
-                    np.concatenate([[0], in_drawdown.astype(int), [0]])
-                )
+                dd_periods = np.diff(np.concatenate([[0], in_drawdown.astype(int), [0]]))
                 dd_starts = np.where(dd_periods == 1)[0]
                 dd_ends = np.where(dd_periods == -1)[0]
 
@@ -395,12 +384,12 @@ class AdvancedMonteCarloAnalyzer:
         # Test for normality using skewness and kurtosis tests
         try:
             skew_stat, skew_pval = skewtest(returns_pct)
-        except:
+        except Exception:
             skew_pval = 1.0
 
         try:
             kurt_stat, kurt_pval = kurtosistest(returns_pct)
-        except:
+        except Exception:
             kurt_pval = 1.0
 
         return skew, kurt, skew_pval, kurt_pval
@@ -555,10 +544,7 @@ Skewness p-value:       {advanced_metrics.return_skew_pval:.4f}
 Kurtosis p-value:       {advanced_metrics.return_kurt_pval:.4f}
 """
 
-        if (
-            advanced_metrics.return_skew_pval < 0.05
-            or advanced_metrics.return_kurt_pval < 0.05
-        ):
+        if advanced_metrics.return_skew_pval < 0.05 or advanced_metrics.return_kurt_pval < 0.05:
             report += "   ⚠️  Returns significantly non-normal (p < 0.05)\n"
 
         report += f"""
@@ -659,7 +645,6 @@ Win Rate Std Dev:       {advanced_metrics.win_rate_std*100:.1f}%
         final_equities = np.array([sim[-1] for sim in basic_results.simulations])
 
         # Determine appropriate number of bins based on data range
-        data_range = final_equities.max() - final_equities.min()
         n_unique = len(np.unique(final_equities))
         n_bins = min(50, max(10, n_unique))  # Use fewer bins if little variation
 
@@ -744,9 +729,7 @@ Win Rate Std Dev:       {advanced_metrics.win_rate_std*100:.1f}%
             returns = np.diff(sim) / sim[:-1]
             returns = returns[~(np.isnan(returns) | np.isinf(returns))]
             if len(returns) > 0:
-                sharpe = (
-                    np.mean(returns) / (np.std(returns, ddof=1) + 1e-10) * np.sqrt(252)
-                )
+                sharpe = np.mean(returns) / (np.std(returns, ddof=1) + 1e-10) * np.sqrt(252)
                 sharpe_ratios.append(np.clip(sharpe, -5, 10))
 
         # Adaptive bins for Sharpe
@@ -774,9 +757,7 @@ Win Rate Std Dev:       {advanced_metrics.win_rate_std*100:.1f}%
 
         n_paths = min(100, len(basic_results.simulations))
         for i in range(n_paths):
-            ax4.plot(
-                basic_results.simulations[i], color="#2979ff", alpha=0.05, linewidth=0.5
-            )
+            ax4.plot(basic_results.simulations[i], color="#2979ff", alpha=0.05, linewidth=0.5)
 
         # Overlay percentiles
         n_steps = len(basic_results.simulations[0])
@@ -998,72 +979,42 @@ class MonteCarloSimulator:
             raise ValueError("No trades provided for Monte Carlo simulation")
 
         # Extract returns as numpy array
-        returns = np.array(
-            [trade["Percent_Change"] / 100.0 for trade in trades], dtype=np.float64
-        )
+        returns = np.array([trade["Percent_Change"] / 100.0 for trade in trades], dtype=np.float64)
 
-        # Diagnostic output
-        print(f"\n{'='*60}")
-        print(f"MONTE CARLO SIMULATION SETUP")
-        print(f"{'='*60}")
-        print(f"Total trades: {len(returns)}")
-        print(f"Returns range: [{returns.min()*100:.2f}%, {returns.max()*100:.2f}%]")
-        print(f"Returns mean: {returns.mean()*100:.2f}%")
-        print(f"Returns std: {returns.std()*100:.2f}%")
+        print(f"\nMonte Carlo: {len(returns)} trades, {n_simulations} simulations")
         print(
-            f"Unique returns: {len(np.unique(returns))} ({len(np.unique(returns))/len(returns)*100:.1f}%)"
+            f"  Trade returns: mean {returns.mean()*100:+.2f}%, "
+            f"std {returns.std()*100:.2f}%, "
+            f"range [{returns.min()*100:.2f}%, {returns.max()*100:.2f}%]"
         )
-
-        if len(np.unique(returns)) == 1:
-            print(f"\n⚠️  WARNING: All returns are identical ({returns[0]*100:.2f}%)")
-            print(f"Monte Carlo will show no variation.")
-
-        # Show first few returns
-        print(f"\nFirst 10 returns:")
-        for i, ret in enumerate(returns[:10]):
-            print(f"  Trade {i+1}: {ret*100:+.2f}%")
 
         # Original equity curve
-        original_equity_curve = MonteCarloSimulator._calculate_equity_curve(
-            returns, initial_equity
-        )
+        original_equity_curve = MonteCarloSimulator._calculate_equity_curve(returns, initial_equity)
         original_final = original_equity_curve[-1]
 
-        print(
-            f"\nOriginal sequence: ${original_final:,.2f} ({(original_final/initial_equity-1)*100:+.2f}%)"
-        )
-
-        # Run simulations
+        # Bootstrap resample trades WITH replacement. A pure shuffle would
+        # leave the final equity unchanged in every simulation (the product
+        # of (1 + r) is order-independent), so percentiles and probability
+        # of profit would be degenerate. Resampling yields a genuine
+        # distribution of outcomes while preserving the trade population.
+        rng = np.random.default_rng()
+        n_trades = len(returns)
         final_equities = []
         all_curves = []
 
-        print(f"\nRunning {n_simulations} simulations...")
-
-        for sim_idx in range(n_simulations):
-            sampled_returns = np.random.permutation(returns)
-            eq_curve = MonteCarloSimulator._calculate_equity_curve(
-                sampled_returns, initial_equity
-            )
-
+        for _ in range(n_simulations):
+            sampled_returns = rng.choice(returns, size=n_trades, replace=True)
+            eq_curve = MonteCarloSimulator._calculate_equity_curve(sampled_returns, initial_equity)
             final_equities.append(eq_curve[-1])
             all_curves.append(eq_curve)
 
-            if sim_idx in [0, 1, 2, 99, 499, 999]:
-                print(f"  Sim {sim_idx+1}: ${eq_curve[-1]:,.2f}")
-
         final_equities = np.array(final_equities)
 
-        print(f"\n{'='*60}")
-        print(f"MONTE CARLO RESULTS")
-        print(f"{'='*60}")
-        print(f"Min:    ${final_equities.min():,.2f}")
-        print(f"Max:    ${final_equities.max():,.2f}")
-        print(f"Mean:   ${final_equities.mean():,.2f}")
-        print(f"Median: ${np.median(final_equities):,.2f}")
-        print(f"Std:    ${final_equities.std():,.2f}")
-        print(f"Range:  ${final_equities.max() - final_equities.min():,.2f}")
-        print(f"Unique outcomes: {len(np.unique(final_equities))}")
-        print(f"{'='*60}\n")
+        print(
+            f"  Outcomes: median ${np.median(final_equities):,.2f}, "
+            f"90% interval [${np.percentile(final_equities, 5):,.2f}, "
+            f"${np.percentile(final_equities, 95):,.2f}]"
+        )
 
         return MonteCarloResults(
             original_equity=original_final,
@@ -1079,9 +1030,7 @@ class MonteCarloSimulator:
         )
 
     @staticmethod
-    def _calculate_equity_curve(
-        returns: np.ndarray, initial_equity: float
-    ) -> np.ndarray:
+    def _calculate_equity_curve(returns: np.ndarray, initial_equity: float) -> np.ndarray:
         """Calculate equity curve from returns"""
         equity_curve = np.zeros(len(returns) + 1)
         equity_curve[0] = initial_equity
@@ -1127,9 +1076,7 @@ class MonteCarloSimulator:
 """
 
         if results.probability_profit < 0.5:
-            report += (
-                "   ❌ Strategy is more likely to LOSE than win in random scenarios\n"
-            )
+            report += "   ❌ Strategy is more likely to LOSE than win in random scenarios\n"
         elif results.probability_profit < 0.7:
             report += "   ⚠️  Strategy has moderate probability of profit\n"
         elif results.probability_profit < 0.9:
@@ -1146,6 +1093,8 @@ class MonteCarloSimulator:
 
         deviation = (
             abs(results.original_equity - results.median_equity) / results.std_dev
+            if results.std_dev > 0
+            else 0.0
         )
         if deviation > 2:
             report += "   ⚠️  Original result is >2 std devs from median (unusual!)\n"

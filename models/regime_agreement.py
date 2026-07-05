@@ -61,9 +61,7 @@ class MultiHorizonAgreementIndex:
         """
         self.horizons = horizons or [1, 5, 10, 20]
 
-    def calculate_agreement(
-        self, predictions: List[HorizonPrediction]
-    ) -> AgreementAnalysis:
+    def calculate_agreement(self, predictions: List[HorizonPrediction]) -> AgreementAnalysis:
         """
         Calculate agreement index across horizons
 
@@ -198,9 +196,7 @@ class MultiHorizonAgreementIndex:
             if consensus_regime == MarketRegime.BULL:
                 return "MODERATE BUY: Majority bullish, but some uncertainty. Standard allocation."
             elif consensus_regime == MarketRegime.BEAR:
-                return (
-                    "MODERATE SELL: Majority bearish. Reduce position size moderately."
-                )
+                return "MODERATE SELL: Majority bearish. Reduce position size moderately."
             else:
                 return "CAUTIOUS: Moderate agreement. Standard risk management, monitor closely."
 
@@ -216,9 +212,7 @@ class MultiHorizonAgreementIndex:
                 "Maintain current positions but avoid increasing exposure."
             )
 
-    def calculate_horizon_stability(
-        self, predictions: List[HorizonPrediction]
-    ) -> float:
+    def calculate_horizon_stability(self, predictions: List[HorizonPrediction]) -> float:
         """
         Calculate stability: how much do predictions change across horizons?
 
