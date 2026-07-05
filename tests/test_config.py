@@ -5,7 +5,7 @@ Basic configuration and smoke tests
 import sys
 from pathlib import Path
 
-import pytest
+PROJECT_ROOT = Path(__file__).parent.parent
 
 
 def test_python_version():
@@ -14,33 +14,45 @@ def test_python_version():
 
 
 def test_project_structure():
-    """Test that basic project directories exist"""
-    project_root = Path(__file__).parent.parent
-    assert (project_root / "config").exists(), "config directory should exist"
-    assert (project_root / "backtest").exists(), "backtest directory should exist"
-    assert (
-        project_root / "optimization"
-    ).exists(), "optimization directory should exist"
-    assert (project_root / "risk").exists(), "risk directory should exist"
+    """Test that core project directories exist"""
+    for directory in ("config", "data", "gui", "models", "optimization", "trading"):
+        assert (PROJECT_ROOT / directory).is_dir(), f"{directory} directory should exist"
 
 
 def test_requirements_files():
     """Test that requirements files exist"""
-    project_root = Path(__file__).parent.parent
-    assert (project_root / "requirements.txt").exists(), "requirements.txt should exist"
-    assert (
-        project_root / "requirements-test.txt"
-    ).exists(), "requirements-test.txt should exist"
+    assert (PROJECT_ROOT / "requirements.txt").exists()
+    assert (PROJECT_ROOT / "requirements-test.txt").exists()
 
 
 def test_import_config():
-    """Test that config module can be imported"""
-    try:
-        from config import settings
+    """Test that config module can be imported and exposes expected classes"""
+    from config import settings
 
-        # Check for at least one config class
-        assert hasattr(
-            settings, "OptimizationConfig"
-        ), "OptimizationConfig class should exist in settings"
-    except ImportError as e:
-        pytest.skip(f"Config module import failed: {e}")
+    for attr in (
+        "OptimizationConfig",
+        "RiskConfig",
+        "TransactionCosts",
+        "IndicatorRanges",
+        "Paths",
+    ):
+        assert hasattr(settings, attr), f"{attr} should exist in settings"
+
+
+def test_transaction_costs():
+    """Test transaction cost math"""
+    from config.settings import TransactionCosts
+
+    costs = TransactionCosts()
+    assert costs.TOTAL_PCT == 0.0
+
+    costs.COMMISSION_PCT = 0.001
+    costs.SLIPPAGE_PCT = 0.0005
+    costs.SPREAD_PCT = 0.0005
+    assert abs(costs.TOTAL_PCT - 0.002) < 1e-12
+
+    stocks = TransactionCosts.for_stocks()
+    assert stocks.TOTAL_PCT > 0
+
+    crypto = TransactionCosts.for_crypto()
+    assert crypto.TOTAL_PCT > stocks.TOTAL_PCT

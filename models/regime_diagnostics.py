@@ -27,9 +27,7 @@ class TransitionDiagnostics:
     false_transition_rate: float  # Fraction of false transitions
     true_transition_rate: float  # Fraction of correctly detected transitions
     missed_transition_rate: float  # Fraction of missed transitions
-    regime_persistence_halflife: Dict[
-        MarketRegime, float
-    ]  # Days until 50% prob of exit
+    regime_persistence_halflife: Dict[MarketRegime, float]  # Days until 50% prob of exit
     stability_score: float  # Overall stability (0-1, higher is more stable)
     transition_matrix: np.ndarray  # Empirical transition probabilities
 
@@ -42,9 +40,7 @@ class RegimeQualityMetrics:
     average_confidence: float  # Average confidence score
     regime_purity: Dict[MarketRegime, float]  # How pure is each regime?
     confusion_matrix: np.ndarray  # Actual vs predicted regimes
-    regime_durations: Dict[
-        MarketRegime, List[int]
-    ]  # Duration of each regime occurrence
+    regime_durations: Dict[MarketRegime, List[int]]  # Duration of each regime occurrence
 
 
 class RegimeDiagnosticAnalyzer:
@@ -166,9 +162,7 @@ class RegimeDiagnosticAnalyzer:
         false_negatives = 0  # Missed true transition
         for true_idx in true_transitions:
             # Check if detected within ±3 periods
-            is_detected = any(
-                abs(true_idx - det_idx) <= 3 for det_idx in detected_transitions
-            )
+            is_detected = any(abs(true_idx - det_idx) <= 3 for det_idx in detected_transitions)
             if not is_detected:
                 false_negatives += 1
 
@@ -176,12 +170,8 @@ class RegimeDiagnosticAnalyzer:
         total_detected = len(detected_transitions)
         total_true = len(true_transitions)
 
-        false_transition_rate = (
-            false_positives / total_detected if total_detected > 0 else 0.0
-        )
-        true_transition_rate = (
-            true_positives / total_detected if total_detected > 0 else 0.0
-        )
+        false_transition_rate = false_positives / total_detected if total_detected > 0 else 0.0
+        true_transition_rate = true_positives / total_detected if total_detected > 0 else 0.0
         missed_transition_rate = false_negatives / total_true if total_true > 0 else 0.0
 
         return false_transition_rate, true_transition_rate, missed_transition_rate
@@ -265,9 +255,7 @@ class RegimeDiagnosticAnalyzer:
 
         return float(stability)
 
-    def build_transition_matrix(
-        self, regime_sequence: List[MarketRegime]
-    ) -> np.ndarray:
+    def build_transition_matrix(self, regime_sequence: List[MarketRegime]) -> np.ndarray:
         """
         Build empirical transition probability matrix
 
@@ -368,21 +356,15 @@ class RegimeDiagnosticAnalyzer:
 
             # Return sign purity
             if expectations["return_sign"] != 0:
-                correct_sign = (
-                    np.sign(regime_returns.mean()) == expectations["return_sign"]
-                )
+                correct_sign = np.sign(regime_returns.mean()) == expectations["return_sign"]
                 purity_components.append(1.0 if correct_sign else 0.0)
 
             # Volatility purity
             avg_vol = regime_volatility.mean()
             if expectations["volatility"] == "low":
-                vol_purity = (
-                    1.0 if avg_vol < 0.15 else max(0.0, 1.0 - (avg_vol - 0.15) / 0.15)
-                )
+                vol_purity = 1.0 if avg_vol < 0.15 else max(0.0, 1.0 - (avg_vol - 0.15) / 0.15)
             elif expectations["volatility"] == "low-moderate":
-                vol_purity = (
-                    1.0 if avg_vol < 0.3 else max(0.0, 1.0 - (avg_vol - 0.3) / 0.2)
-                )
+                vol_purity = 1.0 if avg_vol < 0.3 else max(0.0, 1.0 - (avg_vol - 0.3) / 0.2)
             elif expectations["volatility"] == "moderate-high":
                 vol_purity = 1.0 if avg_vol > 0.2 else max(0.0, avg_vol / 0.2)
             elif expectations["volatility"] == "high":
@@ -422,17 +404,13 @@ class RegimeDiagnosticAnalyzer:
 
         # Find true transition points
         true_transitions = [
-            i
-            for i in range(1, len(true_regimes))
-            if true_regimes[i] != true_regimes[i - 1]
+            i for i in range(1, len(true_regimes)) if true_regimes[i] != true_regimes[i - 1]
         ]
 
         # Calculate metrics
         latency = self.calculate_transition_latency(detected_regimes, true_transitions)
 
-        ftr, ttr, mtr = self.calculate_false_transition_rate(
-            detected_regimes, true_regimes
-        )
+        ftr, ttr, mtr = self.calculate_false_transition_rate(detected_regimes, true_regimes)
 
         half_lives = self.calculate_regime_persistence(detected_regimes)
 
@@ -518,9 +496,7 @@ def assess_detection_quality(diagnostics: TransitionDiagnostics) -> str:
     elif score >= 60:
         quality = "GOOD"
         emoji = "✅"
-        recommendation = (
-            "Regime detection is solid. Suitable for trading with monitoring."
-        )
+        recommendation = "Regime detection is solid. Suitable for trading with monitoring."
     elif score >= 40:
         quality = "ADEQUATE"
         emoji = "⚠️"
@@ -528,9 +504,7 @@ def assess_detection_quality(diagnostics: TransitionDiagnostics) -> str:
     else:
         quality = "POOR"
         emoji = "❌"
-        recommendation = (
-            "Regime detection needs significant improvement before trading."
-        )
+        recommendation = "Regime detection needs significant improvement before trading."
 
     return f"""
 {'='*70}

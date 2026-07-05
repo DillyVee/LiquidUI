@@ -1,7 +1,6 @@
 """Configuration module"""
 
 from .settings import (
-    DARK_THEME_STYLESHEET,
     RETRACEMENT_ZONES,
     AlpacaConfig,
     IndicatorRanges,
@@ -18,6 +17,5 @@ __all__ = [
     "IndicatorRanges",
     "Paths",
     "TransactionCosts",
-    "DARK_THEME_STYLESHEET",
     "RETRACEMENT_ZONES",
 ]

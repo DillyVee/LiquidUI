@@ -20,7 +20,6 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import StandardScaler
 
 from models.regime_detection import MarketRegime, MarketRegimeDetector
@@ -206,9 +205,7 @@ class RegimePredictor:
             RegimePrediction with forecast and confidence
         """
         if not self.is_trained:
-            raise ValueError(
-                "Model not trained! Call .train() first or use .detect_regime() only"
-            )
+            raise ValueError("Model not trained! Call .train() first or use .detect_regime() only")
 
         horizon = horizon_days or self.prediction_horizon
 
@@ -224,8 +221,7 @@ class RegimePredictor:
         proba = self.model.predict_proba(X_scaled)[0]
 
         # Map to regimes
-        regime_to_idx = {regime: i for i, regime in enumerate(MarketRegime)}
-        idx_to_regime = {i: regime for regime, i in regime_to_idx.items()}
+        idx_to_regime = {i: regime for i, regime in enumerate(MarketRegime)}
 
         regime_probs = {idx_to_regime[i]: float(proba[i]) for i in range(len(proba))}
 
@@ -238,8 +234,7 @@ class RegimePredictor:
         if hasattr(self.model, "feature_importances_"):
             importance = self.model.feature_importances_
             feature_importance = {
-                self.feature_names[i]: float(importance[i])
-                for i in range(len(self.feature_names))
+                self.feature_names[i]: float(importance[i]) for i in range(len(self.feature_names))
             }
         else:
             feature_importance = {}
@@ -253,9 +248,7 @@ class RegimePredictor:
             model_accuracy=self.test_accuracy,
         )
 
-    def _detect_regime_history(
-        self, prices: pd.Series, returns: pd.Series
-    ) -> List[MarketRegime]:
+    def _detect_regime_history(self, prices: pd.Series, returns: pd.Series) -> List[MarketRegime]:
         """Detect regime for each point in history"""
         regimes = []
 
@@ -289,8 +282,6 @@ class RegimePredictor:
         regime_to_idx = {regime: i for i, regime in enumerate(MarketRegime)}
 
         min_window = max(self.detector.trend_slow, self.detector.vol_window)
-        prices_aligned = prices.iloc[min_window:]
-        returns_aligned = returns.iloc[min_window:]
 
         for i in range(len(regime_history) - self.prediction_horizon):
             # Features at time t
@@ -414,9 +405,7 @@ class RegimePredictor:
 
         return features
 
-    def _calculate_performance(
-        self, X_val: np.ndarray, y_val: np.ndarray
-    ) -> PredictionPerformance:
+    def _calculate_performance(self, X_val: np.ndarray, y_val: np.ndarray) -> PredictionPerformance:
         """Calculate detailed performance metrics"""
         y_pred = self.model.predict(X_val)
 
@@ -425,7 +414,6 @@ class RegimePredictor:
 
         # Create regime to index mapping (consistent with training)
         regime_to_idx = {regime: i for i, regime in enumerate(MarketRegime)}
-        idx_to_regime = {i: regime for regime, i in regime_to_idx.items()}
 
         # Per-regime precision and recall
         precision_dict = {}
@@ -568,9 +556,7 @@ class RegimeBasedPositionSizer:
                 predicted_quality = regime_quality[prediction.predicted_regime]
 
                 # Confidence-weighted adjustment
-                quality_change = (
-                    predicted_quality - current_quality
-                ) * prediction.confidence
+                quality_change = (predicted_quality - current_quality) * prediction.confidence
 
                 prediction_adjustment = 1.0 + (quality_change * 0.3)
 

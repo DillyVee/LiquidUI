@@ -11,7 +11,7 @@ import optuna
 import pandas as pd
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from config.settings import RETRACEMENT_ZONES, Paths
+from config.settings import Paths
 from optimization.metrics import PerformanceMetrics
 from optimization.psr_composite import PSRCalculator
 
@@ -68,18 +68,6 @@ class MultiTimeframeOptimizer(QThread):
         else:
             self.transaction_costs = transaction_costs
 
-        storage_path = Paths.get_optuna_path(ticker) if ticker else None
-
-        self.study = optuna.create_study(
-            direction="maximize",
-            sampler=optuna.samplers.TPESampler(
-                n_startup_trials=30, multivariate=False, warn_independent_sampling=False
-            ),
-            study_name=f"{ticker}_psr_opt" if ticker else "psr_opt",
-            storage=storage_path,
-            load_if_exists=True if storage_path else False,
-        )
-
         self._preprocess_data()
         self._align_timeframes()
 
@@ -133,10 +121,7 @@ class MultiTimeframeOptimizer(QThread):
                     mask = (
                         (finest_df["Datetime"].dt.date == coarse_date.date())
                         & (finest_df["Datetime"].dt.hour == coarse_date.hour)
-                        & (
-                            (finest_df["Datetime"].dt.minute // 5)
-                            == (coarse_date.minute // 5)
-                        )
+                        & ((finest_df["Datetime"].dt.minute // 5) == (coarse_date.minute // 5))
                     )
                 else:
                     continue
@@ -147,6 +132,28 @@ class MultiTimeframeOptimizer(QThread):
             print(f"  Aligned {tf} to {finest_tf}")
 
         self.finest_tf = finest_tf
+
+    def stop(self):
+        """Request a graceful stop of the optimization"""
+        self.stopped = True
+
+    @property
+    def annualization_factor(self) -> float:
+        """Periods per year for the finest timeframe being simulated"""
+        if self.finest_tf == "daily":
+            return 252.0
+        if self.finest_tf == "hourly":
+            return 252.0 * 6.5
+        return 252.0 * 6.5 * 12  # 5min
+
+    @staticmethod
+    def _trade_multiplier(trade_count: int) -> float:
+        """Scale scores by statistical confidence in the trade sample"""
+        if trade_count < 10:
+            return 0.0
+        if trade_count < 30:
+            return (trade_count - 10) / 20.0
+        return 1.0
 
     def calculate_psr(self, params: Dict) -> Tuple[float, float]:
         """
@@ -166,13 +173,7 @@ class MultiTimeframeOptimizer(QThread):
         if len(returns) < 30:
             return 0.0, 0.0
 
-        # Get annualization factor based on finest timeframe
-        if self.finest_tf == "daily":
-            ann_factor = 252.0
-        elif self.finest_tf == "hourly":
-            ann_factor = 252.0 * 6.5
-        else:  # 5min
-            ann_factor = 252.0 * 6.5 * 12
+        ann_factor = self.annualization_factor
 
         # Calculate PSR (with trade-count awareness for realistic confidence)
         psr = PSRCalculator.calculate_psr(
@@ -225,11 +226,12 @@ class MultiTimeframeOptimizer(QThread):
                 rsi = PerformanceMetrics.compute_rsi_vectorized(close_tf, mn1)
                 rsi_smooth = PerformanceMetrics.smooth_vectorized(rsi, mn2)
 
-                # Vectorized cycle
+                # Vectorized cycle (guard against a zero-length period)
                 on = int(params[f"On_{tf}"])
                 off = int(params[f"Off_{tf}"])
                 start = int(params[f"Start_{tf}"])
-                cycle = ((np.arange(len(close_tf)) - start) % (on + off)) < on
+                period = max(1, on + off)
+                cycle = ((np.arange(len(close_tf)) - start) % period) < on
 
                 # Map to finest timeframe
                 if tf != self.finest_tf:
@@ -238,9 +240,7 @@ class MultiTimeframeOptimizer(QThread):
                     indices_clipped = np.clip(indices, 0, len(rsi_smooth) - 1)
                     rsi_smooth_mapped = np.zeros(n_bars)
                     cycle_mapped = np.zeros(n_bars, dtype=bool)
-                    rsi_smooth_mapped[valid_mask] = rsi_smooth[
-                        indices_clipped[valid_mask]
-                    ]
+                    rsi_smooth_mapped[valid_mask] = rsi_smooth[indices_clipped[valid_mask]]
                     cycle_mapped[valid_mask] = cycle[indices_clipped[valid_mask]]
                 else:
                     rsi_smooth_mapped = rsi_smooth
@@ -261,6 +261,7 @@ class MultiTimeframeOptimizer(QThread):
 
             for i in range(n_bars):
                 if not position and enter_signal[i]:
+                    # Enter at the NEXT bar's open (no lookahead)
                     if i + 1 < n_bars:
                         entry_price = open_finest[i + 1]
                         entry_idx = i + 1
@@ -310,16 +311,18 @@ class MultiTimeframeOptimizer(QThread):
                                 "Equity_After": equity,
                                 "Transaction_Cost_Entry": entry_cost_pct * 100,
                                 "Transaction_Cost_Exit": exit_cost_pct * 100,
-                                "Total_Cost_PCT": (entry_cost_pct + exit_cost_pct)
-                                * 100,
+                                "Total_Cost_PCT": (entry_cost_pct + exit_cost_pct) * 100,
                             }
                         )
 
                     position = False
 
-                equity_curve[i] = (
-                    equity * (open_finest[i] / entry_price) if position else equity
-                )
+                # Mark-to-market only once the entry bar has been reached;
+                # before that the position is not yet open
+                if position and i >= entry_idx:
+                    equity_curve[i] = equity * (open_finest[i] / entry_price)
+                else:
+                    equity_curve[i] = equity
 
             # Close final position
             if position:
@@ -394,9 +397,7 @@ class MultiTimeframeOptimizer(QThread):
 
             phases_per_tf = 2
             total_phases = len(self.timeframes) * phases_per_tf
-            trials_per_phase = max(
-                50, self.n_trials // (len(self.timeframes) * phases_per_tf)
-            )
+            trials_per_phase = max(50, self.n_trials // (len(self.timeframes) * phases_per_tf))
 
             # Calculate batches per phase
             batches_per_phase = max(1, trials_per_phase // self.batch_size)
@@ -423,9 +424,7 @@ class MultiTimeframeOptimizer(QThread):
                 # PHASE: Optimize Cycle (with batching)
                 # ===================================================================
                 phase_counter += 1
-                phase_msg = (
-                    f"Phase {phase_counter}/{total_phases}: {tf.upper()} Time Cycle..."
-                )
+                phase_msg = f"Phase {phase_counter}/{total_phases}: {tf.upper()} Time Cycle..."
                 self.phase_update.emit(phase_msg)
                 print(f"\n{'='*60}")
                 print(f"PHASE {phase_counter}: {tf.upper()} TIME CYCLE (BATCHED)")
@@ -496,18 +495,12 @@ class MultiTimeframeOptimizer(QThread):
                         if eq_curve is None or len(eq_curve) < 50:
                             return 0.0
 
-                        sharpe = PSRCalculator.calculate_sharpe_from_equity(eq_curve)
+                        sharpe = PSRCalculator.calculate_sharpe_from_equity(
+                            eq_curve, annualization_factor=self.annualization_factor
+                        )
 
                         # Reward having enough trades for statistical confidence
-                        # Previously penalized MORE trades (backwards!)
-                        if trades < 10:
-                            trade_multiplier = 0.0  # Insufficient trades
-                        elif trades < 30:
-                            trade_multiplier = trades / 30.0  # Scale up to 30
-                        else:
-                            trade_multiplier = 1.0  # Sufficient statistical power
-
-                        score = sharpe * trade_multiplier
+                        score = sharpe * self._trade_multiplier(trades)
 
                         # Update progress
                         batch_progress = batch_idx / batches_per_phase
@@ -538,6 +531,15 @@ class MultiTimeframeOptimizer(QThread):
                     # Memory cleanup after batch
                     gc.collect()
 
+                if self.stopped:
+                    break
+
+                if not any(t.state == optuna.trial.TrialState.COMPLETE for t in cycle_study.trials):
+                    raise ValueError(
+                        f"No completed trials in {tf} cycle phase - "
+                        "check data quality and parameter ranges"
+                    )
+
                 best_cycle = {
                     f"On_{tf}": cycle_study.best_params[f"On_{tf}"],
                     f"Off_{tf}": cycle_study.best_params[f"Off_{tf}"],
@@ -554,9 +556,7 @@ class MultiTimeframeOptimizer(QThread):
                 # PHASE: Optimize RSI (with batching + CSV saves)
                 # ===================================================================
                 phase_counter += 1
-                self.phase_update.emit(
-                    f"Phase {phase_counter}/{total_phases}: {tf.upper()} RSI..."
-                )
+                self.phase_update.emit(f"Phase {phase_counter}/{total_phases}: {tf.upper()} RSI...")
                 print(f"\nPHASE {phase_counter}: {tf.upper()} RSI (BATCHED PSR)")
 
                 rsi_study = optuna.create_study(
@@ -610,12 +610,8 @@ class MultiTimeframeOptimizer(QThread):
                         params = base_params_rsi.copy()
 
                         # Only update current timeframe RSI params (trial-specific)
-                        params[f"MN1_{tf}"] = trial.suggest_int(
-                            f"MN1_{tf}", *self.mn1_range
-                        )
-                        params[f"MN2_{tf}"] = trial.suggest_int(
-                            f"MN2_{tf}", *self.mn2_range
-                        )
+                        params[f"MN1_{tf}"] = trial.suggest_int(f"MN1_{tf}", *self.mn1_range)
+                        params[f"MN2_{tf}"] = trial.suggest_int(f"MN2_{tf}", *self.mn2_range)
                         params[f"Entry_{tf}"] = trial.suggest_float(
                             f"Entry_{tf}", *self.entry_range, step=0.5
                         )
@@ -636,15 +632,8 @@ class MultiTimeframeOptimizer(QThread):
                             if len(returns) < 30:
                                 psr, sharpe = 0.0, 0.0
                             else:
-                                # Get annualization factor
-                                if self.finest_tf == "daily":
-                                    ann_factor = 252.0
-                                elif self.finest_tf == "hourly":
-                                    ann_factor = 252.0 * 6.5
-                                else:  # 5min or 1min
-                                    ann_factor = 252.0 * 6.5 * 12
+                                ann_factor = self.annualization_factor
 
-                                # Calculate PSR
                                 psr = PSRCalculator.calculate_psr(
                                     returns,
                                     benchmark_sharpe=0.0,
@@ -652,7 +641,6 @@ class MultiTimeframeOptimizer(QThread):
                                     trade_count=trade_count,
                                 )
 
-                                # Calculate Sharpe
                                 mean_ret = np.mean(returns)
                                 std_ret = np.std(returns, ddof=1)
                                 if std_ret > 0:
@@ -661,15 +649,8 @@ class MultiTimeframeOptimizer(QThread):
                                 else:
                                     sharpe = 0.0
 
-                            # Apply smooth trade count multiplier (not hard cutoff)
-                            # Rewards having enough trades for statistical confidence
-                            if trade_count < 10:
-                                trade_multiplier = 0.0  # Insufficient trades
-                            elif trade_count < 30:
-                                trade_multiplier = (trade_count - 10) / 20.0  # 0.0 to 1.0
-                            else:
-                                trade_multiplier = 1.0  # Sufficient statistical power
-
+                            # Scale by statistical confidence in the trade sample
+                            trade_multiplier = self._trade_multiplier(trade_count)
                             psr = psr * trade_multiplier
                             sharpe = sharpe * trade_multiplier
 
@@ -730,7 +711,9 @@ class MultiTimeframeOptimizer(QThread):
                         if eq_curve is None:
                             continue
 
-                        metrics = PerformanceMetrics.calculate_metrics(eq_curve)
+                        metrics = PerformanceMetrics.calculate_metrics(
+                            eq_curve, annualization_factor=self.annualization_factor
+                        )
                         if metrics is None:
                             continue
 
@@ -754,9 +737,7 @@ class MultiTimeframeOptimizer(QThread):
                             print(f"   ✓ Created CSV: {results_path}")
                         else:
                             # Append to existing file
-                            df_batch.to_csv(
-                                results_path, index=False, mode="a", header=False
-                            )
+                            df_batch.to_csv(results_path, index=False, mode="a", header=False)
                             print(f"   ✓ Appended {len(batch_results)} results to CSV")
 
                     print(f"   ✓ Batch {batch_idx + 1} complete")
@@ -764,6 +745,15 @@ class MultiTimeframeOptimizer(QThread):
                     # Memory cleanup after batch
                     batch_results.clear()
                     gc.collect()
+
+                if self.stopped:
+                    break
+
+                if not any(t.state == optuna.trial.TrialState.COMPLETE for t in rsi_study.trials):
+                    raise ValueError(
+                        f"No completed trials in {tf} RSI phase - "
+                        "check data quality and parameter ranges"
+                    )
 
                 best_rsi = {
                     f"MN1_{tf}": rsi_study.best_params[f"MN1_{tf}"],
@@ -779,6 +769,11 @@ class MultiTimeframeOptimizer(QThread):
             # ===================================================================
             # Compile final best result
             # ===================================================================
+            if self.stopped:
+                print("\nOptimization stopped by user")
+                self.finished.emit(pd.DataFrame())
+                return
+
             print(f"\n{'='*60}")
             print(f"Compiling final best result...")
 
@@ -795,7 +790,9 @@ class MultiTimeframeOptimizer(QThread):
             if base_eq_curve is None:
                 raise ValueError("Final simulation failed")
 
-            base_metrics = PerformanceMetrics.calculate_metrics(base_eq_curve)
+            base_metrics = PerformanceMetrics.calculate_metrics(
+                base_eq_curve, annualization_factor=self.annualization_factor
+            )
 
             if base_metrics is None:
                 raise ValueError("Failed to calculate performance metrics")
@@ -859,9 +856,7 @@ class MultiTimeframeOptimizer(QThread):
                         )
 
                     if f"MN1_{tf}" in params:
-                        print(
-                            f"    RSI: MN1={params[f'MN1_{tf}']}, MN2={params[f'MN2_{tf}']}"
-                        )
+                        print(f"    RSI: MN1={params[f'MN1_{tf}']}, MN2={params[f'MN2_{tf}']}")
                         print(
                             f"    Thresholds: ENTRY<{params[f'Entry_{tf}']:.1f}, EXIT>{params[f'Exit_{tf}']:.1f}"
                         )
@@ -871,7 +866,10 @@ class MultiTimeframeOptimizer(QThread):
             self.finished.emit(df_results)
 
         except Exception as e:
-            if not self.stopped:
+            if self.stopped:
+                # Let the GUI reset its buttons after a user-initiated stop
+                self.finished.emit(pd.DataFrame())
+            else:
                 error_msg = f"Optimization error: {e}"
                 print(f"\n✗ {error_msg}")
                 self.error.emit(error_msg)

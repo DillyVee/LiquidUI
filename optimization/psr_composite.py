@@ -10,11 +10,10 @@ Key improvements:
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional
 
 import numpy as np
 import optuna
-import pandas as pd
 from scipy import stats
 
 
@@ -102,12 +101,7 @@ class PSRCalculator:
                 base_se = 1.0 / np.sqrt(max(effective_n - 1.0, 1.0))
                 skew_penalty = 1.0 + min(5.0, abs(skew)) * 0.3
                 kurt_penalty = 1.0 + min(10.0, abs(kurt)) * 0.15
-                sharpe_std = (
-                    base_se
-                    * skew_penalty
-                    * kurt_penalty
-                    * np.sqrt(annualization_factor)
-                )
+                sharpe_std = base_se * skew_penalty * kurt_penalty * np.sqrt(annualization_factor)
             else:
                 sharpe_std = np.sqrt(variance_annual_sharpe)
 
@@ -268,9 +262,7 @@ class CompositeOptimizer:
         pbo = PBOCalculatorSimple.estimate_pbo_from_returns(returns)
         pbo_penalty = pbo
 
-        annual_turnover = TurnoverCalculator.calculate_annual_turnover(
-            trade_count, total_days
-        )
+        annual_turnover = TurnoverCalculator.calculate_annual_turnover(trade_count, total_days)
 
         if annual_turnover < self.max_acceptable_turnover:
             turnover_penalty = 0.0

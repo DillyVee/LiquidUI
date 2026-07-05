@@ -90,9 +90,7 @@ class CrossAssetRegimeAnalyzer:
             "returns": returns,
         }
 
-    def analyze_global_regime(
-        self, spy_returns: pd.Series = None
-    ) -> GlobalRegimeAnalysis:
+    def analyze_global_regime(self, spy_returns: pd.Series = None) -> GlobalRegimeAnalysis:
         """
         Analyze global regime across all assets
 
@@ -139,9 +137,7 @@ class CrossAssetRegimeAnalyzer:
         risk_on_score = self._calculate_risk_score(asset_regimes)
 
         # 3. Determine global regime
-        global_regime, confidence = self._determine_global_regime(
-            asset_regimes, risk_on_score
-        )
+        global_regime, confidence = self._determine_global_regime(asset_regimes, risk_on_score)
 
         # 4. Calculate synchronization
         synchronization = self._calculate_synchronization(asset_regimes)
@@ -179,9 +175,7 @@ class CrossAssetRegimeAnalyzer:
             interpretation=interpretation,
         )
 
-    def _calculate_risk_score(
-        self, asset_regimes: Dict[str, AssetRegimeState]
-    ) -> float:
+    def _calculate_risk_score(self, asset_regimes: Dict[str, AssetRegimeState]) -> float:
         """
         Calculate risk-on/risk-off score
 
@@ -291,9 +285,7 @@ class CrossAssetRegimeAnalyzer:
             # Mixed or uncertain
             return GlobalRegime.MIXED, avg_confidence * 0.6
 
-    def _calculate_synchronization(
-        self, asset_regimes: Dict[str, AssetRegimeState]
-    ) -> float:
+    def _calculate_synchronization(self, asset_regimes: Dict[str, AssetRegimeState]) -> float:
         """
         Calculate how synchronized regimes are across assets
 
@@ -319,9 +311,7 @@ class CrossAssetRegimeAnalyzer:
 
         return synchronization
 
-    def _identify_divergences(
-        self, asset_regimes: Dict[str, AssetRegimeState]
-    ) -> List[tuple]:
+    def _identify_divergences(self, asset_regimes: Dict[str, AssetRegimeState]) -> List[tuple]:
         """
         Identify asset pairs with divergent regimes
 
@@ -344,9 +334,9 @@ class CrossAssetRegimeAnalyzer:
                 regime2 = state2.regime_state.current_regime
 
                 # Check for opposite regimes
-                is_divergent = (
-                    regime1 == MarketRegime.BULL and regime2 == MarketRegime.BEAR
-                ) or (regime1 == MarketRegime.BEAR and regime2 == MarketRegime.BULL)
+                is_divergent = (regime1 == MarketRegime.BULL and regime2 == MarketRegime.BEAR) or (
+                    regime1 == MarketRegime.BEAR and regime2 == MarketRegime.BULL
+                )
 
                 if is_divergent:
                     divergences.append((name1, name2))
@@ -459,12 +449,8 @@ class CrossAssetRegimeAnalyzer:
         if analysis.divergence_pairs:
             report += f"\n⚠️  DIVERGENCES:\n"
             for asset1, asset2 in analysis.divergence_pairs:
-                regime1 = analysis.asset_regimes[
-                    asset1
-                ].regime_state.current_regime.value
-                regime2 = analysis.asset_regimes[
-                    asset2
-                ].regime_state.current_regime.value
+                regime1 = analysis.asset_regimes[asset1].regime_state.current_regime.value
+                regime2 = analysis.asset_regimes[asset2].regime_state.current_regime.value
                 report += f"   • {asset1} ({regime1}) ↔ {asset2} ({regime2})\n"
 
         report += f"\n💡 INTERPRETATION:\n   {analysis.interpretation}\n"

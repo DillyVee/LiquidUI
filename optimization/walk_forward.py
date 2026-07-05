@@ -10,8 +10,7 @@ Key fixes:
 """
 
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -120,9 +119,7 @@ class WalkForwardAnalyzer:
             try:
                 # Define date ranges
                 start_offset = window_idx * test_days
-                train_start = df_finest["Datetime"].min() + pd.Timedelta(
-                    days=start_offset
-                )
+                train_start = df_finest["Datetime"].min() + pd.Timedelta(days=start_offset)
                 train_end = train_start + pd.Timedelta(days=train_days)
                 test_start = train_end
                 test_end = test_start + pd.Timedelta(days=test_days)
@@ -146,18 +143,14 @@ class WalkForwardAnalyzer:
                 )
 
                 # Validate split
-                if not WalkForwardAnalyzer._validate_split(
-                    train_dict, test_dict, finest_tf
-                ):
+                if not WalkForwardAnalyzer._validate_split(train_dict, test_dict, finest_tf):
                     print(f"⚠️  Insufficient data in window {window_idx + 1}, skipping")
                     continue
 
                 # Run optimization on training data
                 print(f"\n📊 Optimizing on training data...")
-                best_params, is_equity, is_trades = (
-                    WalkForwardAnalyzer._optimize_window(
-                        optimizer_class, train_dict, window_idx + 1, **optimizer_kwargs
-                    )
+                best_params, is_equity, is_trades = WalkForwardAnalyzer._optimize_window(
+                    optimizer_class, train_dict, window_idx + 1, **optimizer_kwargs
                 )
 
                 if best_params is None or is_trades < min_trades:
@@ -182,9 +175,7 @@ class WalkForwardAnalyzer:
 
                 # Calculate degradation
                 degradation = (
-                    ((is_return - oos_return) / abs(is_return) * 100)
-                    if is_return != 0
-                    else 0
+                    ((is_return - oos_return) / abs(is_return) * 100) if is_return != 0 else 0
                 )
                 print(f"  Degradation: {degradation:.1f}%")
 
@@ -282,15 +273,11 @@ class WalkForwardAnalyzer:
             df_tf = df_dict[tf].copy()
 
             # Training data
-            train_mask = (df_tf["Datetime"] >= train_start) & (
-                df_tf["Datetime"] < train_end
-            )
+            train_mask = (df_tf["Datetime"] >= train_start) & (df_tf["Datetime"] < train_end)
             train_dict[tf] = df_tf[train_mask].copy().reset_index(drop=True)
 
             # Testing data
-            test_mask = (df_tf["Datetime"] >= test_start) & (
-                df_tf["Datetime"] < test_end
-            )
+            test_mask = (df_tf["Datetime"] >= test_start) & (df_tf["Datetime"] < test_end)
             test_dict[tf] = df_tf[test_mask].copy().reset_index(drop=True)
 
             print(f"  {tf}: Train={len(train_dict[tf])}, Test={len(test_dict[tf])}")
@@ -309,9 +296,7 @@ class WalkForwardAnalyzer:
         return train_bars >= 100 and test_bars >= 10
 
     @staticmethod
-    def _optimize_window(
-        optimizer_class, train_dict: Dict, window_num: int, **optimizer_kwargs
-    ):
+    def _optimize_window(optimizer_class, train_dict: Dict, window_num: int, **optimizer_kwargs):
         """Run optimization on training window"""
         try:
             optimizer = optimizer_class(df_dict=train_dict, **optimizer_kwargs)
@@ -333,17 +318,13 @@ class WalkForwardAnalyzer:
             return None, None, 0
 
     @staticmethod
-    def _test_window(
-        optimizer_class, test_dict: Dict, best_params: Dict, **optimizer_kwargs
-    ):
+    def _test_window(optimizer_class, test_dict: Dict, best_params: Dict, **optimizer_kwargs):
         """Test on out-of-sample window"""
         try:
             # Remove n_trials from kwargs for testing
             test_kwargs = {k: v for k, v in optimizer_kwargs.items() if k != "n_trials"}
 
-            test_optimizer = optimizer_class(
-                df_dict=test_dict, n_trials=1, **test_kwargs
-            )
+            test_optimizer = optimizer_class(df_dict=test_dict, n_trials=1, **test_kwargs)
 
             oos_equity, oos_trades = test_optimizer.simulate_multi_tf(best_params)
             return oos_equity, oos_trades
@@ -472,16 +453,11 @@ class WalkForwardAnalyzer:
         ax3.set_facecolor("#121212")
 
         degradations = []
-        for is_ret, oos_ret in zip(
-            results.in_sample_returns, results.out_of_sample_returns
-        ):
+        for is_ret, oos_ret in zip(results.in_sample_returns, results.out_of_sample_returns):
             deg = ((is_ret - oos_ret) / abs(is_ret) * 100) if is_ret != 0 else 0
             degradations.append(deg)
 
-        colors = [
-            "#ff4444" if d > 50 else "#ffaa00" if d > 20 else "#44ff44"
-            for d in degradations
-        ]
+        colors = ["#ff4444" if d > 50 else "#ffaa00" if d > 20 else "#44ff44" for d in degradations]
 
         ax3.bar(windows, degradations, color=colors, alpha=0.7, edgecolor="white")
         ax3.axhline(y=0, color="#888888", linestyle="-", linewidth=1)
@@ -535,9 +511,7 @@ class WalkForwardAnalyzer:
             color="white",
         )
 
-        title = (
-            f"Walk-Forward Analysis - {ticker}" if ticker else "Walk-Forward Analysis"
-        )
+        title = f"Walk-Forward Analysis - {ticker}" if ticker else "Walk-Forward Analysis"
         plt.suptitle(title, color="white", fontsize=16, fontweight="bold")
         plt.tight_layout()
 

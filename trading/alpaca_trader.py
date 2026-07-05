@@ -6,7 +6,6 @@ import datetime
 import time
 from typing import Dict, List
 
-import numpy as np
 import pandas as pd
 from PyQt6.QtCore import QThread, pyqtSignal
 
@@ -42,17 +41,17 @@ class AlpacaLiveTrader(QThread):
         self,
         api_key: str,
         secret_key: str,
-        base_url: str,
         symbol: str,
         params: Dict,
         df_dict: Dict,
         timeframes: List[str],
         position_size_pct: float = 0.05,
+        paper: bool = True,
     ):
         super().__init__()
         self.api_key = api_key
         self.secret_key = secret_key
-        self.base_url = base_url
+        self.paper = paper
         self.yfinance_symbol = symbol
         self.symbol = AlpacaConfig.get_alpaca_symbol(symbol)
         self.params = params
@@ -63,9 +62,12 @@ class AlpacaLiveTrader(QThread):
         self.last_bar_time = {}
         self.position_size_pct = position_size_pct
 
-        print(
-            f"🔄 Ticker mapping: {self.yfinance_symbol} (yfinance) -> {self.symbol} (Alpaca)"
-        )
+        print(f"🔄 Ticker mapping: {self.yfinance_symbol} (yfinance) -> {self.symbol} (Alpaca)")
+
+    @property
+    def is_running(self) -> bool:
+        """Whether the trading loop is active"""
+        return self.running
 
     def run(self):
         """Main trading loop"""
@@ -75,18 +77,14 @@ class AlpacaLiveTrader(QThread):
 
         try:
             # Initialize Alpaca clients
-            self.trading_client = TradingClient(
-                self.api_key, self.secret_key, paper=True
-            )
+            self.trading_client = TradingClient(self.api_key, self.secret_key, paper=self.paper)
 
             # Check if crypto to use crypto data client
             is_crypto = "/" in self.symbol
 
             if is_crypto:
                 try:
-                    self.data_client = CryptoHistoricalDataClient(
-                        self.api_key, self.secret_key
-                    )
+                    self.data_client = CryptoHistoricalDataClient(self.api_key, self.secret_key)
                     self.is_crypto = True
                     self.status_update.emit(f"✓ Using Crypto API for {self.symbol}")
                     print(f"📊 Initialized Crypto Data Client for {self.symbol}")
@@ -94,25 +92,22 @@ class AlpacaLiveTrader(QThread):
                     self.error.emit("Crypto API not available in alpaca-py version")
                     return
             else:
-                self.data_client = StockHistoricalDataClient(
-                    self.api_key, self.secret_key
-                )
+                self.data_client = StockHistoricalDataClient(self.api_key, self.secret_key)
                 self.is_crypto = False
                 self.status_update.emit(f"✓ Using Stock API for {self.symbol}")
 
             # Get account info
             account = self.trading_client.get_account()
-            self.status_update.emit(f"✓ Connected to Alpaca Paper Trading")
+            mode = "Paper" if self.paper else "LIVE"
+            self.status_update.emit(f"✓ Connected to Alpaca {mode} Trading")
             self.status_update.emit(f"Account Balance: ${float(account.cash):.2f}")
 
             # Check current position
             try:
                 position = self.trading_client.get_open_position(self.symbol)
                 self.position = True
-                self.status_update.emit(
-                    f"⚠ Already in position: {position.qty} of {self.symbol}"
-                )
-            except:
+                self.status_update.emit(f"⚠ Already in position: {position.qty} of {self.symbol}")
+            except Exception:
                 self.position = False
                 self.status_update.emit(f"No existing position in {self.symbol}")
 
@@ -199,13 +194,10 @@ class AlpacaLiveTrader(QThread):
                 df = df.reset_index()
                 df = df.rename(columns={"timestamp": "Datetime"})
 
-                # Check if we have a new bar (no repainting)
-                latest_time = df["Datetime"].iloc[-1]
-                if tf in self.last_bar_time and latest_time == self.last_bar_time[tf]:
-                    signal_df = df.iloc[:-1].copy()
-                else:
-                    self.last_bar_time[tf] = latest_time
-                    signal_df = df.iloc[:-1].copy()
+                # Signal off closed bars only - drop the still-forming bar
+                # so signals never repaint
+                self.last_bar_time[tf] = df["Datetime"].iloc[-1]
+                signal_df = df.iloc[:-1].copy()
 
                 if len(signal_df) < 2:
                     return None
@@ -218,12 +210,13 @@ class AlpacaLiveTrader(QThread):
                 rsi = PerformanceMetrics.compute_rsi_vectorized(close, mn1)
                 rsi_smooth = PerformanceMetrics.smooth_vectorized(rsi, mn2)
 
-                # Calculate cycle
+                # Calculate cycle (guard against a zero-length period)
                 on = int(self.params[f"On_{tf}"])
                 off = int(self.params[f"Off_{tf}"])
                 start = int(self.params[f"Start_{tf}"])
                 bar_index = len(signal_df) - 1
-                cycle = ((bar_index - start) % (on + off)) < on
+                period = max(1, on + off)
+                cycle = ((bar_index - start) % period) < on
 
                 # Get current signal
                 current_rsi = rsi_smooth[-1]
@@ -240,9 +233,7 @@ class AlpacaLiveTrader(QThread):
                 }
 
             # Combine signals (AND for entry, OR for exit)
-            should_enter = all(
-                signals_dict[tf]["should_enter"] for tf in self.timeframes
-            )
+            should_enter = all(signals_dict[tf]["should_enter"] for tf in self.timeframes)
             should_exit = any(signals_dict[tf]["should_exit"] for tf in self.timeframes)
 
             return {
@@ -293,7 +284,7 @@ class AlpacaLiveTrader(QThread):
                     time_in_force=TimeInForce.GTC,
                 )
 
-                order = self.trading_client.submit_order(order_data)
+                self.trading_client.submit_order(order_data)
                 shares_text = f"${notional:.2f}"
             else:
                 # Stocks: use qty
@@ -310,7 +301,7 @@ class AlpacaLiveTrader(QThread):
                     time_in_force=TimeInForce.DAY,
                 )
 
-                order = self.trading_client.submit_order(order_data)
+                self.trading_client.submit_order(order_data)
                 shares_text = f"{shares} shares"
 
             self.position = True
@@ -323,9 +314,7 @@ class AlpacaLiveTrader(QThread):
             }
 
             self.trade_executed.emit(trade_info)
-            self.status_update.emit(
-                f"✓ BUY: {shares_text} of {self.symbol} @ ${current_price:.2f}"
-            )
+            self.status_update.emit(f"✓ BUY: {shares_text} of {self.symbol} @ ${current_price:.2f}")
 
         except Exception as e:
             self.error.emit(f"Entry execution error: {e}")

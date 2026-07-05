@@ -109,9 +109,7 @@ class MarketRegimeDetector:
 
         self.scaler = StandardScaler()
 
-    def detect_regime(
-        self, prices: pd.Series, returns: Optional[pd.Series] = None
-    ) -> RegimeState:
+    def detect_regime(self, prices: pd.Series, returns: Optional[pd.Series] = None) -> RegimeState:
         """
         Detect current market regime
 
@@ -153,9 +151,7 @@ class MarketRegimeDetector:
         predicted_next, transition_prob = self._predict_next_regime(current_regime)
 
         # Calculate suggested position size
-        position_size = self._calculate_position_size(
-            current_regime, confidence, transition_prob
-        )
+        position_size = self._calculate_position_size(current_regime, confidence, transition_prob)
 
         return RegimeState(
             current_regime=current_regime,
@@ -167,9 +163,7 @@ class MarketRegimeDetector:
             suggested_position_size=position_size,
         )
 
-    def _calculate_regime_features(
-        self, prices: pd.Series, returns: pd.Series
-    ) -> Dict[str, float]:
+    def _calculate_regime_features(self, prices: pd.Series, returns: pd.Series) -> Dict[str, float]:
         """Calculate features for regime detection"""
         features = {}
 
@@ -283,9 +277,7 @@ class MarketRegimeDetector:
         cummax = prices.expanding().max()
         drawdown = (prices - cummax) / cummax
         features["current_drawdown"] = drawdown.iloc[-1]
-        features["max_drawdown_60d"] = (
-            drawdown.tail(60).min() if len(drawdown) >= 60 else 0
-        )
+        features["max_drawdown_60d"] = drawdown.tail(60).min() if len(drawdown) >= 60 else 0
 
         return features
 
@@ -395,9 +387,7 @@ class MarketRegimeDetector:
 
         return duration
 
-    def _predict_next_regime(
-        self, current_regime: MarketRegime
-    ) -> Tuple[MarketRegime, float]:
+    def _predict_next_regime(self, current_regime: MarketRegime) -> Tuple[MarketRegime, float]:
         """
         Predict next regime using Markov chain
         Returns (predicted_regime, probability_of_staying)
@@ -864,16 +854,12 @@ class PBRCalculator:
             sharpe_prob = 0.1
         else:
             # Sigmoid centered at Sharpe=1.5, scaled to [0.3, 0.95]
-            raw_prob = PBRCalculator._sigmoid(
-                backtest_sharpe, center=1.5, steepness=2.0
-            )
+            raw_prob = PBRCalculator._sigmoid(backtest_sharpe, center=1.5, steepness=2.0)
             sharpe_prob = 0.3 + raw_prob * 0.65
 
         # 2. Sample size factor (smooth sigmoid, not thresholds)
         # Sigmoid centered at 100 trades
-        sample_factor = 0.5 + 0.45 * PBRCalculator._sigmoid(
-            n_trades, center=100, steepness=0.02
-        )
+        sample_factor = 0.5 + 0.45 * PBRCalculator._sigmoid(n_trades, center=100, steepness=0.02)
 
         # 3. Effective degrees of freedom (not raw parameter count)
         effective_dof = PBRCalculator._effective_degrees_of_freedom(
@@ -883,9 +869,7 @@ class PBRCalculator:
         # Overfitting penalty based on effective DoF vs sample size
         # Rule of thumb: need 10 trades per parameter
         dof_ratio = n_trades / (effective_dof * 10 + 1e-6)
-        overfitting_factor = PBRCalculator._sigmoid(
-            dof_ratio, center=1.0, steepness=2.0
-        )
+        overfitting_factor = PBRCalculator._sigmoid(dof_ratio, center=1.0, steepness=2.0)
         overfitting_factor = 0.4 + 0.6 * overfitting_factor  # Scale to [0.4, 1.0]
 
         # 4. Selection bias penalty (Expected Maximum Sharpe)
@@ -894,9 +878,7 @@ class PBRCalculator:
         # 5. Walk-forward efficiency (smooth sigmoid)
         if walk_forward_efficiency is not None:
             # Sigmoid centered at 0.5 efficiency
-            wf_factor = PBRCalculator._sigmoid(
-                walk_forward_efficiency, center=0.5, steepness=4.0
-            )
+            wf_factor = PBRCalculator._sigmoid(walk_forward_efficiency, center=0.5, steepness=4.0)
             wf_factor = 0.3 + 0.7 * wf_factor  # Scale to [0.3, 1.0]
         else:
             wf_factor = 0.7  # Neutral default
@@ -914,9 +896,7 @@ class PBRCalculator:
 
         # 7. Regime performance dispersion
         if sharpe_by_regime is not None:
-            dispersion_factor = PBRCalculator._regime_dispersion_factor(
-                sharpe_by_regime
-            )
+            dispersion_factor = PBRCalculator._regime_dispersion_factor(sharpe_by_regime)
         else:
             dispersion_factor = 0.8  # Neutral default
 
@@ -1034,15 +1014,11 @@ class PBRCalculator:
             report += f"{'='*62}\n"
             report += f"PBR Score: {pbr:.1%} ({PBRCalculator.interpret_pbr(pbr)})\n\n"
             report += f"Component Breakdown:\n"
-            report += (
-                f"  Sharpe Contribution:    {details['sharpe_contribution']:.3f}\n"
-            )
+            report += f"  Sharpe Contribution:    {details['sharpe_contribution']:.3f}\n"
             report += f"  Sample Size Factor:     {details['sample_size_factor']:.3f}\n"
             report += f"  Overfitting Factor:     {details['overfitting_factor']:.3f}\n"
             report += f"    (Effective DoF: {details['effective_dof']:.1f})\n"
-            report += (
-                f"  Selection Bias Factor:  {details['selection_bias_factor']:.3f}\n"
-            )
+            report += f"  Selection Bias Factor:  {details['selection_bias_factor']:.3f}\n"
             report += f"    (Models Tested: {details['n_models_tested']})\n"
             report += f"  Walk-Forward Factor:    {details['walkforward_factor']:.3f}\n"
             report += f"  Regime Factor:          {details['regime_factor']:.3f}\n"
@@ -1055,7 +1031,9 @@ class PBRCalculator:
         report += f"{'='*62}\n"
         report += "\nKey Insights:\n"
         report += "• Scenario 1: High Sharpe but overfit (few trades, many params, many tests)\n"
-        report += "• Scenario 2: Moderate Sharpe but robust (good sample, good WF, limited testing)\n"
+        report += (
+            "• Scenario 2: Moderate Sharpe but robust (good sample, good WF, limited testing)\n"
+        )
         report += "• Scenario 3: High overall Sharpe but regime-dependent (fails in most regimes)\n"
         report += "\nScenario 3 demonstrates the MOST COMMON LIVE FAILURE MODE!\n"
         report += "Strategy works great in one regime, terrible in others.\n"

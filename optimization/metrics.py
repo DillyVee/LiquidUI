@@ -11,12 +11,16 @@ class PerformanceMetrics:
     """Calculate trading performance metrics"""
 
     @staticmethod
-    def calculate_metrics(eq_curve: np.ndarray) -> Optional[Dict[str, float]]:
+    def calculate_metrics(
+        eq_curve: np.ndarray, annualization_factor: float = 252.0
+    ) -> Optional[Dict[str, float]]:
         """
         Calculate comprehensive performance metrics
 
         Args:
             eq_curve: Equity curve as numpy array
+            annualization_factor: Periods per year for the equity curve's
+                bar frequency (252 daily, 252*6.5 hourly, 252*6.5*12 5-min)
 
         Returns:
             Dictionary of metrics or None if invalid
@@ -40,12 +44,12 @@ class PerformanceMetrics:
         if len(returns) == 0:
             return None
 
-        # Sortino ratio (downside deviation)
+        # Sortino ratio (downside deviation), annualized to the bar frequency
         downside_returns = returns[returns < 0]
-        downside_std = np.std(downside_returns) if len(downside_returns) > 1 else 1e-10
+        downside_std = np.std(downside_returns, ddof=1) if len(downside_returns) > 1 else 1e-10
         avg_return = np.mean(returns)
         sortino = (
-            (avg_return / downside_std) * np.sqrt(252 * 390)
+            (avg_return / downside_std) * np.sqrt(annualization_factor)
             if downside_std > 1e-10
             else 0
         )
@@ -110,10 +114,14 @@ class PerformanceMetrics:
         avg_loss[:length] = loss_sum[:length] / np.arange(1, length + 1)
 
         # Calculate RSI
-        rs = np.divide(
-            avg_gain, avg_loss, out=np.zeros_like(avg_gain), where=avg_loss != 0
-        )
+        rs = np.divide(avg_gain, avg_loss, out=np.zeros_like(avg_gain), where=avg_loss != 0)
         rsi = 100 - 100 / (1 + rs)
+
+        # With zero average loss the divide above leaves rs=0, which would
+        # invert the signal: no losses means RSI=100 (or 50 when flat)
+        no_loss = avg_loss == 0
+        rsi[no_loss & (avg_gain > 0)] = 100.0
+        rsi[no_loss & (avg_gain == 0)] = 50.0
 
         return rsi
 
