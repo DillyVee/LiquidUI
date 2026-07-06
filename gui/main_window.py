@@ -102,7 +102,10 @@ class MainWindow(QMainWindow):
         # Settings (position size is stored as a percentage, e.g. 5.0 = 5%)
         self.position_size_pct = RiskConfig.DEFAULT_POSITION_SIZE * 100
         self.max_positions = RiskConfig.DEFAULT_MAX_POSITIONS
-        self.transaction_costs = TransactionCosts()
+        # Default to realistic stock costs - optimizing with zero costs
+        # systematically selects high-turnover parameters that lose after
+        # real-world fees/slippage
+        self.transaction_costs = TransactionCosts.for_stocks()
 
         self.init_ui()
 
@@ -719,6 +722,11 @@ class MainWindow(QMainWindow):
         self.slippage_pct_spin = self._add_cost_row(tc_layout, "Slippage (%):")
         self.spread_pct_spin = self._add_cost_row(tc_layout, "Spread (%):")
 
+        # Show the active (stocks-preset) defaults instead of zeros
+        self.commission_pct_spin.setValue(self.transaction_costs.COMMISSION_PCT * 100)
+        self.slippage_pct_spin.setValue(self.transaction_costs.SLIPPAGE_PCT * 100)
+        self.spread_pct_spin.setValue(self.transaction_costs.SPREAD_PCT * 100)
+
         preset_layout = QHBoxLayout()
         preset_layout.addWidget(QLabel("Presets:"))
 
@@ -1024,6 +1032,7 @@ class MainWindow(QMainWindow):
             ticker=self.current_ticker,
             batch_size=self.batch_spin.value(),
             transaction_costs=self.transaction_costs,
+            position_size=self.position_size_pct / 100.0,
         )
 
         self.worker.progress.connect(self.update_progress)
@@ -1417,6 +1426,7 @@ Parameters:
                 exit_range=params["exit"],
                 ticker=self.current_ticker,
                 transaction_costs=self.transaction_costs,
+                position_size=self.position_size_pct / 100.0,
             )
 
             overfit_text = "⚠️ LIKELY OVERFIT" if results.is_overfit else "✅ Not overfit"
@@ -2155,16 +2165,18 @@ Features: {len(self.regime_predictor.feature_names)}
         self.transaction_costs.SPREAD_PCT = self.spread_pct_spin.value() / 100
 
     def set_costs_for_stocks(self):
-        """Set transaction costs for stocks"""
-        self.commission_pct_spin.setValue(0.05)
-        self.slippage_pct_spin.setValue(0.05)
-        self.spread_pct_spin.setValue(0.01)
+        """Set transaction costs for stocks (matches TransactionCosts.for_stocks)"""
+        costs = TransactionCosts.for_stocks()
+        self.commission_pct_spin.setValue(costs.COMMISSION_PCT * 100)
+        self.slippage_pct_spin.setValue(costs.SLIPPAGE_PCT * 100)
+        self.spread_pct_spin.setValue(costs.SPREAD_PCT * 100)
 
     def set_costs_for_crypto(self):
-        """Set transaction costs for crypto"""
-        self.commission_pct_spin.setValue(0.1)
-        self.slippage_pct_spin.setValue(0.2)
-        self.spread_pct_spin.setValue(0.05)
+        """Set transaction costs for crypto (matches TransactionCosts.for_crypto)"""
+        costs = TransactionCosts.for_crypto()
+        self.commission_pct_spin.setValue(costs.COMMISSION_PCT * 100)
+        self.slippage_pct_spin.setValue(costs.SLIPPAGE_PCT * 100)
+        self.spread_pct_spin.setValue(costs.SPREAD_PCT * 100)
 
     def set_costs_zero(self):
         """Zero out transaction costs"""

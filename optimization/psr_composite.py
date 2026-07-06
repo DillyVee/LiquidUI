@@ -77,12 +77,14 @@ class PSRCalculator:
 
         try:
             skew = stats.skew(returns, bias=False)
-            kurt = stats.kurtosis(returns, bias=False, fisher=True)
+            # RAW kurtosis (normal = 3): the Lopez de Prado variance formula
+            # below uses (kurt - 1)/4 with raw kurtosis, not Fisher excess
+            kurt = stats.kurtosis(returns, bias=False, fisher=False)
             skew = np.clip(skew, -10.0, 10.0)
-            kurt = np.clip(kurt, -10.0, 50.0)
+            kurt = np.clip(kurt, 1.0, 50.0)
         except Exception:
             skew = 0.0
-            kurt = 0.0
+            kurt = 3.0  # kurtosis of a normal distribution
 
         n = len(returns)
         if trade_count is not None and trade_count < n / 10:
@@ -100,7 +102,7 @@ class PSRCalculator:
             if variance_annual_sharpe <= 0 or not np.isfinite(variance_annual_sharpe):
                 base_se = 1.0 / np.sqrt(max(effective_n - 1.0, 1.0))
                 skew_penalty = 1.0 + min(5.0, abs(skew)) * 0.3
-                kurt_penalty = 1.0 + min(10.0, abs(kurt)) * 0.15
+                kurt_penalty = 1.0 + min(10.0, abs(kurt - 3.0)) * 0.15
                 sharpe_std = base_se * skew_penalty * kurt_penalty * np.sqrt(annualization_factor)
             else:
                 sharpe_std = np.sqrt(variance_annual_sharpe)

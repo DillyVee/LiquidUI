@@ -152,6 +152,27 @@ class PerformanceMetrics:
         return result
 
     @staticmethod
+    def cycle_anchor_index(datetimes: np.ndarray, timeframe: str) -> np.ndarray:
+        """
+        Calendar-anchored bar index for the time-cycle signal.
+
+        Anchoring the cycle to time-since-epoch (instead of the bar's position
+        in whatever data slice happens to be loaded) makes the cycle phase
+        identical across full-history backtests, walk-forward windows, and
+        live trading. Timestamps must be timezone-naive and use the same
+        convention everywhere (exchange time for stocks, UTC for crypto).
+        """
+        dt = np.asarray(datetimes).astype("datetime64[ns]")
+        if timeframe == "daily":
+            return dt.astype("datetime64[D]").astype(np.int64)
+        if timeframe == "hourly":
+            return dt.astype("datetime64[h]").astype(np.int64)
+        if timeframe == "5min":
+            return dt.astype("datetime64[m]").astype(np.int64) // 5
+        # 1min and any other intraday timeframe
+        return dt.astype("datetime64[m]").astype(np.int64)
+
+    @staticmethod
     def calculate_buyhold_return(prices: np.ndarray) -> float:
         """Calculate buy and hold return percentage"""
         if len(prices) < 2:

@@ -4,6 +4,7 @@ PSR calculation NO LONGER includes walk-forward analysis
 Walk-forward is now a separate button/function
 """
 
+import copy
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -44,6 +45,7 @@ class MultiTimeframeOptimizer(QThread):
         timeframes: Optional[List[str]] = None,
         batch_size: int = 500,
         transaction_costs: Optional["TransactionCosts"] = None,
+        position_size: float = 1.0,
     ):
         super().__init__()
         self.df_dict = df_dict
@@ -61,12 +63,17 @@ class MultiTimeframeOptimizer(QThread):
         self.base_eq_curve = None
         self.stopped = False
 
+        # Fraction of equity deployed per trade. Must match live position
+        # sizing or backtest metrics won't describe the live system.
+        self.position_size = float(np.clip(position_size, 0.001, 1.0))
+
         if transaction_costs is None:
             from config.settings import TransactionCosts
 
             self.transaction_costs = TransactionCosts()
         else:
-            self.transaction_costs = transaction_costs
+            # Copy so GUI spinbox edits can't mutate an in-flight optimization
+            self.transaction_costs = copy.copy(transaction_costs)
 
         self._preprocess_data()
         self._align_timeframes()
@@ -77,11 +84,16 @@ class MultiTimeframeOptimizer(QThread):
         self.np_data = {}
 
         for tf in self.timeframes:
+            # Ensure Datetime column exists before it is read anywhere
+            if "Datetime" not in self.df_dict[tf].columns:
+                self.df_dict[tf]["Datetime"] = pd.to_datetime(self.df_dict[tf].index)
+
             df = self.df_dict[tf]
             self.np_data[tf] = {
                 "close": df["Close"].to_numpy(dtype=np.float64),
                 "open": df["Open"].to_numpy(dtype=np.float64),
                 "datetime": df["Datetime"].values,
+                "anchor": PerformanceMetrics.cycle_anchor_index(df["Datetime"].values, tf),
                 "length": len(df),
             }
             print(f"  {tf}: {self.np_data[tf]['length']} bars cached")
@@ -93,11 +105,6 @@ class MultiTimeframeOptimizer(QThread):
         finest_tf = sorted_tfs[0]
 
         finest_df = self.df_dict[finest_tf].copy()
-
-        # Ensure Datetime column exists
-        for tf in self.timeframes:
-            if "Datetime" not in self.df_dict[tf].columns:
-                self.df_dict[tf]["Datetime"] = pd.to_datetime(self.df_dict[tf].index)
 
         # Pre-compute all index mappings once
         self.tf_indices = {}
@@ -128,8 +135,14 @@ class MultiTimeframeOptimizer(QThread):
 
                 indices[mask] = idx
 
+            # Shift to the PREVIOUS completed coarse bar. A coarse bar's
+            # close (and therefore its RSI) is only known once that bar
+            # finishes, so mapping a coarse bar onto the finest bars inside
+            # the same period would leak future information (lookahead bias).
+            indices = np.where(indices >= 0, indices - 1, -1).astype(np.int32)
+
             self.tf_indices[tf] = indices
-            print(f"  Aligned {tf} to {finest_tf}")
+            print(f"  Aligned {tf} to {finest_tf} (lagged one {tf} bar, no lookahead)")
 
         self.finest_tf = finest_tf
 
@@ -162,7 +175,10 @@ class MultiTimeframeOptimizer(QThread):
         """
         # Run full backtest
         eq_curve, trade_count = self.simulate_multi_tf(params)
+        return self.psr_sharpe_from_curve(eq_curve, trade_count)
 
+    def psr_sharpe_from_curve(self, eq_curve, trade_count: int) -> Tuple[float, float]:
+        """Calculate (psr, sharpe) from an already-simulated equity curve"""
         if eq_curve is None or len(eq_curve) < 50 or trade_count < 10:
             return 0.0, 0.0
 
@@ -226,12 +242,20 @@ class MultiTimeframeOptimizer(QThread):
                 rsi = PerformanceMetrics.compute_rsi_vectorized(close_tf, mn1)
                 rsi_smooth = PerformanceMetrics.smooth_vectorized(rsi, mn2)
 
-                # Vectorized cycle (guard against a zero-length period)
+                # Vectorized cycle (guard against a zero-length period).
+                # Anchored to calendar time so the phase is identical across
+                # backtests, walk-forward windows, and live trading.
                 on = int(params[f"On_{tf}"])
                 off = int(params[f"Off_{tf}"])
                 start = int(params[f"Start_{tf}"])
                 period = max(1, on + off)
-                cycle = ((np.arange(len(close_tf)) - start) % period) < on
+                anchor = self.np_data[tf]["anchor"]
+                cycle = ((anchor - start) % period) < on
+
+                # Block entries during the indicator warm-up region, where
+                # RSI/smoothing are computed from partial windows
+                warmup = mn1 + mn2
+                warmed_up = np.arange(len(close_tf)) >= warmup
 
                 # Map to finest timeframe
                 if tf != self.finest_tf:
@@ -240,14 +264,17 @@ class MultiTimeframeOptimizer(QThread):
                     indices_clipped = np.clip(indices, 0, len(rsi_smooth) - 1)
                     rsi_smooth_mapped = np.zeros(n_bars)
                     cycle_mapped = np.zeros(n_bars, dtype=bool)
+                    warmed_up_mapped = np.zeros(n_bars, dtype=bool)
                     rsi_smooth_mapped[valid_mask] = rsi_smooth[indices_clipped[valid_mask]]
                     cycle_mapped[valid_mask] = cycle[indices_clipped[valid_mask]]
+                    warmed_up_mapped[valid_mask] = warmed_up[indices_clipped[valid_mask]]
                 else:
                     rsi_smooth_mapped = rsi_smooth
                     cycle_mapped = cycle
+                    warmed_up_mapped = warmed_up
 
                 # Signals
-                enter_signal &= (rsi_smooth_mapped < entry) & cycle_mapped
+                enter_signal &= (rsi_smooth_mapped < entry) & cycle_mapped & warmed_up_mapped
                 exit_signal |= (rsi_smooth_mapped > exit_val) | (~cycle_mapped)
 
             # Backtest simulation
@@ -288,12 +315,15 @@ class MultiTimeframeOptimizer(QThread):
                     exit_cost_pct = self.transaction_costs.TOTAL_PCT
                     exit_price_with_costs = exit_price * (1 - exit_cost_pct)
 
-                    # Calculate actual percent change
+                    # Calculate actual percent change (price move net of costs)
                     pct_change = (exit_price_with_costs / entry_price - 1) * 100
 
-                    # Update equity
+                    # Update equity, deploying position_size fraction of equity
+                    # per trade (must match live sizing)
                     equity_before = equity
-                    equity *= exit_price_with_costs / entry_price
+                    equity *= 1.0 + self.position_size * (
+                        exit_price_with_costs / entry_price - 1.0
+                    )
 
                     if self.transaction_costs.COMMISSION_FIXED > 0:
                         equity -= self.transaction_costs.COMMISSION_FIXED
@@ -320,7 +350,9 @@ class MultiTimeframeOptimizer(QThread):
                 # Mark-to-market only once the entry bar has been reached;
                 # before that the position is not yet open
                 if position and i >= entry_idx:
-                    equity_curve[i] = equity * (open_finest[i] / entry_price)
+                    equity_curve[i] = equity * (
+                        1.0 + self.position_size * (open_finest[i] / entry_price - 1.0)
+                    )
                 else:
                     equity_curve[i] = equity
 
@@ -332,7 +364,9 @@ class MultiTimeframeOptimizer(QThread):
 
                 pct_change = (exit_price_with_costs / entry_price - 1) * 100
                 equity_before = equity
-                equity *= exit_price_with_costs / entry_price
+                equity *= 1.0 + self.position_size * (
+                    exit_price_with_costs / entry_price - 1.0
+                )
 
                 if self.transaction_costs.COMMISSION_FIXED > 0:
                     equity -= self.transaction_costs.COMMISSION_FIXED
@@ -622,43 +656,26 @@ class MultiTimeframeOptimizer(QThread):
                         # Run simulation once and cache results
                         eq_curve, trade_count = self.simulate_multi_tf(params)
 
-                        if eq_curve is None or len(eq_curve) < 50:
-                            psr, sharpe = 0.0, 0.0
-                        else:
-                            # Calculate PSR and Sharpe from cached equity curve
-                            returns = np.diff(eq_curve) / eq_curve[:-1]
-                            returns = returns[~(np.isnan(returns) | np.isinf(returns))]
+                        psr, sharpe = self.psr_sharpe_from_curve(eq_curve, trade_count)
 
-                            if len(returns) < 30:
-                                psr, sharpe = 0.0, 0.0
-                            else:
-                                ann_factor = self.annualization_factor
+                        # Scale by statistical confidence in the trade sample
+                        trade_multiplier = self._trade_multiplier(trade_count)
+                        psr = psr * trade_multiplier
+                        sharpe = sharpe * trade_multiplier
 
-                                psr = PSRCalculator.calculate_psr(
-                                    returns,
-                                    benchmark_sharpe=0.0,
-                                    annualization_factor=ann_factor,
-                                    trade_count=trade_count,
-                                )
+                        # Compute display metrics now and store only the small
+                        # dict - keeping full equity curves alive in the study
+                        # for every trial leaks memory across batches
+                        trial_metrics = None
+                        if eq_curve is not None and len(eq_curve) >= 50:
+                            trial_metrics = PerformanceMetrics.calculate_metrics(
+                                eq_curve, annualization_factor=self.annualization_factor
+                            )
 
-                                mean_ret = np.mean(returns)
-                                std_ret = np.std(returns, ddof=1)
-                                if std_ret > 0:
-                                    sharpe = (mean_ret / std_ret) * np.sqrt(ann_factor)
-                                    sharpe = np.clip(sharpe, -5, 10)
-                                else:
-                                    sharpe = 0.0
-
-                            # Scale by statistical confidence in the trade sample
-                            trade_multiplier = self._trade_multiplier(trade_count)
-                            psr = psr * trade_multiplier
-                            sharpe = sharpe * trade_multiplier
-
-                        # Store for batch saving (no need to re-simulate!)
                         trial.set_user_attr("params", params)
                         trial.set_user_attr("psr", float(psr))
                         trial.set_user_attr("sharpe", float(sharpe))
-                        trial.set_user_attr("eq_curve", eq_curve)
+                        trial.set_user_attr("metrics", trial_metrics)
                         trial.set_user_attr("trade_count", trade_count)
 
                         # Update progress
@@ -676,6 +693,12 @@ class MultiTimeframeOptimizer(QThread):
 
                         return psr
 
+                    # Snapshot trial count so only THIS batch's trials get
+                    # saved below (the study accumulates across batches, and
+                    # re-sorting all trials re-appended earlier batches' top
+                    # results as duplicates)
+                    n_trials_before_batch = len(rsi_study.trials)
+
                     # Run batch with parallel processing
                     rsi_study.optimize(
                         objective_rsi,
@@ -688,11 +711,11 @@ class MultiTimeframeOptimizer(QThread):
                     # ✅ SAVE BATCH RESULTS TO CSV
                     print(f"   💾 Saving batch results to CSV...")
 
-                    # Get top 5 results from this batch
+                    # Get top 5 results from this batch only
                     batch_trials = sorted(
                         [
                             t
-                            for t in rsi_study.trials
+                            for t in rsi_study.trials[n_trials_before_batch:]
                             if t.state == optuna.trial.TrialState.COMPLETE
                         ],
                         key=lambda t: t.value,
@@ -705,18 +728,13 @@ class MultiTimeframeOptimizer(QThread):
                             continue
 
                         # Use cached results instead of re-simulating!
-                        eq_curve = trial.user_attrs.get("eq_curve")
+                        metrics = trial.user_attrs.get("metrics")
                         trade_count = trial.user_attrs.get("trade_count", 0)
 
-                        if eq_curve is None:
-                            continue
-
-                        metrics = PerformanceMetrics.calculate_metrics(
-                            eq_curve, annualization_factor=self.annualization_factor
-                        )
                         if metrics is None:
                             continue
 
+                        metrics = dict(metrics)
                         metrics["Trade_Count"] = trade_count
                         metrics["PSR"] = trial.user_attrs.get("psr", 0.0)
                         metrics["Sharpe_Ratio"] = trial.user_attrs.get("sharpe", 0.0)
@@ -799,8 +817,8 @@ class MultiTimeframeOptimizer(QThread):
 
             base_metrics["Trade_Count"] = base_trade_count
 
-            # Calculate PSR and Sharpe
-            psr, sharpe = self.calculate_psr(base_params)
+            # Calculate PSR and Sharpe from the curve already simulated above
+            psr, sharpe = self.psr_sharpe_from_curve(base_eq_curve, base_trade_count)
             base_metrics["PSR"] = psr
             base_metrics["Sharpe_Ratio"] = sharpe
             base_metrics["Batch"] = "FINAL"
