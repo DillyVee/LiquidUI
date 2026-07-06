@@ -47,6 +47,12 @@ from gui.styles import (
     LIVE_TRADING_BUTTON_STOPPED,
     MAIN_STYLESHEET,
 )
+from models.bayesian_changepoint import (
+    BOCPDDetector,
+    RegimeStrategyAnalyzer,
+    classify_segments,
+    plot_regimes,
+)
 from models.regime_agreement import HorizonPrediction, MultiHorizonAgreementIndex
 from models.regime_calibration import MultiClassCalibrator
 from models.regime_detection import MarketRegime, MarketRegimeDetector, PBRCalculator
@@ -422,6 +428,10 @@ class MainWindow(QMainWindow):
         self.show_report_btn = QPushButton("📊 Show Full PSR Report")
         self.show_report_btn.clicked.connect(self.show_psr_report)
         results_layout.addWidget(self.show_report_btn)
+
+        self.regime_breakdown_btn = QPushButton("🔀 Regime Breakdown (Bayesian CPD)")
+        self.regime_breakdown_btn.clicked.connect(self.show_regime_breakdown)
+        results_layout.addWidget(self.regime_breakdown_btn)
 
         results_group.setLayout(results_layout)
         right_layout.addWidget(results_group)
@@ -1298,6 +1308,121 @@ Parameters:
         msg.setText(report)
         msg.setStyleSheet("QLabel{min-width: 500px; font-family: monospace;}")
         msg.exec()
+
+    def show_regime_breakdown(self):
+        """Detect market regimes with Bayesian change point detection and
+        show the strategy's performance broken down by regime type"""
+        if self.last_equity_curve is None:
+            QMessageBox.warning(
+                self, "No Results", "Run an optimization first - the regime breakdown "
+                "analyzes the optimized strategy's equity curve."
+            )
+            return
+
+        if not self.df_dict:
+            QMessageBox.warning(self, "No Data", "Load data first")
+            return
+
+        # Finest timeframe drives the equity curve's bar alignment
+        tf_order = {"1min": 0, "5min": 1, "hourly": 2, "daily": 3}
+        finest_tf = sorted(self.df_dict.keys(), key=lambda x: tf_order.get(x, 99))[0]
+        df = self.df_dict[finest_tf]
+
+        equity = np.asarray(self.last_equity_curve, dtype=np.float64)
+        if len(equity) != len(df):
+            QMessageBox.warning(
+                self,
+                "Data Mismatch",
+                "The loaded data no longer matches the optimization results "
+                f"({len(df)} bars vs {len(equity)} equity points).\n"
+                "Re-run optimization with the current data.",
+            )
+            return
+
+        closes = df["Close"].to_numpy(dtype=np.float64)
+        datetimes = df["Datetime"].values
+        returns = np.zeros(len(closes))
+        returns[1:] = np.diff(closes) / closes[:-1]
+
+        if finest_tf == "daily":
+            ann_factor = 252.0
+        elif finest_tf == "hourly":
+            ann_factor = 252.0 * 6.5
+        else:
+            ann_factor = 252.0 * 6.5 * 12
+
+        n = len(returns)
+        # Prior expected regime length: a fraction of the sample, bounded
+        hazard_lambda = float(np.clip(n // 8, 60, 2000))
+        min_segment = int(max(20, n // 100))
+
+        self.statusBar().showMessage("Running Bayesian change point detection...")
+        try:
+            detector = BOCPDDetector(
+                hazard_lambda=hazard_lambda, min_segment_bars=min_segment
+            )
+            result = detector.detect(returns)
+            segments = classify_segments(returns, result.changepoints, ann_factor)
+
+            summary = RegimeStrategyAnalyzer.analyze(
+                equity_curve=equity,
+                prices=closes,
+                datetimes=datetimes,
+                segments=segments,
+                trade_log=self.last_trade_log,
+                annualization_factor=ann_factor,
+            )
+            report = RegimeStrategyAnalyzer.build_report(
+                summary, segments, datetimes, self.current_ticker
+            )
+        except Exception as e:
+            self.statusBar().showMessage("Regime breakdown failed")
+            QMessageBox.critical(self, "Regime Breakdown Error", str(e))
+            return
+
+        self.statusBar().showMessage(
+            f"Regime breakdown complete: {len(result.changepoints)} change point(s), "
+            f"{len(segments)} segment(s)"
+        )
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Regime Breakdown (BOCPD) - {self.current_ticker}")
+        dialog.setGeometry(80, 80, 1400, 950)
+        dialog.setStyleSheet(MAIN_STYLESHEET)
+
+        layout = QVBoxLayout()
+
+        try:
+            fig = plot_regimes(
+                prices=closes,
+                equity_curve=equity,
+                datetimes=datetimes,
+                segments=segments,
+                cp_probability=result.cp_probability,
+                ticker=self.current_ticker,
+            )
+            layout.addWidget(FigureCanvas(fig), stretch=3)
+        except Exception as e:
+            print(f"Failed to create regime plot: {e}")
+
+        report_text = QTextEdit()
+        report_text.setReadOnly(True)
+        report_text.setPlainText(report)
+        report_text.setStyleSheet(
+            "font-family: monospace; font-size: 11px; "
+            "background-color: #1e1e1e; color: white;"
+        )
+        layout.addWidget(report_text, stretch=2)
+
+        btn_layout = QHBoxLayout()
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.close)
+        btn_layout.addStretch()
+        btn_layout.addWidget(close_btn)
+        layout.addLayout(btn_layout)
+
+        dialog.setLayout(layout)
+        dialog.exec()
 
     def show_error(self, error_msg: str):
         """Show optimization error"""
