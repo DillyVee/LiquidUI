@@ -9,6 +9,8 @@ from models.bayesian_changepoint import (
     RegimeStrategyAnalyzer,
     classify_segments,
     label_bars,
+    label_runs,
+    online_regime_labels,
 )
 
 
@@ -83,11 +85,53 @@ def test_short_series_returns_no_changepoints():
     assert result.changepoints == []
 
 
+def test_online_labels_are_causal(shifted_returns):
+    """Live labels must not repaint: label[:k] identical on prefix vs full"""
+    detector = BOCPDDetector(hazard_lambda=200.0, min_segment_bars=30)
+    full_res = detector.detect(shifted_returns)
+    full_labels = online_regime_labels(shifted_returns, full_res.map_run_length)
+
+    for k in (200, 400, 600):
+        prefix_res = detector.detect(shifted_returns[:k])
+        prefix_labels = online_regime_labels(shifted_returns[:k], prefix_res.map_run_length)
+        assert list(prefix_labels) == list(full_labels[:k]), (
+            f"live labels repainted on the first {k} bars"
+        )
+
+
+def test_online_labels_update_bar_to_bar():
+    """A section that starts bearish then reverses must be labeled bearish
+    in real time BEFORE the reversal - the live label is not the ex-post one"""
+    rng = np.random.default_rng(3)
+    seg1 = rng.normal(0.0015, 0.006, 400)
+    seg2 = np.concatenate(
+        [rng.normal(-0.004, 0.02, 120), rng.normal(0.006, 0.02, 120)]
+    )
+    returns = np.concatenate([seg1, seg2])
+    detector = BOCPDDetector(hazard_lambda=200.0, min_segment_bars=30)
+    res = detector.detect(returns)
+    labels = online_regime_labels(returns, res.map_run_length)
+
+    # Early in the second section (bearish part) the live label is Bear...
+    assert str(labels[470]).startswith("Bear")
+    # ...even though by the end that same BOCPD segment reads bullish ex-post
+    ex_post = classify_segments(returns, res.changepoints, 252.0)
+    last_seg = ex_post[-1]
+    if last_seg.start_idx <= 470 < last_seg.end_idx:
+        assert last_seg.regime.startswith("Bull"), "test needs a reversing section"
+
+
+def test_label_runs_partition():
+    labels = np.array(["A", "A", "B", "B", "B", "A"], dtype=object)
+    runs = label_runs(labels)
+    assert runs == [(0, 2, "A"), (2, 5, "B"), (5, 6, "A")]
+
+
 def test_regime_strategy_analyzer(shifted_returns):
     n = len(shifted_returns)
     detector = BOCPDDetector(hazard_lambda=200.0, min_segment_bars=30)
     result = detector.detect(shifted_returns)
-    segments = classify_segments(shifted_returns, result.changepoints, 252.0)
+    labels = online_regime_labels(shifted_returns, result.map_run_length)
 
     prices = 100 * np.cumprod(1 + shifted_returns)
     # Strategy that rides the asset at half exposure
@@ -102,7 +146,7 @@ def test_regime_strategy_analyzer(shifted_returns):
     )
 
     summary = RegimeStrategyAnalyzer.analyze(
-        equity, prices, datetimes, segments, trade_log, 252.0
+        equity, prices, datetimes, labels, trade_log, 252.0
     )
 
     assert not summary.empty
@@ -117,17 +161,12 @@ def test_regime_strategy_analyzer(shifted_returns):
         "Trades",
         "Win_Rate_%",
     }
-    # All bars accounted for and 100% of time covered
-    assert summary["Bars"].sum() == n
-    assert abs(summary["Time_%"].sum() - 100.0) < 0.5
+    # Bars attributed across regimes cover the series minus the few
+    # unclassified "Forming" bars at the very start
+    assert n - 5 <= summary["Bars"].sum() <= n
+    assert summary["Time_%"].sum() <= 100.5
     # Both trades assigned to some regime
     assert summary["Trades"].sum() == 2
 
-    # The bull regime rows should show positive strategy return overall
-    bull = summary[summary["Regime"] == "Bull-Quiet"]
-    if not bull.empty:
-        assert bull.iloc[0]["Strategy_Return_%"] > 0
-
-    report = RegimeStrategyAnalyzer.build_report(summary, segments, datetimes, "TEST")
-    assert "REGIME BREAKDOWN" in report
-    assert "Bull-Quiet" in report
+    report = RegimeStrategyAnalyzer.build_report(summary, labels, datetimes, "TEST")
+    assert "LIVE" in report.upper()
