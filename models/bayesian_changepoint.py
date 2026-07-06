@@ -34,6 +34,7 @@ REGIME_COLORS = {
     "Bull-Volatile": "#7cb342",
     "Bear-Quiet": "#b71c1c",
     "Bear-Volatile": "#ff7043",
+    "Forming": "#555555",
 }
 
 
@@ -263,12 +264,87 @@ def classify_segments(
 
 
 def label_bars(n_bars: int, segments: Sequence[RegimeSegment]) -> np.ndarray:
-    """Per-bar regime label array from segments"""
+    """Per-bar regime label array from (retrospective) segments"""
     labels = np.empty(n_bars, dtype=object)
     labels[:] = "Unclassified"
     for seg in segments:
         labels[seg.start_idx : min(seg.end_idx, n_bars)] = seg.regime
     return labels
+
+
+def online_regime_labels(
+    returns: np.ndarray,
+    map_run_length: np.ndarray,
+    min_class_bars: int = 5,
+) -> np.ndarray:
+    """
+    CAUSAL bar-by-bar regime labels - the regime as it would have been known
+    in real time, using only data up to each bar.
+
+    At bar t, BOCPD's MAP run length says the current segment began at
+    t - run_length[t]. We classify the *causal* window [seg_start, t] by its
+    running drift (Bull/Bear) and its volatility relative to the expanding
+    all-history volatility so far (Quiet/Volatile). Because every quantity
+    uses only returns[:t+1], these labels never repaint: label[:k] is
+    identical whether computed on k bars or on the full series.
+
+    The label updates every bar - it can flip mid-segment as the running
+    stats evolve, which is the whole point (live classification, not the
+    ex-post verdict on a finished section).
+
+    Args:
+        returns: Per-bar return series
+        map_run_length: BOCPDResult.map_run_length (same length as returns)
+        min_class_bars: Bars a new segment must accumulate before its own
+            stats drive the label; until then the previous live label is
+            carried forward (you know a change happened but not yet the new
+            regime). Only the very first bar can be "Forming".
+
+    Returns:
+        Object array of per-bar regime labels
+    """
+    returns = np.asarray(returns, dtype=np.float64)
+    n = len(returns)
+    labels = np.empty(n, dtype=object)
+    if n == 0:
+        return labels
+
+    run_len = (
+        np.asarray(map_run_length, dtype=np.int64)
+        if map_run_length is not None
+        else np.arange(n)
+    )
+
+    prev: Optional[str] = None
+    for t in range(n):
+        seg_start = max(0, t - int(run_len[t]))
+        window = returns[: t + 1][seg_start:]
+        ref_vol = float(np.std(returns[: t + 1])) if t >= 1 else 0.0
+
+        if len(window) >= 2 and (len(window) >= min_class_bars or prev is None):
+            direction = "Bull" if float(np.mean(window)) >= 0 else "Bear"
+            vol_state = "Volatile" if float(np.std(window)) >= ref_vol else "Quiet"
+            prev = f"{direction}-{vol_state}"
+            labels[t] = prev
+        else:
+            labels[t] = prev if prev is not None else "Forming"
+
+    return labels
+
+
+def label_runs(labels: np.ndarray) -> List[Tuple[int, int, str]]:
+    """Contiguous (start, end_exclusive, label) runs of a per-bar label array"""
+    labels = np.asarray(labels, dtype=object)
+    runs: List[Tuple[int, int, str]] = []
+    if len(labels) == 0:
+        return runs
+    start = 0
+    for t in range(1, len(labels)):
+        if labels[t] != labels[start]:
+            runs.append((start, t, str(labels[start])))
+            start = t
+    runs.append((start, len(labels), str(labels[start])))
+    return runs
 
 
 class RegimeStrategyAnalyzer:
@@ -279,18 +355,24 @@ class RegimeStrategyAnalyzer:
         equity_curve: np.ndarray,
         prices: np.ndarray,
         datetimes: np.ndarray,
-        segments: Sequence[RegimeSegment],
+        labels: np.ndarray,
         trade_log: Optional[pd.DataFrame] = None,
         annualization_factor: float = 252.0,
     ) -> pd.DataFrame:
         """
-        Per-regime performance table.
+        Per-regime performance table using the CAUSAL (live) regime label.
+
+        Each bar's return is attributed to the regime that was known at the
+        *previous* bar (lag-1), i.e. the classification you actually had when
+        holding the position into that bar - never the retrospective label of
+        the section it later turned out to belong to. Trades are attributed to
+        the live label at the bar before entry.
 
         Args:
             equity_curve: Strategy equity per bar (aligned with prices)
             prices: Close prices per bar
             datetimes: Bar timestamps (aligned), used to assign trades
-            segments: Regime segments from classify_segments()
+            labels: Causal per-bar labels from online_regime_labels()
             trade_log: Optional trade log with Entry_Date / Percent_Change
             annualization_factor: Periods per year
 
@@ -299,9 +381,16 @@ class RegimeStrategyAnalyzer:
         """
         equity_curve = np.asarray(equity_curve, dtype=np.float64)
         prices = np.asarray(prices, dtype=np.float64)
+        labels = np.asarray(labels, dtype=object)
         n = len(equity_curve)
 
-        labels = label_bars(n, segments)
+        # Causal attribution: the return realized at bar t was earned by a
+        # position held THROUGH t, decided at t-1, so it belongs to the live
+        # regime known at t-1
+        bar_regime = np.empty(n, dtype=object)
+        bar_regime[0] = labels[0]
+        if n > 1:
+            bar_regime[1:] = labels[:-1]
 
         strat_returns = np.zeros(n)
         strat_returns[1:] = np.diff(equity_curve) / equity_curve[:-1]
@@ -310,7 +399,7 @@ class RegimeStrategyAnalyzer:
         strat_returns = np.where(np.isfinite(strat_returns), strat_returns, 0.0)
         bh_returns = np.where(np.isfinite(bh_returns), bh_returns, 0.0)
 
-        # Assign each trade to the regime active at its entry
+        # Assign each trade to the live regime known just before its entry
         trade_regimes: List[str] = []
         trade_pnls: List[float] = []
         if trade_log is not None and len(trade_log) > 0:
@@ -319,13 +408,13 @@ class RegimeStrategyAnalyzer:
             pnls = pd.DataFrame(trade_log)["Percent_Change"].astype(float)
             positions = dt_index.searchsorted(entries, side="right") - 1
             for pos, pnl in zip(positions, pnls):
-                pos = int(np.clip(pos, 0, n - 1))
-                trade_regimes.append(str(labels[pos]))
+                pos = int(np.clip(pos - 1, 0, n - 1))  # regime known before entry
+                trade_regimes.append(str(bar_regime[pos]))
                 trade_pnls.append(float(pnl))
 
         rows = []
         for regime in REGIME_TYPES:
-            mask = labels == regime
+            mask = bar_regime == regime
             bars = int(mask.sum())
             if bars == 0:
                 continue
@@ -371,21 +460,25 @@ class RegimeStrategyAnalyzer:
     @staticmethod
     def build_report(
         summary: pd.DataFrame,
-        segments: Sequence[RegimeSegment],
+        labels: np.ndarray,
         datetimes: np.ndarray,
         ticker: str = "",
     ) -> str:
-        """Human-readable text report of the per-regime breakdown"""
+        """Human-readable report of the per-regime breakdown (live labels)"""
         dt = pd.DatetimeIndex(pd.to_datetime(datetimes))
+        runs = label_runs(labels)
+        n = len(labels)
         lines = [
             "=" * 72,
-            f"REGIME BREAKDOWN (Bayesian Online Change Point Detection){' - ' + ticker if ticker else ''}",
+            f"REGIME BREAKDOWN - LIVE (causal) classification{' - ' + ticker if ticker else ''}",
             "=" * 72,
             "",
-            f"Detected change points: {max(len(segments) - 1, 0)}",
-            f"Segments: {len(segments)}",
+            "Bars are attributed to the regime known AT THAT BAR (bar-by-bar,",
+            "no look-ahead), not the label the section was ultimately given.",
             "",
-            "PER-REGIME STRATEGY PERFORMANCE",
+            f"Live regime switches: {max(len(runs) - 1, 0)}   Distinct spells: {len(runs)}",
+            "",
+            "PER-REGIME STRATEGY PERFORMANCE (live attribution)",
             "-" * 72,
         ]
 
@@ -394,15 +487,11 @@ class RegimeStrategyAnalyzer:
         else:
             lines.append(summary.to_string(index=False))
 
-        lines += ["", "SEGMENTS", "-" * 72]
-        for i, seg in enumerate(segments, 1):
-            start = dt[seg.start_idx].date()
-            end = dt[min(seg.end_idx, len(dt)) - 1].date()
-            lines.append(
-                f"{i:>3}. {start} to {end}  {seg.regime:<14} "
-                f"drift {seg.ann_return * 100:+7.1f}%/yr  vol {seg.ann_vol * 100:6.1f}%/yr  "
-                f"({seg.n_bars} bars)"
-            )
+        lines += ["", "LIVE REGIME SPELLS (as classified in real time)", "-" * 72]
+        for i, (start, end, regime) in enumerate(runs, 1):
+            d0 = dt[start].date()
+            d1 = dt[min(end, n) - 1].date()
+            lines.append(f"{i:>3}. {d0} to {d1}  {regime:<14} ({end - start} bars)")
 
         lines.append("=" * 72)
         return "\n".join(lines)
@@ -412,15 +501,20 @@ def plot_regimes(
     prices: np.ndarray,
     equity_curve: np.ndarray,
     datetimes: np.ndarray,
-    segments: Sequence[RegimeSegment],
+    labels: np.ndarray,
     cp_probability: Optional[np.ndarray] = None,
     ticker: str = "",
     figure=None,
 ):
     """
-    Plot price + strategy equity with regime shading and change points.
+    Plot price + strategy equity shaded by the CAUSAL bar-by-bar regime label.
+
+    Shading follows the live classification as it updated in real time, so
+    mid-section flips and the detection lag are visible - it is NOT the clean
+    ex-post segmentation.
 
     Args:
+        labels: Causal per-bar labels from online_regime_labels()
         figure: Optional existing matplotlib Figure to draw into (cleared);
             created if None
 
@@ -432,6 +526,8 @@ def plot_regimes(
     from matplotlib.patches import Patch
 
     dt = pd.DatetimeIndex(pd.to_datetime(datetimes))
+    runs = label_runs(labels)
+    n = len(dt)
 
     if figure is None:
         figure = plt.figure(figsize=(14, 9), facecolor="#121212")
@@ -451,21 +547,21 @@ def plot_regimes(
         ax.grid(True, alpha=0.2)
 
     def shade(ax):
-        for seg in segments:
-            color = REGIME_COLORS.get(seg.regime, "#555555")
+        for start, end, regime in runs:
             ax.axvspan(
-                dt[seg.start_idx],
-                dt[min(seg.end_idx, len(dt)) - 1],
-                color=color,
+                dt[start],
+                dt[min(end, n) - 1],
+                color=REGIME_COLORS.get(regime, "#555555"),
                 alpha=0.18,
             )
-        for seg in segments[1:]:
-            ax.axvline(dt[seg.start_idx], color="#ffee58", alpha=0.6, linewidth=1)
+        # Faint line at each LIVE regime switch
+        for start, _, _ in runs[1:]:
+            ax.axvline(dt[start], color="#ffee58", alpha=0.4, linewidth=0.8)
 
     ax_price.plot(dt, prices, color="#90caf9", linewidth=1.2)
     shade(ax_price)
     ax_price.set_ylabel("Price", color="white")
-    title = f"Regimes via BOCPD{' - ' + ticker if ticker else ''}"
+    title = f"Live regime classification (BOCPD){' - ' + ticker if ticker else ''}"
     ax_price.set_title(title, color="white", fontweight="bold")
 
     ax_equity.plot(dt, equity_curve, color="#4CAF50", linewidth=1.4)
@@ -478,7 +574,7 @@ def plot_regimes(
         ax_cp.set_ylabel("P(change)", color="white")
         ax_cp.set_ylim(0, 1)
 
-    present = {seg.regime for seg in segments}
+    present = {regime for _, _, regime in runs}
     handles = [
         Patch(facecolor=REGIME_COLORS[r], alpha=0.4, label=r)
         for r in REGIME_TYPES

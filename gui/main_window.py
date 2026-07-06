@@ -50,7 +50,7 @@ from gui.styles import (
 from models.bayesian_changepoint import (
     BOCPDDetector,
     RegimeStrategyAnalyzer,
-    classify_segments,
+    online_regime_labels,
     plot_regimes,
 )
 from models.regime_agreement import HorizonPrediction, MultiHorizonAgreementIndex
@@ -1362,27 +1362,30 @@ Parameters:
                 hazard_lambda=hazard_lambda, min_segment_bars=min_segment
             )
             result = detector.detect(returns)
-            segments = classify_segments(returns, result.changepoints, ann_factor)
+            # Causal, bar-by-bar regime labels (the live classification, not
+            # the retrospective verdict on each section)
+            labels = online_regime_labels(returns, result.map_run_length)
 
             summary = RegimeStrategyAnalyzer.analyze(
                 equity_curve=equity,
                 prices=closes,
                 datetimes=datetimes,
-                segments=segments,
+                labels=labels,
                 trade_log=self.last_trade_log,
                 annualization_factor=ann_factor,
             )
             report = RegimeStrategyAnalyzer.build_report(
-                summary, segments, datetimes, self.current_ticker
+                summary, labels, datetimes, self.current_ticker
             )
         except Exception as e:
             self.statusBar().showMessage("Regime breakdown failed")
             QMessageBox.critical(self, "Regime Breakdown Error", str(e))
             return
 
+        n_switches = int(np.sum(labels[1:] != labels[:-1]))
         self.statusBar().showMessage(
             f"Regime breakdown complete: {len(result.changepoints)} change point(s), "
-            f"{len(segments)} segment(s)"
+            f"{n_switches} live regime switch(es)"
         )
 
         dialog = QDialog(self)
@@ -1397,7 +1400,7 @@ Parameters:
                 prices=closes,
                 equity_curve=equity,
                 datetimes=datetimes,
-                segments=segments,
+                labels=labels,
                 cp_probability=result.cp_probability,
                 ticker=self.current_ticker,
             )
