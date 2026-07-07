@@ -62,7 +62,10 @@ from models.regime_predictor import RegimePredictor
 from models.regime_robustness import BlockBootstrapValidator, WhiteRealityCheck
 from optimization import MultiTimeframeOptimizer, WalkForwardAnalyzer
 from optimization.monte_carlo import AdvancedMonteCarloAnalyzer, MonteCarloSimulator
+from optimization.validation import validate_candidate
 from trading import AlpacaLiveTrader
+from trading.live_reoptimizer import LiveReoptimizer
+from trading.risk_controls import RiskLimits
 from trading.regime_switcher import (
     StoredStrategy,
     StrategyBook,
@@ -112,6 +115,8 @@ class MainWindow(QMainWindow):
 
         # Live trading
         self.live_trader: Optional[AlpacaLiveTrader] = None
+        self.reoptimizer: Optional[LiveReoptimizer] = None
+        self.last_validation = None
 
         # Settings (position size is stored as a percentage, e.g. 5.0 = 5%)
         self.position_size_pct = RiskConfig.DEFAULT_POSITION_SIZE * 100
@@ -663,6 +668,42 @@ class MainWindow(QMainWindow):
         self.use_book_cb.setChecked(False)
         api_layout.addWidget(self.use_book_cb)
 
+        # Risk controls (hard limits, enforced independently of signals)
+        risk_row = QHBoxLayout()
+        risk_row.addWidget(QLabel("Max daily loss (%):"))
+        self.max_daily_loss_spin = QDoubleSpinBox()
+        self.max_daily_loss_spin.setRange(0.5, 20.0)
+        self.max_daily_loss_spin.setValue(3.0)
+        self.max_daily_loss_spin.setSingleStep(0.5)
+        risk_row.addWidget(self.max_daily_loss_spin)
+        risk_row.addWidget(QLabel("Max drawdown (%):"))
+        self.max_dd_spin = QDoubleSpinBox()
+        self.max_dd_spin.setRange(2.0, 50.0)
+        self.max_dd_spin.setValue(15.0)
+        self.max_dd_spin.setSingleStep(1.0)
+        risk_row.addWidget(self.max_dd_spin)
+        risk_row.addStretch()
+        api_layout.addLayout(risk_row)
+
+        # Live re-optimization (gated: candidates must pass the anti-overfit
+        # checks before they can enter the strategy book)
+        reopt_row = QHBoxLayout()
+        self.reopt_cb = QCheckBox("Live re-optimization")
+        reopt_row.addWidget(self.reopt_cb)
+        reopt_row.addWidget(QLabel("every"))
+        self.reopt_interval_spin = QSpinBox()
+        self.reopt_interval_spin.setRange(30, 1440)
+        self.reopt_interval_spin.setValue(240)
+        self.reopt_interval_spin.setSuffix(" min")
+        reopt_row.addWidget(self.reopt_interval_spin)
+        reopt_row.addWidget(QLabel("trials:"))
+        self.reopt_trials_spin = QSpinBox()
+        self.reopt_trials_spin.setRange(100, 2000)
+        self.reopt_trials_spin.setValue(300)
+        reopt_row.addWidget(self.reopt_trials_spin)
+        reopt_row.addStretch()
+        api_layout.addLayout(reopt_row)
+
         api_group.setLayout(api_layout)
         layout.addWidget(api_group)
 
@@ -1151,6 +1192,7 @@ class MainWindow(QMainWindow):
             self.last_equity_curve = equity
 
         self._update_results_display(best)
+        self._run_overfit_check(best)
         self.statusBar().showMessage(f"Optimization completed for {self.current_ticker}")
 
         # Continue batch processing if more tickers are queued
@@ -1440,6 +1482,32 @@ Parameters:
         dialog.setLayout(layout)
         dialog.exec()
 
+    def _run_overfit_check(self, best: pd.Series):
+        """Run the anti-overfit gates (DSR, CSCV PBO) on the optimization
+        result and append the verdict to the results display"""
+        self.last_validation = None
+        worker = self.worker
+        if worker is None or not getattr(worker, "trial_sharpes", None):
+            return
+        if not self.best_params:
+            return
+
+        try:
+            self.statusBar().showMessage("Running overfit checks (DSR, PBO)...")
+            report = validate_candidate(
+                simulate_fn=worker.simulate_multi_tf,
+                params=self.best_params,
+                rival_params=getattr(worker, "rival_params", []),
+                trial_sharpes=worker.trial_sharpes,
+                annualization_factor=worker.annualization_factor,
+            )
+            self.last_validation = report
+            self.best_params_label.setText(
+                self.best_params_label.text() + "\n\n" + report.summary()
+            )
+        except Exception as e:
+            print(f"Overfit check failed: {e}")
+
     @staticmethod
     def _causal_regime_labels(returns: np.ndarray):
         """Causal bar-by-bar regime labels via BOCPD (shared by the regime
@@ -1477,12 +1545,33 @@ Parameters:
             )
             return
 
+        # Warn (and require confirmation) when the candidate failed the
+        # anti-overfit gates - storing it anyway is a conscious choice
+        if self.last_validation is not None and not self.last_validation.passed:
+            answer = QMessageBox.question(
+                self,
+                "Overfit Check Failed",
+                "This strategy FAILED the anti-overfit checks:\n\n"
+                + self.last_validation.summary()
+                + "\n\nStore it in the book anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+
         best = (
             self.best_results.iloc[0]
             if getattr(self, "best_results", None) is not None
             else {}
         )
         psr = float(best.get("PSR", 0.0) or 0.0)
+        # Prefer the deflated score when available so stored strategies
+        # compete on luck-adjusted evidence (same scale the re-optimizer uses)
+        if self.last_validation is not None:
+            base_score = float(self.last_validation.dsr)
+        else:
+            base_score = psr
         tfs = sorted({k.split("_", 1)[1] for k in self.best_params if k.startswith("MN1_")})
 
         name = (
@@ -1492,7 +1581,7 @@ Parameters:
         strategy = StoredStrategy(
             name=name,
             params={k: v for k, v in self.best_params.items()},
-            base_score=psr,
+            base_score=base_score,
             ticker=self.current_ticker,
             timeframes=tfs,
             metrics={
@@ -1511,12 +1600,12 @@ Parameters:
                 self,
                 "Not Stored",
                 f"Book is full ({StrategyBook.MAX_STRATEGIES} slots) and this "
-                f"strategy's PSR ({psr:.3f}) does not beat the weakest stored "
-                "one. It was not saved.",
+                f"strategy's score ({base_score:.3f}) does not beat the weakest "
+                "stored one. It was not saved.",
             )
             return
 
-        msg = f"Stored '{name}' (PSR {psr:.3f})."
+        msg = f"Stored '{name}' (score {base_score:.3f}, PSR {psr:.3f})."
         if replaced and replaced != name:
             msg += f"\nReplaced weakest slot: '{replaced}'."
         msg += f"\n\nBook now holds {len(book)}/{StrategyBook.MAX_STRATEGIES}:"
@@ -2428,6 +2517,10 @@ Features: {len(self.regime_predictor.feature_names)}
                 position_size_pct=self.position_size_pct / 100.0,
                 paper=paper,
                 strategy_book=strategy_book,
+                risk_limits=RiskLimits(
+                    max_daily_loss_pct=self.max_daily_loss_spin.value(),
+                    max_drawdown_pct=self.max_dd_spin.value(),
+                ),
             )
 
             self.live_trader.status_update.connect(self.update_trading_status)
@@ -2435,6 +2528,34 @@ Features: {len(self.regime_predictor.feature_names)}
             self.live_trader.error.connect(self.on_trading_error)
 
             self.live_trader.start()
+
+            # Optional gated live re-optimization feeding the strategy book
+            if self.reopt_cb.isChecked():
+                params_ranges = self._get_param_ranges()
+                self.reoptimizer = LiveReoptimizer(
+                    ticker=self.current_ticker,
+                    book_path=self._strategy_book().path,
+                    optimizer_kwargs=dict(
+                        time_cycle_ranges=(
+                            params_ranges["on"],
+                            params_ranges["off"],
+                            (0, params_ranges["on"][1] + params_ranges["off"][1]),
+                        ),
+                        mn1_range=params_ranges["mn1"],
+                        mn2_range=params_ranges["mn2"],
+                        entry_range=params_ranges["entry"],
+                        exit_range=params_ranges["exit"],
+                        timeframes=timeframes,
+                        transaction_costs=self.transaction_costs,
+                        position_size=self.position_size_pct / 100.0,
+                    ),
+                    timeframes=timeframes,
+                    interval_minutes=self.reopt_interval_spin.value(),
+                    n_trials=self.reopt_trials_spin.value(),
+                )
+                self.reoptimizer.status_update.connect(self.update_trading_status)
+                self.reoptimizer.error.connect(self.on_trading_error)
+                self.reoptimizer.start()
 
             self.live_trading_btn.setText("⏹️ STOP LIVE TRADING")
             self.live_trading_btn.setStyleSheet(LIVE_TRADING_BUTTON_ACTIVE)
@@ -2456,6 +2577,10 @@ Features: {len(self.regime_predictor.feature_names)}
 
         try:
             self.live_trader.stop()
+
+            if self.reoptimizer is not None:
+                self.reoptimizer.stop()
+                self.reoptimizer = None
 
             self.live_trading_btn.setText("▶️ START LIVE TRADING")
             self.live_trading_btn.setStyleSheet(LIVE_TRADING_BUTTON_STOPPED)

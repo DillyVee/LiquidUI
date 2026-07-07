@@ -13,7 +13,9 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from config.settings import AlpacaConfig
 from models.bayesian_changepoint import BOCPDDetector, online_regime_labels
 from optimization.metrics import PerformanceMetrics
+from signals.engine import evaluate_combo, params_warmup
 from trading.regime_switcher import RegimeSwitchingEngine
+from trading.risk_controls import RiskControls, RiskLimits
 
 # Try to import Alpaca - will be used if available
 try:
@@ -51,6 +53,7 @@ class AlpacaLiveTrader(QThread):
         position_size_pct: float = 0.05,
         paper: bool = True,
         strategy_book=None,
+        risk_limits: Optional[RiskLimits] = None,
     ):
         super().__init__()
         self.api_key = api_key
@@ -95,6 +98,11 @@ class AlpacaLiveTrader(QThread):
         self.active_params: Dict = params
         self._last_step_time = None
         self._last_regime: Optional[str] = None
+
+        # Hard risk limits enforced independently of any strategy signal
+        self.risk = RiskControls(risk_limits)
+        self.last_entry_fill_price: Optional[float] = None
+        self._last_block_reason: Optional[str] = None
 
         print(f"🔄 Ticker mapping: {self.yfinance_symbol} (yfinance) -> {self.symbol} (Alpaca)")
         if self.switching:
@@ -162,6 +170,9 @@ class AlpacaLiveTrader(QThread):
             # Main monitoring loop
             while self.running:
                 try:
+                    # Hard risk limits first - they override every signal
+                    self._check_risk_limits()
+
                     frames = self._fetch_signal_frames()
 
                     if frames is None:
@@ -178,7 +189,8 @@ class AlpacaLiveTrader(QThread):
 
                         # Check for entry signal
                         if not self.position and current_signals["should_enter"]:
-                            self.execute_entry()
+                            if self._risk_entry_allowed():
+                                self.execute_entry()
 
                         # Check for exit signal
                         elif self.position and current_signals["should_exit"]:
@@ -223,9 +235,7 @@ class AlpacaLiveTrader(QThread):
 
             for tf in self.timeframes:
                 warmups = [
-                    int(p[f"MN1_{tf}"]) + int(p[f"MN2_{tf}"])
-                    for p in param_sets
-                    if f"MN1_{tf}" in p
+                    params_warmup(p, tf) for p in param_sets if f"MN1_{tf}" in p
                 ]
                 if not warmups:
                     continue
@@ -315,21 +325,17 @@ class AlpacaLiveTrader(QThread):
                     return None
                 signal_df = frames[tf]
 
-                mn1 = int(params[f"MN1_{tf}"])
-                mn2 = int(params[f"MN2_{tf}"])
-
-                if len(signal_df) < mn1 + mn2 + 1:
+                warmup = params_warmup(params, tf)
+                if len(signal_df) < warmup + 1:
                     self.status_update.emit(
                         f"⏳ Waiting for indicator warm-up on {tf}: "
-                        f"{len(signal_df)}/{mn1 + mn2 + 1} bars"
+                        f"{len(signal_df)}/{warmup + 1} bars"
                     )
                     return None
 
-                # Calculate RSI
+                # Indicator combo conditions - same engine as the backtest
                 close = signal_df["close"].to_numpy(dtype=float)
-
-                rsi = PerformanceMetrics.compute_rsi_vectorized(close, mn1)
-                rsi_smooth = PerformanceMetrics.smooth_vectorized(rsi, mn2)
+                entry_ok, exit_ok, _ = evaluate_combo(close, params, tf)
 
                 # Calculate cycle (guard against a zero-length period).
                 # Anchored to calendar time exactly like the backtest - the
@@ -347,18 +353,11 @@ class AlpacaLiveTrader(QThread):
                 )
                 cycle = ((anchor - start) % period) < on
 
-                # Get current signal
-                current_rsi = rsi_smooth[-1]
-                entry_threshold = params[f"Entry_{tf}"]
-                exit_threshold = params[f"Exit_{tf}"]
-
                 signals_dict[tf] = {
-                    "rsi": current_rsi,
+                    "indicator": str(params.get(f"IND1_{tf}", "rsi")),
                     "cycle": cycle,
-                    "entry": entry_threshold,
-                    "exit": exit_threshold,
-                    "should_enter": (current_rsi < entry_threshold) and cycle,
-                    "should_exit": (current_rsi > exit_threshold) or (not cycle),
+                    "should_enter": bool(entry_ok[-1]) and cycle,
+                    "should_exit": bool(exit_ok[-1]) or (not cycle),
                 }
 
             # Combine signals (AND for entry, OR for exit)
@@ -381,6 +380,36 @@ class AlpacaLiveTrader(QThread):
         if frames is None:
             return None
         return self._eval_params_signals(frames, self.params)
+
+    def _check_risk_limits(self):
+        """Feed current equity to the risk controls; on a kill-switch trip,
+        liquidate any open position and halt new entries"""
+        try:
+            account = self.trading_client.get_account()
+            violation = self.risk.update_equity(float(account.equity))
+        except Exception:
+            return
+
+        if violation:
+            self.error.emit(violation)
+            if self.position:
+                self.status_update.emit("🚨 Kill switch - liquidating open position")
+                self.execute_exit()
+            self.status_update.emit(
+                "⛔ Trading halted by risk controls. Restart the trader "
+                "after review to resume."
+            )
+
+    def _risk_entry_allowed(self) -> bool:
+        """Entry gate from the risk controls (emits the reason once)"""
+        if self.risk.entry_allowed():
+            self._last_block_reason = None
+            return True
+        reason = self.risk.entry_block_reason()
+        if reason != self._last_block_reason:
+            self.status_update.emit(f"⛔ Entry blocked: {reason}")
+            self._last_block_reason = reason
+        return False
 
     def _init_switching_engine(self):
         """Build the switching engine from the strategy book, restoring any
@@ -486,7 +515,12 @@ class AlpacaLiveTrader(QThread):
 
         if not self.position:
             sig = strat_signals.get(selected)
-            if sig and sig["should_enter"] and self.engine.entry_allowed(regime):
+            if (
+                sig
+                and sig["should_enter"]
+                and self.engine.entry_allowed(regime)
+                and self._risk_entry_allowed()
+            ):
                 self.execute_entry()
                 if self.position:
                     self.position_owner = selected
@@ -551,6 +585,7 @@ class AlpacaLiveTrader(QThread):
             self.position = True
             self.entry_qty = filled_qty
             fill_price = avg_price if avg_price > 0 else current_price
+            self.last_entry_fill_price = float(fill_price)
             shares_text = f"{filled_qty:g} units"
 
             trade_info = {
@@ -620,6 +655,15 @@ class AlpacaLiveTrader(QThread):
 
             fill_price = avg_price if avg_price > 0 else self._latest_price()
             shares_text = f"{filled_qty:g} units"
+
+            # Feed the closed trade's P&L to the risk controls
+            if self.last_entry_fill_price and fill_price > 0:
+                pnl_pct = (fill_price / self.last_entry_fill_price - 1.0) * 100
+                risk_msg = self.risk.record_trade_result(pnl_pct)
+                if risk_msg:
+                    self.error.emit(risk_msg)
+            if not self.position:
+                self.last_entry_fill_price = None
 
             trade_info = {
                 "action": "SELL",
