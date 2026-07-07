@@ -11,7 +11,9 @@ import pandas as pd
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from config.settings import AlpacaConfig
+from models.bayesian_changepoint import BOCPDDetector, online_regime_labels
 from optimization.metrics import PerformanceMetrics
+from trading.regime_switcher import RegimeSwitchingEngine
 
 # Try to import Alpaca - will be used if available
 try:
@@ -48,6 +50,7 @@ class AlpacaLiveTrader(QThread):
         timeframes: List[str],
         position_size_pct: float = 0.05,
         paper: bool = True,
+        strategy_book=None,
     ):
         super().__init__()
         self.api_key = api_key
@@ -66,7 +69,36 @@ class AlpacaLiveTrader(QThread):
         # exits only sell what the bot bought - never manually-held assets
         self.entry_qty: Optional[float] = None
 
+        # Regime-switching mode: with a StrategyBook of 2+ strategies, all
+        # of them run in shadow, are scored per live regime, and only the
+        # current best opens real positions (see trading/regime_switcher.py)
+        self.strategy_book = strategy_book
+        self.strategy_params: Dict[str, Dict] = {}
+        if strategy_book is not None:
+            required = [
+                f"{k}_{tf}"
+                for tf in timeframes
+                for k in ("MN1", "MN2", "Entry", "Exit", "On", "Off", "Start")
+            ]
+            for s in strategy_book.strategies:
+                if all(key in s.params for key in required):
+                    self.strategy_params[s.name] = s.params
+                else:
+                    print(
+                        f"⚠ Strategy '{s.name}' missing params for timeframes "
+                        f"{timeframes} - excluded from switching"
+                    )
+        self.switching = len(self.strategy_params) >= 2
+        self.engine = None
+        self.shadow_positions: Dict[str, Dict] = {}
+        self.position_owner: Optional[str] = None
+        self.active_params: Dict = params
+        self._last_step_time = None
+        self._last_regime: Optional[str] = None
+
         print(f"🔄 Ticker mapping: {self.yfinance_symbol} (yfinance) -> {self.symbol} (Alpaca)")
+        if self.switching:
+            print(f"🔀 Regime-switching mode: {list(self.strategy_params)}")
 
     @property
     def is_running(self) -> bool:
@@ -118,25 +150,39 @@ class AlpacaLiveTrader(QThread):
                 self.status_update.emit(f"No existing position in {self.symbol}")
 
             self.running = True
-            self.status_update.emit("🔴 LIVE - Monitoring for signals...")
+            if self.switching:
+                self._init_switching_engine()
+                self.status_update.emit(
+                    "🔴 LIVE (regime switching: "
+                    f"{', '.join(self.strategy_params)}) - Monitoring..."
+                )
+            else:
+                self.status_update.emit("🔴 LIVE - Monitoring for signals...")
 
             # Main monitoring loop
             while self.running:
                 try:
-                    # Get latest bars for all timeframes
-                    current_signals = self.get_current_signals()
+                    frames = self._fetch_signal_frames()
 
-                    if current_signals is None:
+                    if frames is None:
                         self._sleep(10)
                         continue
 
-                    # Check for entry signal
-                    if not self.position and current_signals["should_enter"]:
-                        self.execute_entry()
+                    if self.switching:
+                        self._run_switching_step(frames)
+                    else:
+                        current_signals = self._eval_params_signals(frames, self.params)
+                        if current_signals is None:
+                            self._sleep(10)
+                            continue
 
-                    # Check for exit signal
-                    elif self.position and current_signals["should_exit"]:
-                        self.execute_exit()
+                        # Check for entry signal
+                        if not self.position and current_signals["should_enter"]:
+                            self.execute_entry()
+
+                        # Check for exit signal
+                        elif self.position and current_signals["should_exit"]:
+                            self.execute_exit()
 
                     # Sleep before next check (interruptible so stop() takes
                     # effect within ~1 second)
@@ -154,22 +200,48 @@ class AlpacaLiveTrader(QThread):
         except Exception as e:
             self.error.emit(f"Alpaca connection error: {e}")
 
-    def get_current_signals(self) -> Dict:
-        """Fetch latest data and calculate signals"""
+    def _all_param_sets(self) -> List[Dict]:
+        """Every parameter set whose warm-up the bar fetch must cover"""
+        sets = [self.params] if self.params else []
+        sets.extend(self.strategy_params.values())
+        return sets
+
+    def _finest_tf(self) -> str:
+        tf_order = {"1min": 0, "5min": 1, "hourly": 2, "daily": 3}
+        return sorted(self.timeframes, key=lambda x: tf_order.get(x, 99))[0]
+
+    def _fetch_signal_frames(self) -> Optional[Dict[str, pd.DataFrame]]:
+        """
+        Fetch closed bars for every timeframe, once, sized to cover the
+        warm-up of ALL strategies (single + book). Returns {tf: DataFrame}
+        of closed bars with a tz-naive Datetime column, or None.
+        """
         try:
-            signals_dict = {}
+            frames: Dict[str, pd.DataFrame] = {}
+            param_sets = self._all_param_sets()
+            finest_tf = self._finest_tf()
 
             for tf in self.timeframes:
-                mn1 = int(self.params[f"MN1_{tf}"])
-                mn2 = int(self.params[f"MN2_{tf}"])
+                warmups = [
+                    int(p[f"MN1_{tf}"]) + int(p[f"MN2_{tf}"])
+                    for p in param_sets
+                    if f"MN1_{tf}" in p
+                ]
+                if not warmups:
+                    continue
+                max_warmup = max(warmups)
 
-                # Bars required for a fully-warmed-up RSI + smoothing, plus buffer
-                bars_needed = mn1 + mn2 + 10
+                # Bars for a fully-warmed-up RSI + smoothing, plus buffer.
+                # In switching mode the finest timeframe also feeds BOCPD
+                # regime detection, which wants a longer history
+                bars_needed = max_warmup + 10
+                if self.switching and tf == finest_tf:
+                    bars_needed = max(bars_needed, 500)
 
-                # Determine timeframe for Alpaca and a calendar window that is
-                # guaranteed to contain enough TRADING bars. Passing limit
-                # without start is unreliable (Alpaca counts forward from its
-                # default start, so the newest bars may be missing entirely).
+                # Calendar window guaranteed to contain enough TRADING bars.
+                # Passing limit without start is unreliable (Alpaca counts
+                # forward from its default start, so the newest bars may be
+                # missing entirely).
                 now_utc = datetime.datetime.now(datetime.timezone.utc)
                 if tf == "5min":
                     alpaca_tf = TimeFrame(5, TimeFrameUnit.Minute)
@@ -225,7 +297,26 @@ class AlpacaLiveTrader(QThread):
                 # Signal off closed bars only - drop the still-forming bar
                 # so signals never repaint
                 self.last_bar_time[tf] = df["Datetime"].iloc[-1]
-                signal_df = df.iloc[:-1].copy()
+                frames[tf] = df.iloc[:-1].copy()
+
+            return frames if frames else None
+
+        except Exception as e:
+            print(f"Bar fetch error: {e}")
+            return None
+
+    def _eval_params_signals(self, frames: Dict[str, pd.DataFrame], params: Dict) -> Optional[Dict]:
+        """Evaluate one parameter set's entry/exit signals on fetched frames"""
+        try:
+            signals_dict = {}
+
+            for tf in self.timeframes:
+                if tf not in frames:
+                    return None
+                signal_df = frames[tf]
+
+                mn1 = int(params[f"MN1_{tf}"])
+                mn2 = int(params[f"MN2_{tf}"])
 
                 if len(signal_df) < mn1 + mn2 + 1:
                     self.status_update.emit(
@@ -244,9 +335,9 @@ class AlpacaLiveTrader(QThread):
                 # Anchored to calendar time exactly like the backtest - the
                 # previous index-in-window approach froze the cycle at a
                 # constant phase because the fetch window slides with time.
-                on = int(self.params[f"On_{tf}"])
-                off = int(self.params[f"Off_{tf}"])
-                start = int(self.params[f"Start_{tf}"])
+                on = int(params[f"On_{tf}"])
+                off = int(params[f"Off_{tf}"])
+                start = int(params[f"Start_{tf}"])
                 period = max(1, on + off)
                 last_closed = signal_df["Datetime"].iloc[-1]
                 anchor = int(
@@ -258,8 +349,8 @@ class AlpacaLiveTrader(QThread):
 
                 # Get current signal
                 current_rsi = rsi_smooth[-1]
-                entry_threshold = self.params[f"Entry_{tf}"]
-                exit_threshold = self.params[f"Exit_{tf}"]
+                entry_threshold = params[f"Entry_{tf}"]
+                exit_threshold = params[f"Exit_{tf}"]
 
                 signals_dict[tf] = {
                     "rsi": current_rsi,
@@ -283,6 +374,133 @@ class AlpacaLiveTrader(QThread):
         except Exception as e:
             print(f"Signal calculation error: {e}")
             return None
+
+    def get_current_signals(self) -> Optional[Dict]:
+        """Fetch latest data and calculate signals for the active params"""
+        frames = self._fetch_signal_frames()
+        if frames is None:
+            return None
+        return self._eval_params_signals(frames, self.params)
+
+    def _init_switching_engine(self):
+        """Build the switching engine from the strategy book, restoring any
+        previously learned shadow scores"""
+        base_scores = {
+            s.name: s.base_score
+            for s in self.strategy_book.strategies
+            if s.name in self.strategy_params
+        }
+        self.engine = RegimeSwitchingEngine(list(self.strategy_params), base_scores)
+        self.engine.restore(self.strategy_book.shadow_snapshot)
+        self.shadow_positions = {
+            name: {"position": False} for name in self.strategy_params
+        }
+        # A pre-existing real position has an unknown opener; manage it with
+        # the currently selected strategy's exit rules
+        if self.position:
+            self.position_owner = self.engine.selected
+
+    def _run_switching_step(self, frames: Dict[str, pd.DataFrame]):
+        """
+        One iteration of regime-switching mode:
+        - evaluate every stored strategy's signals on the shared bar fetch
+        - on each newly closed finest bar: detect the live regime (BOCPD),
+          fold shadow returns into per-regime scores, re-select the best
+        - real entries only from the selected strategy (at its next entry
+          signal); the strategy that opened the position manages its exit
+        """
+        finest_tf = self._finest_tf()
+        fin_df = frames.get(finest_tf)
+        if fin_df is None or len(fin_df) < 3:
+            return
+        last_closed = fin_df["Datetime"].iloc[-1]
+
+        # Evaluate all stored strategies on the same fetched bars
+        strat_signals: Dict[str, Dict] = {}
+        for name, params in self.strategy_params.items():
+            sig = self._eval_params_signals(frames, params)
+            if sig is not None:
+                strat_signals[name] = sig
+        if not strat_signals:
+            return
+
+        new_bar = self._last_step_time is None or last_closed > self._last_step_time
+        if new_bar:
+            closes = fin_df["close"].to_numpy(dtype=float)
+            returns = np.zeros(len(closes))
+            returns[1:] = np.diff(closes) / closes[:-1]
+
+            # Live regime from causal BOCPD labels over the fetched window.
+            # (Window-start effects touch only the oldest bars; the label of
+            # the latest bar is what selection uses.)
+            detector = BOCPDDetector(
+                hazard_lambda=max(60.0, len(returns) / 4.0),
+                min_segment_bars=max(10, len(returns) // 20),
+            )
+            res = detector.detect(returns)
+            labels = online_regime_labels(returns, res.map_run_length)
+            regime = str(labels[-1])
+
+            # Shadow return over the newly closed bar (close-to-close):
+            # strategies holding a shadow position earn the bar, flat ones 0.
+            # Attributed to the regime known at the PREVIOUS bar (lag-1)
+            bar_ret = closes[-1] / closes[-2] - 1.0
+            shadow_rets = {
+                name: (bar_ret if self.shadow_positions.get(name, {}).get("position") else 0.0)
+                for name in strat_signals
+            }
+            if self._last_regime is not None:
+                self.engine.update_shadows(shadow_rets, self._last_regime)
+            self._last_regime = regime
+
+            # Advance shadow positions from this bar's signals
+            for name, sig in strat_signals.items():
+                pos = self.shadow_positions.setdefault(name, {"position": False})
+                if not pos["position"] and sig["should_enter"]:
+                    pos["position"] = True
+                elif pos["position"] and sig["should_exit"]:
+                    pos["position"] = False
+
+            prev_selected = self.engine.selected
+            selected = self.engine.select(regime, timestamp=last_closed)
+            if selected != prev_selected:
+                self.status_update.emit(
+                    f"🔀 Strategy switch: {prev_selected} -> {selected} "
+                    f"[{regime}] - trading from its next entry signal"
+                )
+
+            # Persist learned shadow scores so restarts don't start cold
+            try:
+                self.strategy_book.shadow_snapshot = self.engine.snapshot()
+                self.strategy_book.save()
+            except Exception as e:
+                print(f"Strategy book save failed: {e}")
+
+            self._last_step_time = last_closed
+
+        regime = self._last_regime
+        if regime is None:
+            return
+
+        selected = self.engine.selected
+
+        if not self.position:
+            sig = strat_signals.get(selected)
+            if sig and sig["should_enter"] and self.engine.entry_allowed(regime):
+                self.execute_entry()
+                if self.position:
+                    self.position_owner = selected
+                    self.status_update.emit(
+                        f"   ↳ entry by '{selected}' in regime {regime}"
+                    )
+        else:
+            # The opener's exit rules manage the open position
+            owner = self.position_owner or selected
+            sig = strat_signals.get(owner) or strat_signals.get(selected)
+            if sig and sig["should_exit"]:
+                self.execute_exit()
+                if not self.position:
+                    self.position_owner = None
 
     def execute_entry(self):
         """Execute buy order and confirm the fill before updating state"""

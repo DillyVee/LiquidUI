@@ -5,6 +5,7 @@ Professional multi-tab GUI. Tabs and features that are hidden by default can
 be re-enabled with the feature flags below.
 """
 
+from datetime import datetime
 from typing import Dict, List, Optional
 
 import matplotlib.pyplot as plt
@@ -62,6 +63,13 @@ from models.regime_robustness import BlockBootstrapValidator, WhiteRealityCheck
 from optimization import MultiTimeframeOptimizer, WalkForwardAnalyzer
 from optimization.monte_carlo import AdvancedMonteCarloAnalyzer, MonteCarloSimulator
 from trading import AlpacaLiveTrader
+from trading.regime_switcher import (
+    StoredStrategy,
+    StrategyBook,
+    build_switching_report,
+    plot_switching_backtest,
+    run_switching_backtest,
+)
 
 # Feature flags - set to True to re-enable hidden features
 SHOW_REGIME_TAB = False
@@ -433,6 +441,16 @@ class MainWindow(QMainWindow):
         self.regime_breakdown_btn.clicked.connect(self.show_regime_breakdown)
         results_layout.addWidget(self.regime_breakdown_btn)
 
+        book_layout = QHBoxLayout()
+        self.save_to_book_btn = QPushButton("💾 Save Strategy to Book")
+        self.save_to_book_btn.clicked.connect(self.save_strategy_to_book)
+        book_layout.addWidget(self.save_to_book_btn)
+
+        self.switching_backtest_btn = QPushButton("🔁 Regime-Switching Backtest")
+        self.switching_backtest_btn.clicked.connect(self.run_switching_backtest_gui)
+        book_layout.addWidget(self.switching_backtest_btn)
+        results_layout.addLayout(book_layout)
+
         results_group.setLayout(results_layout)
         right_layout.addWidget(results_group)
 
@@ -638,6 +656,12 @@ class MainWindow(QMainWindow):
         self.paper_trading_cb.setChecked(True)
         self.paper_trading_cb.setStyleSheet(f"color: {COLOR_SUCCESS}; font-weight: bold;")
         api_layout.addWidget(self.paper_trading_cb)
+
+        self.use_book_cb = QCheckBox(
+            "Use Strategy Book (regime switching - needs 2+ stored strategies)"
+        )
+        self.use_book_cb.setChecked(False)
+        api_layout.addWidget(self.use_book_cb)
 
         api_group.setLayout(api_layout)
         layout.addWidget(api_group)
@@ -1351,20 +1375,9 @@ Parameters:
         else:
             ann_factor = 252.0 * 6.5 * 12
 
-        n = len(returns)
-        # Prior expected regime length: a fraction of the sample, bounded
-        hazard_lambda = float(np.clip(n // 8, 60, 2000))
-        min_segment = int(max(20, n // 100))
-
         self.statusBar().showMessage("Running Bayesian change point detection...")
         try:
-            detector = BOCPDDetector(
-                hazard_lambda=hazard_lambda, min_segment_bars=min_segment
-            )
-            result = detector.detect(returns)
-            # Causal, bar-by-bar regime labels (the live classification, not
-            # the retrospective verdict on each section)
-            labels = online_regime_labels(returns, result.map_run_length)
+            labels, result = self._causal_regime_labels(returns)
 
             summary = RegimeStrategyAnalyzer.analyze(
                 equity_curve=equity,
@@ -1407,6 +1420,194 @@ Parameters:
             layout.addWidget(FigureCanvas(fig), stretch=3)
         except Exception as e:
             print(f"Failed to create regime plot: {e}")
+
+        report_text = QTextEdit()
+        report_text.setReadOnly(True)
+        report_text.setPlainText(report)
+        report_text.setStyleSheet(
+            "font-family: monospace; font-size: 11px; "
+            "background-color: #1e1e1e; color: white;"
+        )
+        layout.addWidget(report_text, stretch=2)
+
+        btn_layout = QHBoxLayout()
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.close)
+        btn_layout.addStretch()
+        btn_layout.addWidget(close_btn)
+        layout.addLayout(btn_layout)
+
+        dialog.setLayout(layout)
+        dialog.exec()
+
+    @staticmethod
+    def _causal_regime_labels(returns: np.ndarray):
+        """Causal bar-by-bar regime labels via BOCPD (shared by the regime
+        breakdown and the switching backtest)"""
+        n = len(returns)
+        detector = BOCPDDetector(
+            hazard_lambda=float(np.clip(n // 8, 60, 2000)),
+            min_segment_bars=int(max(20, n // 100)),
+        )
+        result = detector.detect(returns)
+        labels = online_regime_labels(returns, result.map_run_length)
+        return labels, result
+
+    def _strategy_book(self) -> StrategyBook:
+        """The per-ticker persistent strategy book (max 3 slots)"""
+        ticker = self.current_ticker or "DEFAULT"
+        return StrategyBook(Paths.DATA_DIR / f"{ticker}_strategy_book.json")
+
+    def _book_strategies_for_current_data(self, book: StrategyBook) -> list:
+        """Stored strategies whose params cover every loaded timeframe"""
+        required = [
+            f"{key}_{tf}"
+            for tf in self.df_dict.keys()
+            for key in ("MN1", "MN2", "Entry", "Exit", "On", "Off", "Start")
+        ]
+        return [s for s in book.strategies if all(k in s.params for k in required)]
+
+    def save_strategy_to_book(self):
+        """Store the current optimization result in the strategy book
+        (max 3 slots; a stronger newcomer replaces the weakest slot)"""
+        if not self.best_params:
+            QMessageBox.warning(
+                self, "No Results", "Run an optimization first - the book stores "
+                "optimized parameter sets."
+            )
+            return
+
+        best = (
+            self.best_results.iloc[0]
+            if getattr(self, "best_results", None) is not None
+            else {}
+        )
+        psr = float(best.get("PSR", 0.0) or 0.0)
+        tfs = sorted({k.split("_", 1)[1] for k in self.best_params if k.startswith("MN1_")})
+
+        name = (
+            f"{self.current_ticker}_{'+'.join(tfs)}_"
+            f"{datetime.now().strftime('%m%d-%H%M')}"
+        )
+        strategy = StoredStrategy(
+            name=name,
+            params={k: v for k, v in self.best_params.items()},
+            base_score=psr,
+            ticker=self.current_ticker,
+            timeframes=tfs,
+            metrics={
+                k: float(best.get(k, 0.0) or 0.0)
+                for k in ("PSR", "Sharpe_Ratio", "Sortino_Ratio",
+                          "Percent_Gain_%", "Max_Drawdown_%")
+                if k in best
+            },
+        )
+
+        book = self._strategy_book()
+        added, replaced = book.add(strategy)
+
+        if not added:
+            QMessageBox.information(
+                self,
+                "Not Stored",
+                f"Book is full ({StrategyBook.MAX_STRATEGIES} slots) and this "
+                f"strategy's PSR ({psr:.3f}) does not beat the weakest stored "
+                "one. It was not saved.",
+            )
+            return
+
+        msg = f"Stored '{name}' (PSR {psr:.3f})."
+        if replaced and replaced != name:
+            msg += f"\nReplaced weakest slot: '{replaced}'."
+        msg += f"\n\nBook now holds {len(book)}/{StrategyBook.MAX_STRATEGIES}:"
+        for s in book.strategies:
+            msg += f"\n  • {s.name}  (score {s.base_score:.3f})"
+        QMessageBox.information(self, "Strategy Saved", msg)
+        self.statusBar().showMessage(
+            f"Strategy book: {len(book)}/{StrategyBook.MAX_STRATEGIES} slots used"
+        )
+
+    def run_switching_backtest_gui(self):
+        """Backtest the regime-switching meta-strategy: all stored
+        strategies run in shadow, and only the best for the live regime
+        places trades"""
+        if not self.df_dict:
+            QMessageBox.warning(self, "No Data", "Load data first")
+            return
+        if self.worker and self.worker.isRunning():
+            QMessageBox.warning(self, "Busy", "Wait for the running optimization")
+            return
+
+        book = self._strategy_book()
+        strategies = self._book_strategies_for_current_data(book)
+        if len(strategies) < 2:
+            QMessageBox.warning(
+                self,
+                "Need More Strategies",
+                f"The switching backtest needs at least 2 stored strategies "
+                f"covering timeframes {list(self.df_dict.keys())}.\n"
+                f"Book has {len(book)} stored, {len(strategies)} usable.\n\n"
+                "Run optimizations and use 'Save Strategy to Book'.",
+            )
+            return
+
+        self.statusBar().showMessage("Running regime-switching backtest...")
+        try:
+            params_ranges = self._get_param_ranges()
+            temp_optimizer = MultiTimeframeOptimizer(
+                df_dict=self.df_dict,
+                n_trials=1,
+                time_cycle_ranges=(
+                    params_ranges["on"],
+                    params_ranges["off"],
+                    (0, params_ranges["on"][1] + params_ranges["off"][1]),
+                ),
+                mn1_range=params_ranges["mn1"],
+                mn2_range=params_ranges["mn2"],
+                entry_range=params_ranges["entry"],
+                exit_range=params_ranges["exit"],
+                ticker=self.current_ticker,
+                transaction_costs=self.transaction_costs,
+                position_size=self.position_size_pct / 100.0,
+            )
+
+            closes = temp_optimizer.np_data[temp_optimizer.finest_tf]["close"]
+            datetimes = temp_optimizer.np_data[temp_optimizer.finest_tf]["datetime"]
+            returns = np.zeros(len(closes))
+            returns[1:] = np.diff(closes) / closes[:-1]
+
+            labels, _ = self._causal_regime_labels(returns)
+
+            result = run_switching_backtest(temp_optimizer, strategies, labels)
+            report = build_switching_report(
+                result,
+                strategies,
+                annualization_factor=temp_optimizer.annualization_factor,
+                ticker=self.current_ticker,
+            )
+        except Exception as e:
+            self.statusBar().showMessage("Switching backtest failed")
+            QMessageBox.critical(self, "Switching Backtest Error", str(e))
+            return
+
+        self.statusBar().showMessage(
+            f"Switching backtest: {len(result.trades)} trades, "
+            f"{len(result.switch_log)} strategy switches"
+        )
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Regime-Switching Backtest - {self.current_ticker}")
+        dialog.setGeometry(80, 80, 1400, 950)
+        dialog.setStyleSheet(MAIN_STYLESHEET)
+        layout = QVBoxLayout()
+
+        try:
+            fig = plot_switching_backtest(
+                result, strategies, datetimes, ticker=self.current_ticker
+            )
+            layout.addWidget(FigureCanvas(fig), stretch=3)
+        except Exception as e:
+            print(f"Failed to plot switching backtest: {e}")
 
         report_text = QTextEdit()
         report_text.setReadOnly(True)
@@ -2200,6 +2401,22 @@ Features: {len(self.regime_predictor.feature_names)}
         if msg.exec() != QMessageBox.StandardButton.Yes:
             return
 
+        # Optional regime-switching mode from the stored strategy book
+        strategy_book = None
+        if getattr(self, "use_book_cb", None) is not None and self.use_book_cb.isChecked():
+            book = self._strategy_book()
+            usable = self._book_strategies_for_current_data(book)
+            if len(usable) < 2:
+                QMessageBox.warning(
+                    self,
+                    "Strategy Book Unavailable",
+                    f"Regime switching needs 2+ stored strategies covering "
+                    f"{list(self.df_dict.keys())}; book has {len(usable)} usable. "
+                    "Starting with the single optimized strategy instead.",
+                )
+            else:
+                strategy_book = book
+
         try:
             self.live_trader = AlpacaLiveTrader(
                 api_key=api_key,
@@ -2210,6 +2427,7 @@ Features: {len(self.regime_predictor.feature_names)}
                 timeframes=timeframes,
                 position_size_pct=self.position_size_pct / 100.0,
                 paper=paper,
+                strategy_book=strategy_book,
             )
 
             self.live_trader.status_update.connect(self.update_trading_status)

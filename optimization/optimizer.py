@@ -211,6 +211,68 @@ class MultiTimeframeOptimizer(QThread):
 
         return float(psr), float(sharpe)
 
+    def compute_signals(self, params: Dict) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Compute (enter_signal, exit_signal) boolean arrays on the finest
+        timeframe for a parameter set. Shared by simulate_multi_tf and the
+        regime-switching engine so signal semantics can never diverge.
+        """
+        n_bars = len(self.np_data[self.finest_tf]["close"])
+
+        # Pre-allocate signal arrays
+        enter_signal = np.ones(n_bars, dtype=bool)
+        exit_signal = np.zeros(n_bars, dtype=bool)
+
+        # Calculate signals for each timeframe
+        for tf in self.timeframes:
+            mn1 = int(params[f"MN1_{tf}"])
+            mn2 = int(params[f"MN2_{tf}"])
+            entry = params[f"Entry_{tf}"]
+            exit_val = params[f"Exit_{tf}"]
+
+            close_tf = self.np_data[tf]["close"]
+
+            # Vectorized RSI
+            rsi = PerformanceMetrics.compute_rsi_vectorized(close_tf, mn1)
+            rsi_smooth = PerformanceMetrics.smooth_vectorized(rsi, mn2)
+
+            # Vectorized cycle (guard against a zero-length period).
+            # Anchored to calendar time so the phase is identical across
+            # backtests, walk-forward windows, and live trading.
+            on = int(params[f"On_{tf}"])
+            off = int(params[f"Off_{tf}"])
+            start = int(params[f"Start_{tf}"])
+            period = max(1, on + off)
+            anchor = self.np_data[tf]["anchor"]
+            cycle = ((anchor - start) % period) < on
+
+            # Block entries during the indicator warm-up region, where
+            # RSI/smoothing are computed from partial windows
+            warmup = mn1 + mn2
+            warmed_up = np.arange(len(close_tf)) >= warmup
+
+            # Map to finest timeframe
+            if tf != self.finest_tf:
+                indices = self.tf_indices[tf]
+                valid_mask = indices >= 0
+                indices_clipped = np.clip(indices, 0, len(rsi_smooth) - 1)
+                rsi_smooth_mapped = np.zeros(n_bars)
+                cycle_mapped = np.zeros(n_bars, dtype=bool)
+                warmed_up_mapped = np.zeros(n_bars, dtype=bool)
+                rsi_smooth_mapped[valid_mask] = rsi_smooth[indices_clipped[valid_mask]]
+                cycle_mapped[valid_mask] = cycle[indices_clipped[valid_mask]]
+                warmed_up_mapped[valid_mask] = warmed_up[indices_clipped[valid_mask]]
+            else:
+                rsi_smooth_mapped = rsi_smooth
+                cycle_mapped = cycle
+                warmed_up_mapped = warmed_up
+
+            # Signals
+            enter_signal &= (rsi_smooth_mapped < entry) & cycle_mapped & warmed_up_mapped
+            exit_signal |= (rsi_smooth_mapped > exit_val) | (~cycle_mapped)
+
+        return enter_signal, exit_signal
+
     def simulate_multi_tf(self, params: Dict, return_trades: bool = False):
         """
         FIXED VERSION - Now properly returns trade log with actual returns
@@ -225,57 +287,7 @@ class MultiTimeframeOptimizer(QThread):
             datetime_finest = self.np_data[self.finest_tf]["datetime"]
             n_bars = len(close_finest)
 
-            # Pre-allocate signal arrays
-            enter_signal = np.ones(n_bars, dtype=bool)
-            exit_signal = np.zeros(n_bars, dtype=bool)
-
-            # Calculate signals for each timeframe
-            for tf in self.timeframes:
-                mn1 = int(params[f"MN1_{tf}"])
-                mn2 = int(params[f"MN2_{tf}"])
-                entry = params[f"Entry_{tf}"]
-                exit_val = params[f"Exit_{tf}"]
-
-                close_tf = self.np_data[tf]["close"]
-
-                # Vectorized RSI
-                rsi = PerformanceMetrics.compute_rsi_vectorized(close_tf, mn1)
-                rsi_smooth = PerformanceMetrics.smooth_vectorized(rsi, mn2)
-
-                # Vectorized cycle (guard against a zero-length period).
-                # Anchored to calendar time so the phase is identical across
-                # backtests, walk-forward windows, and live trading.
-                on = int(params[f"On_{tf}"])
-                off = int(params[f"Off_{tf}"])
-                start = int(params[f"Start_{tf}"])
-                period = max(1, on + off)
-                anchor = self.np_data[tf]["anchor"]
-                cycle = ((anchor - start) % period) < on
-
-                # Block entries during the indicator warm-up region, where
-                # RSI/smoothing are computed from partial windows
-                warmup = mn1 + mn2
-                warmed_up = np.arange(len(close_tf)) >= warmup
-
-                # Map to finest timeframe
-                if tf != self.finest_tf:
-                    indices = self.tf_indices[tf]
-                    valid_mask = indices >= 0
-                    indices_clipped = np.clip(indices, 0, len(rsi_smooth) - 1)
-                    rsi_smooth_mapped = np.zeros(n_bars)
-                    cycle_mapped = np.zeros(n_bars, dtype=bool)
-                    warmed_up_mapped = np.zeros(n_bars, dtype=bool)
-                    rsi_smooth_mapped[valid_mask] = rsi_smooth[indices_clipped[valid_mask]]
-                    cycle_mapped[valid_mask] = cycle[indices_clipped[valid_mask]]
-                    warmed_up_mapped[valid_mask] = warmed_up[indices_clipped[valid_mask]]
-                else:
-                    rsi_smooth_mapped = rsi_smooth
-                    cycle_mapped = cycle
-                    warmed_up_mapped = warmed_up
-
-                # Signals
-                enter_signal &= (rsi_smooth_mapped < entry) & cycle_mapped & warmed_up_mapped
-                exit_signal |= (rsi_smooth_mapped > exit_val) | (~cycle_mapped)
+            enter_signal, exit_signal = self.compute_signals(params)
 
             # Backtest simulation
             equity_curve = np.zeros(n_bars)
