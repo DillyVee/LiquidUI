@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
 from config.settings import (
     IndicatorRanges,
     OptimizationConfig,
+    Paths,
     RiskConfig,
     TransactionCosts,
 )
