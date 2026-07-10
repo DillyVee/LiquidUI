@@ -15,6 +15,8 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from config.settings import Paths
 from optimization.metrics import PerformanceMetrics
 from optimization.psr_composite import PSRCalculator
+from signals.engine import evaluate_combo
+from signals.indicators import INDICATORS
 
 if TYPE_CHECKING:
     from config.settings import TransactionCosts
@@ -46,8 +48,13 @@ class MultiTimeframeOptimizer(QThread):
         batch_size: int = 500,
         transaction_costs: Optional["TransactionCosts"] = None,
         position_size: float = 1.0,
+        indicator_search: bool = True,
     ):
         super().__init__()
+        # When True the optimizer mixes and matches indicators from the
+        # signal library (categorical choice + optional second leg) instead
+        # of optimizing RSI only
+        self.indicator_search = bool(indicator_search)
         self.df_dict = df_dict
         self.timeframes = timeframes or list(df_dict.keys())
         self.n_trials = n_trials
@@ -60,6 +67,11 @@ class MultiTimeframeOptimizer(QThread):
         self.ticker = ticker
         self.all_results = []
         self.best_params_per_tf = {}
+        # Inputs for the anti-overfit gates (optimization.validation):
+        # every trial's annualized Sharpe, and the top parameter sets of the
+        # final phase as CSCV rivals
+        self.trial_sharpes: List[float] = []
+        self.rival_params: List[Dict] = []
         self.base_eq_curve = None
         self.stopped = False
 
@@ -211,6 +223,69 @@ class MultiTimeframeOptimizer(QThread):
 
         return float(psr), float(sharpe)
 
+    def compute_signals(self, params: Dict) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Compute (enter_signal, exit_signal) boolean arrays on the finest
+        timeframe for a parameter set. Shared by simulate_multi_tf and the
+        regime-switching engine so signal semantics can never diverge.
+
+        Indicator semantics live in signals.engine.evaluate_combo (legacy
+        RSI params and mixed indicator combos alike); this method adds the
+        calendar-anchored time cycle, the warm-up mask, and the lag-one
+        coarse-to-fine timeframe mapping.
+        """
+        n_bars = len(self.np_data[self.finest_tf]["close"])
+
+        # Pre-allocate signal arrays
+        enter_signal = np.ones(n_bars, dtype=bool)
+        exit_signal = np.zeros(n_bars, dtype=bool)
+
+        # Calculate signals for each timeframe
+        for tf in self.timeframes:
+            close_tf = self.np_data[tf]["close"]
+
+            # Indicator combo entry/exit conditions (causal)
+            entry_ok, exit_ok, warmup = evaluate_combo(close_tf, params, tf)
+
+            # Vectorized cycle (guard against a zero-length period).
+            # Anchored to calendar time so the phase is identical across
+            # backtests, walk-forward windows, and live trading.
+            on = int(params[f"On_{tf}"])
+            off = int(params[f"Off_{tf}"])
+            start = int(params[f"Start_{tf}"])
+            period = max(1, on + off)
+            anchor = self.np_data[tf]["anchor"]
+            cycle = ((anchor - start) % period) < on
+
+            # Block entries during the indicator warm-up region, where
+            # oscillators are computed from partial windows
+            warmed_up = np.arange(len(close_tf)) >= warmup
+
+            # Map to finest timeframe
+            if tf != self.finest_tf:
+                indices = self.tf_indices[tf]
+                valid_mask = indices >= 0
+                indices_clipped = np.clip(indices, 0, len(entry_ok) - 1)
+                entry_mapped = np.zeros(n_bars, dtype=bool)
+                exit_mapped = np.zeros(n_bars, dtype=bool)
+                cycle_mapped = np.zeros(n_bars, dtype=bool)
+                warmed_up_mapped = np.zeros(n_bars, dtype=bool)
+                entry_mapped[valid_mask] = entry_ok[indices_clipped[valid_mask]]
+                exit_mapped[valid_mask] = exit_ok[indices_clipped[valid_mask]]
+                cycle_mapped[valid_mask] = cycle[indices_clipped[valid_mask]]
+                warmed_up_mapped[valid_mask] = warmed_up[indices_clipped[valid_mask]]
+            else:
+                entry_mapped = entry_ok
+                exit_mapped = exit_ok
+                cycle_mapped = cycle
+                warmed_up_mapped = warmed_up
+
+            # Signals
+            enter_signal &= entry_mapped & cycle_mapped & warmed_up_mapped
+            exit_signal |= exit_mapped | (~cycle_mapped)
+
+        return enter_signal, exit_signal
+
     def simulate_multi_tf(self, params: Dict, return_trades: bool = False):
         """
         FIXED VERSION - Now properly returns trade log with actual returns
@@ -225,57 +300,7 @@ class MultiTimeframeOptimizer(QThread):
             datetime_finest = self.np_data[self.finest_tf]["datetime"]
             n_bars = len(close_finest)
 
-            # Pre-allocate signal arrays
-            enter_signal = np.ones(n_bars, dtype=bool)
-            exit_signal = np.zeros(n_bars, dtype=bool)
-
-            # Calculate signals for each timeframe
-            for tf in self.timeframes:
-                mn1 = int(params[f"MN1_{tf}"])
-                mn2 = int(params[f"MN2_{tf}"])
-                entry = params[f"Entry_{tf}"]
-                exit_val = params[f"Exit_{tf}"]
-
-                close_tf = self.np_data[tf]["close"]
-
-                # Vectorized RSI
-                rsi = PerformanceMetrics.compute_rsi_vectorized(close_tf, mn1)
-                rsi_smooth = PerformanceMetrics.smooth_vectorized(rsi, mn2)
-
-                # Vectorized cycle (guard against a zero-length period).
-                # Anchored to calendar time so the phase is identical across
-                # backtests, walk-forward windows, and live trading.
-                on = int(params[f"On_{tf}"])
-                off = int(params[f"Off_{tf}"])
-                start = int(params[f"Start_{tf}"])
-                period = max(1, on + off)
-                anchor = self.np_data[tf]["anchor"]
-                cycle = ((anchor - start) % period) < on
-
-                # Block entries during the indicator warm-up region, where
-                # RSI/smoothing are computed from partial windows
-                warmup = mn1 + mn2
-                warmed_up = np.arange(len(close_tf)) >= warmup
-
-                # Map to finest timeframe
-                if tf != self.finest_tf:
-                    indices = self.tf_indices[tf]
-                    valid_mask = indices >= 0
-                    indices_clipped = np.clip(indices, 0, len(rsi_smooth) - 1)
-                    rsi_smooth_mapped = np.zeros(n_bars)
-                    cycle_mapped = np.zeros(n_bars, dtype=bool)
-                    warmed_up_mapped = np.zeros(n_bars, dtype=bool)
-                    rsi_smooth_mapped[valid_mask] = rsi_smooth[indices_clipped[valid_mask]]
-                    cycle_mapped[valid_mask] = cycle[indices_clipped[valid_mask]]
-                    warmed_up_mapped[valid_mask] = warmed_up[indices_clipped[valid_mask]]
-                else:
-                    rsi_smooth_mapped = rsi_smooth
-                    cycle_mapped = cycle
-                    warmed_up_mapped = warmed_up
-
-                # Signals
-                enter_signal &= (rsi_smooth_mapped < entry) & cycle_mapped & warmed_up_mapped
-                exit_signal |= (rsi_smooth_mapped > exit_val) | (~cycle_mapped)
+            enter_signal, exit_signal = self.compute_signals(params)
 
             # Backtest simulation
             equity_curve = np.zeros(n_bars)
@@ -532,6 +557,7 @@ class MultiTimeframeOptimizer(QThread):
                         sharpe = PSRCalculator.calculate_sharpe_from_equity(
                             eq_curve, annualization_factor=self.annualization_factor
                         )
+                        self.trial_sharpes.append(float(sharpe))
 
                         # Reward having enough trades for statistical confidence
                         score = sharpe * self._trade_multiplier(trades)
@@ -643,7 +669,8 @@ class MultiTimeframeOptimizer(QThread):
                         # Copy base params (fast shallow copy)
                         params = base_params_rsi.copy()
 
-                        # Only update current timeframe RSI params (trial-specific)
+                        # Only update current timeframe indicator params
+                        # (trial-specific)
                         params[f"MN1_{tf}"] = trial.suggest_int(f"MN1_{tf}", *self.mn1_range)
                         params[f"MN2_{tf}"] = trial.suggest_int(f"MN2_{tf}", *self.mn2_range)
                         params[f"Entry_{tf}"] = trial.suggest_float(
@@ -653,10 +680,41 @@ class MultiTimeframeOptimizer(QThread):
                             f"Exit_{tf}", *self.exit_range, step=0.5
                         )
 
+                        if self.indicator_search:
+                            # Mix-and-match: which indicator drives leg 1,
+                            # optionally AND-ed with a second indicator
+                            params[f"IND1_{tf}"] = trial.suggest_categorical(
+                                f"IND1_{tf}", list(INDICATORS)
+                            )
+                            params[f"IND1_Inv_{tf}"] = trial.suggest_int(
+                                f"IND1_Inv_{tf}", 0, 1
+                            )
+                            ind2 = trial.suggest_categorical(
+                                f"IND2_{tf}", ["none"] + list(INDICATORS)
+                            )
+                            params[f"IND2_{tf}"] = ind2
+                            if ind2 != "none":
+                                params[f"IND2_P1_{tf}"] = trial.suggest_int(
+                                    f"IND2_P1_{tf}", *self.mn1_range
+                                )
+                                params[f"IND2_P2_{tf}"] = trial.suggest_int(
+                                    f"IND2_P2_{tf}", *self.mn2_range
+                                )
+                                params[f"IND2_Entry_{tf}"] = trial.suggest_float(
+                                    f"IND2_Entry_{tf}", *self.entry_range, step=0.5
+                                )
+                                params[f"IND2_Exit_{tf}"] = trial.suggest_float(
+                                    f"IND2_Exit_{tf}", *self.exit_range, step=0.5
+                                )
+                                params[f"IND2_Inv_{tf}"] = trial.suggest_int(
+                                    f"IND2_Inv_{tf}", 0, 1
+                                )
+
                         # Run simulation once and cache results
                         eq_curve, trade_count = self.simulate_multi_tf(params)
 
                         psr, sharpe = self.psr_sharpe_from_curve(eq_curve, trade_count)
+                        self.trial_sharpes.append(float(sharpe))
 
                         # Scale by statistical confidence in the trade sample
                         trade_multiplier = self._trade_multiplier(trade_count)
@@ -773,14 +831,23 @@ class MultiTimeframeOptimizer(QThread):
                         "check data quality and parameter ranges"
                     )
 
-                best_rsi = {
-                    f"MN1_{tf}": rsi_study.best_params[f"MN1_{tf}"],
-                    f"MN2_{tf}": rsi_study.best_params[f"MN2_{tf}"],
-                    f"Entry_{tf}": rsi_study.best_params[f"Entry_{tf}"],
-                    f"Exit_{tf}": rsi_study.best_params[f"Exit_{tf}"],
-                }
+                # Take every suggested key of the best trial (all keys are
+                # namespaced with _{tf}); with indicator_search this
+                # includes the IND1/IND2 choices and their sub-params
+                best_rsi = dict(rsi_study.best_params)
 
                 self.best_params_per_tf[tf].update(best_rsi)
+
+                # Keep the top parameter sets of this (final) phase as CSCV
+                # rivals for the anti-overfit validation
+                completed = [
+                    t
+                    for t in rsi_study.trials
+                    if t.state == optuna.trial.TrialState.COMPLETE
+                    and t.user_attrs.get("params")
+                ]
+                completed.sort(key=lambda t: t.value, reverse=True)
+                self.rival_params = [t.user_attrs["params"] for t in completed[:12]]
 
                 print(f"✓ Phase {phase_counter} Complete - RSI optimized")
 
