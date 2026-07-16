@@ -1,11 +1,26 @@
 """
-Multi-Timeframe Optimization Engine - COMPLETE WITH ORGANIZED STORAGE
-PSR calculation NO LONGER includes walk-forward analysis
-Walk-forward is now a separate button/function
+Multi-Timeframe Optimization Engine
+
+Optimizes the time-cycle + indicator-combo strategy per timeframe with a
+user-selectable objective (Sharpe, Sortino, Calmar, total return, profit
+factor, win rate, expectancy - see optimization.objectives). Every trial's
+full metric suite is computed once and saved, so results CSVs carry the
+complete institutional picture regardless of which goal was optimized.
+
+Modes:
+  - cycle_only=True    optimize ONLY the time cycle (no indicators at all)
+  - indicator_search   mix-and-match indicators from the signal library,
+                       restricted to `allowed_indicators`, with an optional
+                       AND-combined second leg (`combine_indicators`)
+  - legacy             indicator_search=False reproduces the original
+                       RSI-only parameter search
+
+Walk-forward analysis stays a separate function (optimization.walk_forward)
+and the anti-overfit gates live in optimization.validation.
 """
 
 import copy
-from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import optuna
@@ -14,8 +29,8 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from config.settings import Paths
 from optimization.metrics import PerformanceMetrics
-from optimization.psr_composite import PSRCalculator
-from signals.engine import evaluate_combo
+from optimization.objectives import DEFAULT_OBJECTIVE, get_objective, scored
+from signals.engine import CYCLE_ONLY, evaluate_combo
 from signals.indicators import INDICATORS
 
 if TYPE_CHECKING:
@@ -25,7 +40,7 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 
 class MultiTimeframeOptimizer(QThread):
-    """Multi-timeframe strategy optimizer with PSR (no WFA in optimization)"""
+    """Multi-timeframe strategy optimizer with selectable objective"""
 
     progress = pyqtSignal(int)
     new_best = pyqtSignal(dict)
@@ -49,12 +64,32 @@ class MultiTimeframeOptimizer(QThread):
         transaction_costs: Optional["TransactionCosts"] = None,
         position_size: float = 1.0,
         indicator_search: bool = True,
+        objective: str = DEFAULT_OBJECTIVE,
+        cycle_only: bool = False,
+        allowed_indicators: Optional[Sequence[str]] = None,
+        combine_indicators: bool = True,
+        seed: Optional[int] = None,
     ):
         super().__init__()
-        # When True the optimizer mixes and matches indicators from the
-        # signal library (categorical choice + optional second leg) instead
-        # of optimizing RSI only
+        # Validates the objective name up front (fail fast, not mid-run)
+        self.objective = get_objective(objective).name
+
+        # Search-space switches
+        self.cycle_only = bool(cycle_only)
         self.indicator_search = bool(indicator_search)
+        self.combine_indicators = bool(combine_indicators)
+        allowed = list(allowed_indicators) if allowed_indicators else list(INDICATORS)
+        unknown = [i for i in allowed if i not in INDICATORS]
+        if unknown:
+            raise ValueError(f"Unknown indicators {unknown} (choose from {INDICATORS})")
+        if not allowed:
+            raise ValueError("allowed_indicators must not be empty")
+        self.allowed_indicators = allowed
+
+        # Reproducibility: fixed sampler seed makes single-worker runs
+        # repeatable (with n_jobs > 1, scheduling order still varies)
+        self.seed = seed
+
         self.df_dict = df_dict
         self.timeframes = timeframes or list(df_dict.keys())
         self.n_trials = n_trials
@@ -74,6 +109,12 @@ class MultiTimeframeOptimizer(QThread):
         self.rival_params: List[Dict] = []
         self.base_eq_curve = None
         self.stopped = False
+
+        # All rows destined for the results CSV. The file is rewritten in
+        # full after each batch: appending with header=False corrupted the
+        # CSV whenever different batches had different parameter columns
+        # (e.g. one batch's best used IND2, the next didn't).
+        self._result_rows: List[Dict] = []
 
         # Fraction of equity deployed per trade. Must match live position
         # sizing or backtest metrics won't describe the live system.
@@ -148,9 +189,10 @@ class MultiTimeframeOptimizer(QThread):
                 indices[mask] = idx
 
             # Shift to the PREVIOUS completed coarse bar. A coarse bar's
-            # close (and therefore its RSI) is only known once that bar
-            # finishes, so mapping a coarse bar onto the finest bars inside
-            # the same period would leak future information (lookahead bias).
+            # close (and therefore its indicators) is only known once that
+            # bar finishes, so mapping a coarse bar onto the finest bars
+            # inside the same period would leak future information
+            # (lookahead bias).
             indices = np.where(indices >= 0, indices - 1, -1).astype(np.int32)
 
             self.tf_indices[tf] = indices
@@ -169,59 +211,36 @@ class MultiTimeframeOptimizer(QThread):
             return 252.0
         if self.finest_tf == "hourly":
             return 252.0 * 6.5
-        return 252.0 * 6.5 * 12  # 5min
+        if self.finest_tf == "5min":
+            return 252.0 * 6.5 * 12
+        return 252.0 * 6.5 * 60  # 1min
 
-    @staticmethod
-    def _trade_multiplier(trade_count: int) -> float:
-        """Scale scores by statistical confidence in the trade sample"""
-        if trade_count < 10:
-            return 0.0
-        if trade_count < 30:
-            return (trade_count - 10) / 20.0
-        return 1.0
-
-    def calculate_psr(self, params: Dict) -> Tuple[float, float]:
+    def evaluate_params(self, params: Dict) -> Tuple[float, float, Optional[Dict], int]:
         """
-        Calculate PSR and Sharpe for given parameters
-        Returns (psr, sharpe) tuple
+        Simulate one parameter set and score it under the configured
+        objective.
+
+        Returns:
+            (raw_objective_value, confidence_scaled_score, metrics, trades)
+            where `score` is the raw objective value scaled by the trade-
+            count confidence multiplier (fewer than 10 trades scores 0).
         """
-        # Run full backtest
-        eq_curve, trade_count = self.simulate_multi_tf(params)
-        return self.psr_sharpe_from_curve(eq_curve, trade_count)
-
-    def psr_sharpe_from_curve(self, eq_curve, trade_count: int) -> Tuple[float, float]:
-        """Calculate (psr, sharpe) from an already-simulated equity curve"""
-        if eq_curve is None or len(eq_curve) < 50 or trade_count < 10:
-            return 0.0, 0.0
-
-        # Calculate returns
-        returns = np.diff(eq_curve) / eq_curve[:-1]
-        returns = returns[~(np.isnan(returns) | np.isinf(returns))]
-
-        if len(returns) < 30:
-            return 0.0, 0.0
-
-        ann_factor = self.annualization_factor
-
-        # Calculate PSR (with trade-count awareness for realistic confidence)
-        psr = PSRCalculator.calculate_psr(
-            returns,
-            benchmark_sharpe=0.0,
-            annualization_factor=ann_factor,
-            trade_count=trade_count,
+        eq_curve, trade_count, trade_pcts = self.simulate_multi_tf(
+            params, return_trade_pcts=True
         )
+        if eq_curve is None or len(eq_curve) < 50:
+            return 0.0, 0.0, None, 0
 
-        # Calculate Sharpe Ratio
-        mean_ret = np.mean(returns)
-        std_ret = np.std(returns, ddof=1)
+        metrics = PerformanceMetrics.calculate_metrics(
+            eq_curve,
+            annualization_factor=self.annualization_factor,
+            trade_returns=trade_pcts,
+        )
+        if metrics is None:
+            return 0.0, 0.0, None, int(trade_count)
 
-        if std_ret > 0:
-            sharpe = (mean_ret / std_ret) * np.sqrt(ann_factor)
-            sharpe = np.clip(sharpe, -5, 10)
-        else:
-            sharpe = 0.0
-
-        return float(psr), float(sharpe)
+        raw, score = scored(self.objective, metrics, trade_count)
+        return raw, score, metrics, int(trade_count)
 
     def compute_signals(self, params: Dict) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -230,9 +249,9 @@ class MultiTimeframeOptimizer(QThread):
         regime-switching engine so signal semantics can never diverge.
 
         Indicator semantics live in signals.engine.evaluate_combo (legacy
-        RSI params and mixed indicator combos alike); this method adds the
-        calendar-anchored time cycle, the warm-up mask, and the lag-one
-        coarse-to-fine timeframe mapping.
+        RSI params, mixed indicator combos, and cycle-only sets alike);
+        this method adds the calendar-anchored time cycle, the warm-up
+        mask, and the lag-one coarse-to-fine timeframe mapping.
         """
         n_bars = len(self.np_data[self.finest_tf]["close"])
 
@@ -286,12 +305,29 @@ class MultiTimeframeOptimizer(QThread):
 
         return enter_signal, exit_signal
 
-    def simulate_multi_tf(self, params: Dict, return_trades: bool = False):
+    def simulate_multi_tf(
+        self, params: Dict, return_trades: bool = False, return_trade_pcts: bool = False
+    ):
         """
-        FIXED VERSION - Now properly returns trade log with actual returns
+        Simulate a parameter set on the finest timeframe.
+
+        Returns:
+            (equity_curve, trade_count) by default;
+            (equity_curve, trade_count, trades) with return_trades=True;
+            (equity_curve, trade_count, trade_pcts) with
+            return_trade_pcts=True, where trade_pcts is a float array of
+            per-trade percent changes (cheap - used for trade-level metrics
+            on every optimization trial).
         """
+        def _empty():
+            if return_trades:
+                return None, 0, []
+            if return_trade_pcts:
+                return None, 0, np.array([])
+            return None, 0
+
         if self.stopped:
-            return (None, 0, []) if return_trades else (None, 0)
+            return _empty()
 
         try:
             # Get finest timeframe data
@@ -310,6 +346,7 @@ class MultiTimeframeOptimizer(QThread):
             entry_idx = 0
             trade_count = 0
             trades = [] if return_trades else None
+            trade_pcts: List[float] = []
 
             for i in range(n_bars):
                 if not position and enter_signal[i]:
@@ -342,6 +379,7 @@ class MultiTimeframeOptimizer(QThread):
 
                     # Calculate actual percent change (price move net of costs)
                     pct_change = (exit_price_with_costs / entry_price - 1) * 100
+                    trade_pcts.append(pct_change)
 
                     # Update equity, deploying position_size fraction of equity
                     # per trade (must match live sizing)
@@ -388,6 +426,7 @@ class MultiTimeframeOptimizer(QThread):
                 exit_price_with_costs = exit_price * (1 - exit_cost_pct)
 
                 pct_change = (exit_price_with_costs / entry_price - 1) * 100
+                trade_pcts.append(pct_change)
                 equity_before = equity
                 equity *= 1.0 + self.position_size * (
                     exit_price_with_costs / entry_price - 1.0
@@ -416,6 +455,8 @@ class MultiTimeframeOptimizer(QThread):
 
             if return_trades:
                 return equity_curve, trade_count, trades
+            if return_trade_pcts:
+                return equity_curve, trade_count, np.asarray(trade_pcts)
 
             return equity_curve, trade_count
 
@@ -424,7 +465,99 @@ class MultiTimeframeOptimizer(QThread):
             import traceback
 
             traceback.print_exc()
-            return (None, 0, []) if return_trades else (None, 0)
+            return _empty()
+
+    # ------------------------------------------------------------------
+    # Optimization phases
+    # ------------------------------------------------------------------
+
+    def _make_study(self, phase_index: int, trials_per_batch: int) -> optuna.Study:
+        """One TPE study per phase (seeded per phase when a seed is set)"""
+        return optuna.create_study(
+            direction="maximize",
+            sampler=optuna.samplers.TPESampler(
+                n_startup_trials=min(10, trials_per_batch),
+                multivariate=False,
+                warn_independent_sampling=False,
+                seed=None if self.seed is None else self.seed + phase_index,
+            ),
+        )
+
+    def _default_indicator_params(self, tf: str) -> Dict:
+        """Neutral indicator parameters for a timeframe that has not been
+        optimized yet (cycle-only mode disables indicators entirely)"""
+        if self.cycle_only:
+            return {f"IND1_{tf}": CYCLE_ONLY}
+        return {
+            f"MN1_{tf}": (self.mn1_range[0] + self.mn1_range[1]) // 2,
+            f"MN2_{tf}": (self.mn2_range[0] + self.mn2_range[1]) // 2,
+            f"Entry_{tf}": (self.entry_range[0] + self.entry_range[1]) / 2,
+            f"Exit_{tf}": (self.exit_range[0] + self.exit_range[1]) / 2,
+        }
+
+    def _record_trial(self, trial: optuna.trial.Trial, params: Dict):
+        """Evaluate a trial's params, attach everything the reporting needs
+        as user attrs, and return the score to maximize"""
+        raw, score, metrics, trade_count = self.evaluate_params(params)
+
+        if metrics is not None:
+            self.trial_sharpes.append(float(metrics.get("Sharpe_Ratio", 0.0)))
+
+        trial.set_user_attr("params", params)
+        trial.set_user_attr("objective_raw", float(raw))
+        trial.set_user_attr("score", float(score))
+        trial.set_user_attr("metrics", metrics)
+        trial.set_user_attr("trade_count", trade_count)
+        return score
+
+    def _save_batch_results(
+        self, study: optuna.Study, n_before: int, batch_idx: int, phase_counter: int,
+        results_path,
+    ):
+        """Append this batch's top-5 rows and rewrite the results CSV.
+        Rewriting (instead of appending without a header) keeps columns
+        aligned even when parameter sets differ across batches."""
+        batch_trials = sorted(
+            [
+                t
+                for t in study.trials[n_before:]
+                if t.state == optuna.trial.TrialState.COMPLETE
+            ],
+            key=lambda t: t.value,
+            reverse=True,
+        )[:5]
+
+        added = 0
+        for trial in batch_trials:
+            params = trial.user_attrs.get("params", {})
+            metrics = trial.user_attrs.get("metrics")
+            if not params or metrics is None:
+                continue
+
+            row = dict(params)
+            row.update(metrics)
+            row["Trade_Count"] = trial.user_attrs.get("trade_count", 0)
+            row["Objective"] = self.objective
+            row["Objective_Score"] = trial.user_attrs.get("objective_raw", 0.0)
+            row["Batch"] = batch_idx + 1
+            row["Phase"] = phase_counter
+            self._result_rows.append(row)
+            added += 1
+
+        if added:
+            pd.DataFrame(self._result_rows).to_csv(results_path, index=False)
+            print(f"   💾 Saved {added} results (CSV now {len(self._result_rows)} rows)")
+
+    def _collect_rivals(self, study: optuna.Study):
+        """Keep the top parameter sets of the final phase as CSCV rivals
+        for the anti-overfit validation"""
+        completed = [
+            t
+            for t in study.trials
+            if t.state == optuna.trial.TrialState.COMPLETE and t.user_attrs.get("params")
+        ]
+        completed.sort(key=lambda t: t.value, reverse=True)
+        self.rival_params = [t.user_attrs["params"] for t in completed[:12]]
 
     def run(self):
         """Sequential optimization with parallel batching and incremental CSV saves"""
@@ -436,27 +569,27 @@ class MultiTimeframeOptimizer(QThread):
             n_cpus = multiprocessing.cpu_count()
             n_jobs = max(1, n_cpus - 1)  # Leave 1 core for OS
 
+            spec = get_objective(self.objective)
+
             print(f"\n{'='*60}")
-            print(f"PSR COMPOSITE OPTIMIZATION (PARALLEL BATCHED)")
+            print(f"STRATEGY OPTIMIZATION (objective: {spec.label})")
             print(f"{'='*60}")
             print(f"Ticker: {self.ticker}")
             print(f"Timeframes: {self.timeframes}")
+            print(f"Mode: {'TIME CYCLE ONLY' if self.cycle_only else 'cycle + indicators'}")
+            if not self.cycle_only and self.indicator_search:
+                print(f"Indicators: {self.allowed_indicators}")
+                print(f"Combine two indicators: {self.combine_indicators}")
             print(f"Total trials: {self.n_trials}")
             print(f"Batch size: {self.batch_size}")
             print(f"CPU cores: {n_cpus} (using {n_jobs} for optimization)")
             print(f"{'='*60}\n")
 
-            print("📊 Using PSR Composite Optimization")
-            print(f"   Parallel Processing: {n_jobs} workers per batch")
-            print(f"   Memory Management: Clear after each batch")
-            print(f"   Incremental Saves: Append to CSV after each batch")
-            print()
-
             on_range, off_range, start_range = self.time_cycle_ranges
 
-            phases_per_tf = 2
+            phases_per_tf = 1 if self.cycle_only else 2
             total_phases = len(self.timeframes) * phases_per_tf
-            trials_per_phase = max(50, self.n_trials // (len(self.timeframes) * phases_per_tf))
+            trials_per_phase = max(50, self.n_trials // total_phases)
 
             # Calculate batches per phase
             batches_per_phase = max(1, trials_per_phase // self.batch_size)
@@ -470,9 +603,11 @@ class MultiTimeframeOptimizer(QThread):
 
             phase_counter = 0
 
-            # Initialize results CSV
-            results_path = Paths.get_results_path(self.ticker, suffix="_psr_batched")
-            csv_initialized = False
+            results_path = Paths.get_results_path(
+                self.ticker, suffix=f"_{self.objective}"
+            )
+
+            final_study = None
 
             # Optimize each timeframe sequentially
             for tf_idx, tf in enumerate(self.timeframes):
@@ -480,7 +615,7 @@ class MultiTimeframeOptimizer(QThread):
                     break
 
                 # ===================================================================
-                # PHASE: Optimize Cycle (with batching)
+                # PHASE: Optimize Time Cycle (with batching)
                 # ===================================================================
                 phase_counter += 1
                 phase_msg = f"Phase {phase_counter}/{total_phases}: {tf.upper()} Time Cycle..."
@@ -489,37 +624,20 @@ class MultiTimeframeOptimizer(QThread):
                 print(f"PHASE {phase_counter}: {tf.upper()} TIME CYCLE (BATCHED)")
                 print(f"{'='*60}")
 
-                cycle_study = optuna.create_study(
-                    direction="maximize",
-                    sampler=optuna.samplers.TPESampler(
-                        n_startup_trials=min(10, trials_per_batch),
-                        multivariate=False,
-                        warn_independent_sampling=False,
-                    ),
-                )
+                cycle_study = self._make_study(phase_counter, trials_per_batch)
 
-                # Pre-build base parameters once (optimization!)
+                # Pre-build base parameters once
                 base_params_cycle = {}
                 for prev_tf in self.timeframes[:tf_idx]:
                     base_params_cycle.update(self.best_params_per_tf[prev_tf])
 
-                mn1_default = (self.mn1_range[0] + self.mn1_range[1]) // 2
-                mn2_default = (self.mn2_range[0] + self.mn2_range[1]) // 2
-                entry_default = (self.entry_range[0] + self.entry_range[1]) / 2
-                exit_default = (self.exit_range[0] + self.exit_range[1]) / 2
-
-                # Current timeframe defaults
-                base_params_cycle[f"MN1_{tf}"] = mn1_default
-                base_params_cycle[f"MN2_{tf}"] = mn2_default
-                base_params_cycle[f"Entry_{tf}"] = entry_default
-                base_params_cycle[f"Exit_{tf}"] = exit_default
+                # Current timeframe indicator defaults (neutral placeholder;
+                # the indicator phase optimizes them afterwards)
+                base_params_cycle.update(self._default_indicator_params(tf))
 
                 # Future timeframes defaults
                 for future_tf in self.timeframes[tf_idx + 1 :]:
-                    base_params_cycle[f"MN1_{future_tf}"] = mn1_default
-                    base_params_cycle[f"MN2_{future_tf}"] = mn2_default
-                    base_params_cycle[f"Entry_{future_tf}"] = entry_default
-                    base_params_cycle[f"Exit_{future_tf}"] = exit_default
+                    base_params_cycle.update(self._default_indicator_params(future_tf))
                     base_params_cycle[f"On_{future_tf}"] = on_range[0]
                     base_params_cycle[f"Off_{future_tf}"] = off_range[0]
                     base_params_cycle[f"Start_{future_tf}"] = 0
@@ -532,6 +650,7 @@ class MultiTimeframeOptimizer(QThread):
                     print(f"\n📦 Batch {batch_idx + 1}/{batches_per_phase}")
 
                     trial_count = [0]
+                    n_trials_before_batch = len(cycle_study.trials)
 
                     def objective_cycle(trial):
                         if self.stopped:
@@ -549,18 +668,7 @@ class MultiTimeframeOptimizer(QThread):
                             f"Start_{tf}", 0, on_range[1] + off_range[1]
                         )
 
-                        eq_curve, trades = self.simulate_multi_tf(params)
-
-                        if eq_curve is None or len(eq_curve) < 50:
-                            return 0.0
-
-                        sharpe = PSRCalculator.calculate_sharpe_from_equity(
-                            eq_curve, annualization_factor=self.annualization_factor
-                        )
-                        self.trial_sharpes.append(float(sharpe))
-
-                        # Reward having enough trades for statistical confidence
-                        score = sharpe * self._trade_multiplier(trades)
+                        score = self._record_trial(trial, params)
 
                         # Update progress
                         batch_progress = batch_idx / batches_per_phase
@@ -581,10 +689,18 @@ class MultiTimeframeOptimizer(QThread):
                     cycle_study.optimize(
                         objective_cycle,
                         n_trials=trials_per_batch,
-                        n_jobs=n_jobs,  # ✅ PARALLEL PROCESSING
+                        n_jobs=n_jobs,
                         catch=(Exception,),
                         show_progress_bar=False,
                     )
+
+                    # In cycle-only mode this is the phase that produces the
+                    # results people care about - persist it
+                    if self.cycle_only:
+                        self._save_batch_results(
+                            cycle_study, n_trials_before_batch, batch_idx,
+                            phase_counter, results_path,
+                        )
 
                     print(f"   ✓ Batch {batch_idx + 1} complete")
 
@@ -610,47 +726,42 @@ class MultiTimeframeOptimizer(QThread):
                     self.best_params_per_tf[tf] = {}
                 self.best_params_per_tf[tf].update(best_cycle)
 
+                if self.cycle_only:
+                    # Strategy for this timeframe is the cycle alone
+                    self.best_params_per_tf[tf][f"IND1_{tf}"] = CYCLE_ONLY
+                    final_study = cycle_study
+                    print(f"✓ Phase {phase_counter} Complete - Cycle params optimized")
+                    continue
+
+                final_study = cycle_study
                 print(f"✓ Phase {phase_counter} Complete - Cycle params optimized")
 
                 # ===================================================================
-                # PHASE: Optimize RSI (with batching + CSV saves)
+                # PHASE: Optimize Indicators (with batching + CSV saves)
                 # ===================================================================
                 phase_counter += 1
-                self.phase_update.emit(f"Phase {phase_counter}/{total_phases}: {tf.upper()} RSI...")
-                print(f"\nPHASE {phase_counter}: {tf.upper()} RSI (BATCHED PSR)")
-
-                rsi_study = optuna.create_study(
-                    direction="maximize",
-                    sampler=optuna.samplers.TPESampler(
-                        n_startup_trials=min(10, trials_per_batch),
-                        multivariate=False,
-                        warn_independent_sampling=False,
-                    ),
+                self.phase_update.emit(
+                    f"Phase {phase_counter}/{total_phases}: {tf.upper()} Indicators..."
                 )
+                print(f"\nPHASE {phase_counter}: {tf.upper()} INDICATORS (BATCHED)")
 
-                # Pre-build base parameters once (optimization!)
-                base_params_rsi = {}
+                ind_study = self._make_study(phase_counter, trials_per_batch)
+
+                # Pre-build base parameters once
+                base_params_ind = {}
                 for prev_tf in self.timeframes[:tf_idx]:
-                    base_params_rsi.update(self.best_params_per_tf[prev_tf])
+                    base_params_ind.update(self.best_params_per_tf[prev_tf])
 
-                base_params_rsi.update(best_cycle)
+                base_params_ind.update(best_cycle)
 
                 # Future timeframes defaults
                 for future_tf in self.timeframes[tf_idx + 1 :]:
-                    mn1_default = (self.mn1_range[0] + self.mn1_range[1]) // 2
-                    mn2_default = (self.mn2_range[0] + self.mn2_range[1]) // 2
-                    entry_default = (self.entry_range[0] + self.entry_range[1]) / 2
-                    exit_default = (self.exit_range[0] + self.exit_range[1]) / 2
+                    base_params_ind.update(self._default_indicator_params(future_tf))
+                    base_params_ind[f"On_{future_tf}"] = on_range[0]
+                    base_params_ind[f"Off_{future_tf}"] = off_range[0]
+                    base_params_ind[f"Start_{future_tf}"] = 0
 
-                    base_params_rsi[f"MN1_{future_tf}"] = mn1_default
-                    base_params_rsi[f"MN2_{future_tf}"] = mn2_default
-                    base_params_rsi[f"Entry_{future_tf}"] = entry_default
-                    base_params_rsi[f"Exit_{future_tf}"] = exit_default
-                    base_params_rsi[f"On_{future_tf}"] = on_range[0]
-                    base_params_rsi[f"Off_{future_tf}"] = off_range[0]
-                    base_params_rsi[f"Start_{future_tf}"] = 0
-
-                # Run RSI optimization in batches with CSV saves
+                # Run indicator optimization in batches with CSV saves
                 for batch_idx in range(batches_per_phase):
                     if self.stopped:
                         break
@@ -658,16 +769,15 @@ class MultiTimeframeOptimizer(QThread):
                     print(f"\n📦 Batch {batch_idx + 1}/{batches_per_phase}")
 
                     trial_count = [0]
-                    batch_results = []
 
-                    def objective_rsi(trial):
+                    def objective_ind(trial):
                         if self.stopped:
                             raise optuna.exceptions.OptunaError("Stopped by user")
 
                         trial_count[0] += 1
 
                         # Copy base params (fast shallow copy)
-                        params = base_params_rsi.copy()
+                        params = base_params_ind.copy()
 
                         # Only update current timeframe indicator params
                         # (trial-specific)
@@ -684,14 +794,17 @@ class MultiTimeframeOptimizer(QThread):
                             # Mix-and-match: which indicator drives leg 1,
                             # optionally AND-ed with a second indicator
                             params[f"IND1_{tf}"] = trial.suggest_categorical(
-                                f"IND1_{tf}", list(INDICATORS)
+                                f"IND1_{tf}", list(self.allowed_indicators)
                             )
                             params[f"IND1_Inv_{tf}"] = trial.suggest_int(
                                 f"IND1_Inv_{tf}", 0, 1
                             )
-                            ind2 = trial.suggest_categorical(
-                                f"IND2_{tf}", ["none"] + list(INDICATORS)
-                            )
+                            if self.combine_indicators:
+                                ind2 = trial.suggest_categorical(
+                                    f"IND2_{tf}", ["none"] + list(self.allowed_indicators)
+                                )
+                            else:
+                                ind2 = "none"
                             params[f"IND2_{tf}"] = ind2
                             if ind2 != "none":
                                 params[f"IND2_P1_{tf}"] = trial.suggest_int(
@@ -710,31 +823,7 @@ class MultiTimeframeOptimizer(QThread):
                                     f"IND2_Inv_{tf}", 0, 1
                                 )
 
-                        # Run simulation once and cache results
-                        eq_curve, trade_count = self.simulate_multi_tf(params)
-
-                        psr, sharpe = self.psr_sharpe_from_curve(eq_curve, trade_count)
-                        self.trial_sharpes.append(float(sharpe))
-
-                        # Scale by statistical confidence in the trade sample
-                        trade_multiplier = self._trade_multiplier(trade_count)
-                        psr = psr * trade_multiplier
-                        sharpe = sharpe * trade_multiplier
-
-                        # Compute display metrics now and store only the small
-                        # dict - keeping full equity curves alive in the study
-                        # for every trial leaks memory across batches
-                        trial_metrics = None
-                        if eq_curve is not None and len(eq_curve) >= 50:
-                            trial_metrics = PerformanceMetrics.calculate_metrics(
-                                eq_curve, annualization_factor=self.annualization_factor
-                            )
-
-                        trial.set_user_attr("params", params)
-                        trial.set_user_attr("psr", float(psr))
-                        trial.set_user_attr("sharpe", float(sharpe))
-                        trial.set_user_attr("metrics", trial_metrics)
-                        trial.set_user_attr("trade_count", trade_count)
+                        score = self._record_trial(trial, params)
 
                         # Update progress
                         batch_progress = batch_idx / batches_per_phase
@@ -749,107 +838,53 @@ class MultiTimeframeOptimizer(QThread):
                         ) * 100
                         self.progress.emit(int(total_progress))
 
-                        return psr
+                        return score
 
                     # Snapshot trial count so only THIS batch's trials get
-                    # saved below (the study accumulates across batches, and
-                    # re-sorting all trials re-appended earlier batches' top
-                    # results as duplicates)
-                    n_trials_before_batch = len(rsi_study.trials)
+                    # saved below (the study accumulates across batches)
+                    n_trials_before_batch = len(ind_study.trials)
 
                     # Run batch with parallel processing
-                    rsi_study.optimize(
-                        objective_rsi,
+                    ind_study.optimize(
+                        objective_ind,
                         n_trials=trials_per_batch,
-                        n_jobs=n_jobs,  # ✅ PARALLEL PROCESSING
+                        n_jobs=n_jobs,
                         catch=(Exception,),
                         show_progress_bar=False,
                     )
 
-                    # ✅ SAVE BATCH RESULTS TO CSV
-                    print(f"   💾 Saving batch results to CSV...")
-
-                    # Get top 5 results from this batch only
-                    batch_trials = sorted(
-                        [
-                            t
-                            for t in rsi_study.trials[n_trials_before_batch:]
-                            if t.state == optuna.trial.TrialState.COMPLETE
-                        ],
-                        key=lambda t: t.value,
-                        reverse=True,
-                    )[:5]
-
-                    for trial in batch_trials:
-                        params = trial.user_attrs.get("params", {})
-                        if not params:
-                            continue
-
-                        # Use cached results instead of re-simulating!
-                        metrics = trial.user_attrs.get("metrics")
-                        trade_count = trial.user_attrs.get("trade_count", 0)
-
-                        if metrics is None:
-                            continue
-
-                        metrics = dict(metrics)
-                        metrics["Trade_Count"] = trade_count
-                        metrics["PSR"] = trial.user_attrs.get("psr", 0.0)
-                        metrics["Sharpe_Ratio"] = trial.user_attrs.get("sharpe", 0.0)
-                        metrics["Batch"] = batch_idx + 1
-                        metrics["Phase"] = phase_counter
-
-                        result = {**params, **metrics, "Curve_Optimized": False}
-                        batch_results.append(result)
-
-                    # Append to CSV
-                    if batch_results:
-                        df_batch = pd.DataFrame(batch_results)
-
-                        if not csv_initialized:
-                            # First batch - create new file
-                            df_batch.to_csv(results_path, index=False, mode="w")
-                            csv_initialized = True
-                            print(f"   ✓ Created CSV: {results_path}")
-                        else:
-                            # Append to existing file
-                            df_batch.to_csv(results_path, index=False, mode="a", header=False)
-                            print(f"   ✓ Appended {len(batch_results)} results to CSV")
+                    self._save_batch_results(
+                        ind_study, n_trials_before_batch, batch_idx,
+                        phase_counter, results_path,
+                    )
 
                     print(f"   ✓ Batch {batch_idx + 1} complete")
 
                     # Memory cleanup after batch
-                    batch_results.clear()
                     gc.collect()
 
                 if self.stopped:
                     break
 
-                if not any(t.state == optuna.trial.TrialState.COMPLETE for t in rsi_study.trials):
+                if not any(t.state == optuna.trial.TrialState.COMPLETE for t in ind_study.trials):
                     raise ValueError(
-                        f"No completed trials in {tf} RSI phase - "
+                        f"No completed trials in {tf} indicator phase - "
                         "check data quality and parameter ranges"
                     )
 
                 # Take every suggested key of the best trial (all keys are
                 # namespaced with _{tf}); with indicator_search this
                 # includes the IND1/IND2 choices and their sub-params
-                best_rsi = dict(rsi_study.best_params)
+                best_ind = dict(ind_study.best_params)
+                if self.indicator_search and not self.combine_indicators:
+                    # IND2 was forced off, not suggested - record it so the
+                    # stored parameter set is self-describing
+                    best_ind[f"IND2_{tf}"] = "none"
 
-                self.best_params_per_tf[tf].update(best_rsi)
+                self.best_params_per_tf[tf].update(best_ind)
+                final_study = ind_study
 
-                # Keep the top parameter sets of this (final) phase as CSCV
-                # rivals for the anti-overfit validation
-                completed = [
-                    t
-                    for t in rsi_study.trials
-                    if t.state == optuna.trial.TrialState.COMPLETE
-                    and t.user_attrs.get("params")
-                ]
-                completed.sort(key=lambda t: t.value, reverse=True)
-                self.rival_params = [t.user_attrs["params"] for t in completed[:12]]
-
-                print(f"✓ Phase {phase_counter} Complete - RSI optimized")
+                print(f"✓ Phase {phase_counter} Complete - Indicators optimized")
 
             # ===================================================================
             # Compile final best result
@@ -858,6 +893,9 @@ class MultiTimeframeOptimizer(QThread):
                 print("\nOptimization stopped by user")
                 self.finished.emit(pd.DataFrame())
                 return
+
+            if final_study is not None:
+                self._collect_rivals(final_study)
 
             print(f"\n{'='*60}")
             print(f"Compiling final best result...")
@@ -875,37 +913,52 @@ class MultiTimeframeOptimizer(QThread):
             if base_eq_curve is None:
                 raise ValueError("Final simulation failed")
 
+            trade_pcts = np.asarray(
+                [t["Percent_Change"] for t in base_trades], dtype=np.float64
+            )
             base_metrics = PerformanceMetrics.calculate_metrics(
-                base_eq_curve, annualization_factor=self.annualization_factor
+                base_eq_curve,
+                annualization_factor=self.annualization_factor,
+                trade_returns=trade_pcts,
             )
 
             if base_metrics is None:
                 raise ValueError("Failed to calculate performance metrics")
 
-            base_metrics["Trade_Count"] = base_trade_count
+            objective_raw, _ = scored(self.objective, base_metrics, base_trade_count)
 
-            # Calculate PSR and Sharpe from the curve already simulated above
-            psr, sharpe = self.psr_sharpe_from_curve(base_eq_curve, base_trade_count)
-            base_metrics["PSR"] = psr
-            base_metrics["Sharpe_Ratio"] = sharpe
+            base_metrics["Trade_Count"] = base_trade_count
+            base_metrics["Objective"] = self.objective
+            base_metrics["Objective_Score"] = objective_raw
             base_metrics["Batch"] = "FINAL"
             base_metrics["Phase"] = "FINAL"
 
-            print(f"✓ Calculated PSR: {psr:.3f}, Sharpe: {sharpe:.2f}")
+            # Buy & hold benchmark over the same bars, for honest context
+            bh_metrics = PerformanceMetrics.calculate_buyhold_metrics(
+                self.np_data[self.finest_tf]["close"],
+                annualization_factor=self.annualization_factor,
+            )
+            if bh_metrics:
+                base_metrics["BuyHold_Return_%"] = bh_metrics["Percent_Gain_%"]
+                base_metrics["BuyHold_Sharpe"] = bh_metrics["Sharpe_Ratio"]
+                base_metrics["BuyHold_MaxDD_%"] = bh_metrics["Max_Drawdown_%"]
 
-            # Append final result to CSV
-            final_result = {**base_params, **base_metrics, "Curve_Optimized": False}
+            print(
+                f"✓ {spec.label}: {objective_raw:{spec.fmt}} | "
+                f"Sharpe: {base_metrics['Sharpe_Ratio']:.2f} | "
+                f"Sortino: {base_metrics['Sortino_Ratio']:.2f}"
+            )
+
+            # Append final result and rewrite CSV
+            final_result = {**base_params, **base_metrics}
             self.all_results.append(final_result)
             self.new_best.emit(final_result)
 
-            df_final = pd.DataFrame([final_result])
-            df_final.to_csv(results_path, index=False, mode="a", header=False)
-            print(f"✓ Appended FINAL result to CSV")
-
+            self._result_rows.append(final_result)
+            pd.DataFrame(self._result_rows).to_csv(results_path, index=False)
             print(f"\n✅ Complete results saved to: {results_path}")
 
             # Build results DataFrame for GUI with equity curve and trade log
-            # Create a new DataFrame instead of loading from CSV to avoid issues with complex objects
             final_result_for_gui = final_result.copy()
             final_result_for_gui["equity_curve"] = base_eq_curve
             if base_trades:
@@ -918,15 +971,19 @@ class MultiTimeframeOptimizer(QThread):
             print(f"\n{'='*60}")
             print(f"OPTIMIZATION COMPLETE")
             print(f"{'='*60}")
-            print(f"Total saved results: {len(df_results)}")
-            print(f"Best PSR: {psr:.3f} ({psr*100:.1f}%)")
-            print(f"Best Sharpe Ratio: {sharpe:.2f}")
+            print(f"Objective ({spec.label}): {objective_raw:{spec.fmt}}")
 
-            print(f"\n📊 Traditional Metrics:")
+            print(f"\n📊 Metrics:")
             print(f"  Return: {final_result['Percent_Gain_%']:.2f}%")
+            if "BuyHold_Return_%" in final_result:
+                print(f"  Buy & Hold: {final_result['BuyHold_Return_%']:.2f}%")
+            print(f"  Sharpe: {final_result['Sharpe_Ratio']:.2f}")
             print(f"  Sortino: {final_result['Sortino_Ratio']:.2f}")
+            print(f"  Calmar: {final_result['Calmar_Ratio']:.2f}")
             print(f"  Max Drawdown: {final_result['Max_Drawdown_%']:.2f}%")
             print(f"  Profit Factor: {final_result['Profit_Factor']:.2f}")
+            if "Win_Rate_%" in final_result:
+                print(f"  Win Rate: {final_result['Win_Rate_%']:.1f}%")
             print(f"  Trades: {final_result['Trade_Count']}")
 
             print(f"\n⚙️  Optimized Parameters:")
@@ -940,11 +997,24 @@ class MultiTimeframeOptimizer(QThread):
                             f"    Time Cycle: ON={params[f'On_{tf}']}, OFF={params[f'Off_{tf}']}, START={params[f'Start_{tf}']}"
                         )
 
-                    if f"MN1_{tf}" in params:
-                        print(f"    RSI: MN1={params[f'MN1_{tf}']}, MN2={params[f'MN2_{tf}']}")
+                    if params.get(f"IND1_{tf}") == CYCLE_ONLY:
+                        print("    Indicators: none (time cycle only)")
+                    elif f"MN1_{tf}" in params:
+                        ind1 = params.get(f"IND1_{tf}", "rsi")
+                        print(
+                            f"    {str(ind1).upper()}: P1={params[f'MN1_{tf}']}, "
+                            f"P2={params[f'MN2_{tf}']}"
+                        )
                         print(
                             f"    Thresholds: ENTRY<{params[f'Entry_{tf}']:.1f}, EXIT>{params[f'Exit_{tf}']:.1f}"
                         )
+                        ind2 = params.get(f"IND2_{tf}", "none")
+                        if ind2 and ind2 != "none":
+                            print(
+                                f"    + {str(ind2).upper()}: "
+                                f"P1={params.get(f'IND2_P1_{tf}')}, "
+                                f"P2={params.get(f'IND2_P2_{tf}')}"
+                            )
 
             print(f"{'='*60}\n")
 

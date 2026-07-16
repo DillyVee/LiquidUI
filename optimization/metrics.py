@@ -1,10 +1,22 @@
 """
 Performance Metrics Calculation
+
+`calculate_metrics` produces the full institutional metric suite from an
+equity curve (and, when available, per-trade returns): total return, CAGR,
+annualized Sharpe/Sortino/Calmar, volatility, max drawdown, Ulcer index,
+VaR/CVaR, and trade-level statistics (win rate, profit factor, expectancy,
+payoff ratio). Every optimization objective reads from this one dict so a
+metric can never mean two different things in two places.
 """
 
 from typing import Dict, Optional
 
 import numpy as np
+
+# Annualized ratios explode when the deviation denominator is nearly zero
+# (e.g. one tiny losing bar); clip so ranking stays meaningful
+_RATIO_CAP = 100.0
+_PF_CAP = 1000.0
 
 
 class PerformanceMetrics:
@@ -12,15 +24,20 @@ class PerformanceMetrics:
 
     @staticmethod
     def calculate_metrics(
-        eq_curve: np.ndarray, annualization_factor: float = 252.0
+        eq_curve: np.ndarray,
+        annualization_factor: float = 252.0,
+        trade_returns: Optional[np.ndarray] = None,
     ) -> Optional[Dict[str, float]]:
         """
-        Calculate comprehensive performance metrics
+        Calculate comprehensive performance metrics.
 
         Args:
-            eq_curve: Equity curve as numpy array
+            eq_curve: Equity curve as numpy array (starts at 1000.0)
             annualization_factor: Periods per year for the equity curve's
                 bar frequency (252 daily, 252*6.5 hourly, 252*6.5*12 5-min)
+            trade_returns: Optional per-trade percent changes (e.g. [1.2,
+                -0.4, ...] in %). Enables trade-level statistics and a
+                trade-based profit factor.
 
         Returns:
             Dictionary of metrics or None if invalid
@@ -44,38 +61,118 @@ class PerformanceMetrics:
         if len(returns) == 0:
             return None
 
+        years = len(eq_curve) / float(annualization_factor)
+        if years > 0 and final_equity > 0:
+            cagr = ((final_equity / initial_equity) ** (1.0 / years) - 1.0) * 100
+        else:
+            cagr = 0.0
+
+        avg_return = np.mean(returns)
+        std_return = np.std(returns, ddof=1) if len(returns) > 1 else 0.0
+        volatility_ann = std_return * np.sqrt(annualization_factor) * 100
+
+        # Sharpe ratio (annualized, rf = 0)
+        sharpe = (
+            (avg_return / std_return) * np.sqrt(annualization_factor)
+            if std_return > 1e-12
+            else 0.0
+        )
+        sharpe = float(np.clip(sharpe, -_RATIO_CAP, _RATIO_CAP))
+
         # Sortino ratio (downside deviation), annualized to the bar frequency
         downside_returns = returns[returns < 0]
         downside_std = np.std(downside_returns, ddof=1) if len(downside_returns) > 1 else 1e-10
-        avg_return = np.mean(returns)
         sortino = (
             (avg_return / downside_std) * np.sqrt(annualization_factor)
             if downside_std > 1e-10
-            else 0
+            else 0.0
         )
+        sortino = float(np.clip(sortino, -_RATIO_CAP, _RATIO_CAP))
 
         # Maximum drawdown
         peak = np.maximum.accumulate(eq_curve)
         drawdown = (eq_curve - peak) / peak
         max_drawdown = np.min(drawdown) * 100
 
-        # Profit factor
+        # Calmar ratio: CAGR over max drawdown magnitude
+        if abs(max_drawdown) > 1e-9:
+            calmar = cagr / abs(max_drawdown)
+        else:
+            calmar = cagr if cagr > 0 else 0.0
+        calmar = float(np.clip(calmar, -_RATIO_CAP, _RATIO_CAP))
+
+        # Ulcer index: RMS of the drawdown-percentage series (depth AND
+        # duration of drawdowns, unlike max drawdown which is depth only)
+        ulcer = float(np.sqrt(np.mean((drawdown * 100) ** 2)))
+
+        # Historical VaR / CVaR at 95%, in percent per bar (losses positive)
+        if len(returns) >= 20:
+            var_95 = float(-np.percentile(returns, 5) * 100)
+            tail = returns[returns <= np.percentile(returns, 5)]
+            cvar_95 = float(-np.mean(tail) * 100) if len(tail) else var_95
+        else:
+            var_95 = 0.0
+            cvar_95 = 0.0
+
+        # Profit factor from per-bar equity changes (fallback when no trade
+        # log is available; overridden by the trade-based version below)
         equity_changes = np.diff(eq_curve)
         gross_profit = np.sum(equity_changes[equity_changes > 0])
         gross_loss = np.abs(np.sum(equity_changes[equity_changes < 0]))
-        profit_factor = (
-            gross_profit / gross_loss
-            if gross_loss > 0
-            else (gross_profit * 1000 if gross_profit > 0 else 1.0)
-        )
+        if gross_loss > 1e-12:
+            profit_factor = min(gross_profit / gross_loss, _PF_CAP)
+        else:
+            profit_factor = _PF_CAP if gross_profit > 0 else 1.0
 
-        return {
+        metrics = {
             "Final_Equity_$": round(final_equity, 2),
             "Percent_Gain_%": round(percent_gain, 2),
+            "CAGR_%": round(cagr, 2),
+            "Sharpe_Ratio": round(sharpe, 3),
             "Sortino_Ratio": round(sortino, 3),
+            "Calmar_Ratio": round(calmar, 3),
+            "Volatility_Ann_%": round(volatility_ann, 2),
             "Max_Drawdown_%": round(max_drawdown, 2),
+            "Ulcer_Index": round(ulcer, 3),
+            "VaR_95_%": round(var_95, 3),
+            "CVaR_95_%": round(cvar_95, 3),
             "Profit_Factor": round(profit_factor, 3),
         }
+
+        # Trade-level statistics (industry-standard definitions: computed
+        # over closed trades, not bars)
+        if trade_returns is not None:
+            tr = np.asarray(trade_returns, dtype=np.float64)
+            tr = tr[np.isfinite(tr)]
+            if len(tr) > 0:
+                wins = tr[tr > 0]
+                losses = tr[tr < 0]
+                win_rate = len(wins) / len(tr) * 100
+                avg_win = float(np.mean(wins)) if len(wins) else 0.0
+                avg_loss = float(np.mean(losses)) if len(losses) else 0.0
+                gross_win = float(np.sum(wins))
+                gross_lose = float(abs(np.sum(losses)))
+                if gross_lose > 1e-12:
+                    pf_trades = min(gross_win / gross_lose, _PF_CAP)
+                else:
+                    pf_trades = _PF_CAP if gross_win > 0 else 1.0
+                payoff = (
+                    min(avg_win / abs(avg_loss), _PF_CAP) if abs(avg_loss) > 1e-12 else 0.0
+                )
+                metrics.update(
+                    {
+                        "Win_Rate_%": round(win_rate, 2),
+                        "Profit_Factor": round(pf_trades, 3),
+                        "Avg_Win_%": round(avg_win, 3),
+                        "Avg_Loss_%": round(avg_loss, 3),
+                        "Payoff_Ratio": round(payoff, 3),
+                        "Expectancy_%": round(float(np.mean(tr)), 4),
+                        "Best_Trade_%": round(float(np.max(tr)), 2),
+                        "Worst_Trade_%": round(float(np.min(tr)), 2),
+                    }
+                )
+
+        return metrics
 
     @staticmethod
     def compute_rsi_vectorized(prices: np.ndarray, length: int) -> np.ndarray:
@@ -178,3 +275,20 @@ class PerformanceMetrics:
         if len(prices) < 2:
             return 0.0
         return (prices[-1] / prices[0] - 1) * 100
+
+    @staticmethod
+    def calculate_buyhold_metrics(
+        prices: np.ndarray, annualization_factor: float = 252.0
+    ) -> Optional[Dict[str, float]]:
+        """
+        Buy & hold benchmark metrics over a price series, on the same scale
+        as calculate_metrics (equity normalized to a 1000.0 start).
+        """
+        prices = np.asarray(prices, dtype=np.float64)
+        prices = prices[np.isfinite(prices)]
+        if len(prices) < 2 or prices[0] <= 0:
+            return None
+        equity = 1000.0 * prices / prices[0]
+        return PerformanceMetrics.calculate_metrics(
+            equity, annualization_factor=annualization_factor
+        )

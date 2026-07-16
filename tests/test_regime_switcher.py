@@ -20,20 +20,26 @@ def _strat(name, score):
     return StoredStrategy(name=name, params={"id": name}, base_score=score)
 
 
-def test_book_caps_at_three_and_replaces_worst(tmp_path):
+def test_book_caps_at_max_and_replaces_worst(tmp_path):
     book = StrategyBook(tmp_path / "book.json")
-    for name, score in [("A", 0.8), ("B", 0.6), ("C", 0.7)]:
+    n_max = StrategyBook.MAX_STRATEGIES
+
+    # Fill every slot; "S1" gets the lowest score of the batch
+    names = [f"S{i}" for i in range(1, n_max + 1)]
+    scores = [0.6 + 0.05 * i for i in range(n_max)]  # S1 weakest at 0.6
+    for name, score in zip(names, scores):
         added, replaced = book.add(_strat(name, score))
         assert added and replaced is None
 
-    # Weaker than the worst slot (B, 0.6) -> rejected
-    added, replaced = book.add(_strat("D", 0.5))
-    assert not added and len(book) == 3 and "D" not in book.names
+    # Weaker than the worst slot (S1, 0.6) -> rejected
+    added, replaced = book.add(_strat("REJECT", 0.5))
+    assert not added and len(book) == n_max and "REJECT" not in book.names
 
-    # Stronger -> replaces the worst (B)
-    added, replaced = book.add(_strat("E", 0.9))
-    assert added and replaced == "B"
-    assert sorted(book.names) == ["A", "C", "E"]
+    # Stronger -> replaces the worst (S1)
+    added, replaced = book.add(_strat("WINNER", 0.99))
+    assert added and replaced == "S1"
+    assert "WINNER" in book.names and "S1" not in book.names
+    assert len(book) == n_max
 
 
 def test_book_same_name_overwrites_slot(tmp_path):
@@ -57,8 +63,10 @@ def test_book_persistence_roundtrip(tmp_path):
 
 def test_book_drops_shadow_scores_of_replaced_slot(tmp_path):
     book = StrategyBook(tmp_path / "book.json")
-    for name, score in [("A", 0.8), ("B", 0.2), ("C", 0.7)]:
-        book.add(_strat(name, score))
+    # Fill every slot, with "B" as the weakest
+    book.add(_strat("B", 0.2))
+    for i in range(StrategyBook.MAX_STRATEGIES - 1):
+        book.add(_strat(f"S{i}", 0.7 + 0.01 * i))
     book.shadow_snapshot = {
         "scores": {"B": {"Bear-Quiet": 0.01}},
         "obs": {"B": {"Bear-Quiet": 500}},
