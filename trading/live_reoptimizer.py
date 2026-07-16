@@ -11,7 +11,7 @@ must survive, in order:
   2. Anti-overfit gates (optimization.validation): Deflated Sharpe Ratio
      (prices in how many trials were burned), CSCV probability of backtest
      overfitting, minimum trade count, and non-negative held-out Sharpe.
-  3. StrategyBook admission: max 3 slots; a gated candidate still has to
+  3. StrategyBook admission: limited slots; a gated candidate still has to
      beat the weakest stored strategy's score to displace it.
 
 Even after admission, the regime-switching engine only lets the newcomer

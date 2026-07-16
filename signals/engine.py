@@ -21,6 +21,10 @@ Combo (IND1_{tf} present) - mix-and-match indicators:
     IND2_{tf}                optional second indicator or "none"
     IND2_P1/P2/Entry/Exit/Inv_{tf}   leg-2 periods/thresholds/invert
 
+Cycle-only (IND1_{tf} == "none") - the strategy trades on the time cycle
+alone: entries are always indicator-approved, exits only come from the
+cycle turning off, and there is no indicator warm-up.
+
 Entries require EVERY leg's oscillator below its Entry threshold (AND);
 exits fire when ANY leg's oscillator is above its Exit threshold (OR).
 The time cycle and coarse-timeframe mapping stay in the callers.
@@ -32,10 +36,15 @@ import numpy as np
 
 from signals.indicators import indicator_oscillator, indicator_warmup
 
+CYCLE_ONLY = "none"  # sentinel value for IND1_{tf} meaning "no indicators"
+
 
 def _legs(params: Dict, tf: str) -> List[Tuple[str, int, int, float, float, bool]]:
     """(name, p1, p2, entry, exit, invert) for each active leg"""
     legs = []
+    if str(params.get(f"IND1_{tf}", "")) == CYCLE_ONLY:
+        # Cycle-only strategy: no indicator legs at all
+        return legs
     if f"IND1_{tf}" in params:
         legs.append(
             (
@@ -76,8 +85,12 @@ def _legs(params: Dict, tf: str) -> List[Tuple[str, int, int, float, float, bool
 
 def params_warmup(params: Dict, tf: str) -> int:
     """Warm-up bars this parameter set needs on `tf` (max over legs)"""
+    if str(params.get(f"IND1_{tf}", "")) == CYCLE_ONLY:
+        return 0  # cycle-only: nothing to warm up
     if f"IND1_{tf}" not in params:
         # Legacy path: identical to the original MN1+MN2 warm-up
+        if f"MN1_{tf}" not in params:
+            return 0
         return int(params[f"MN1_{tf}"]) + int(params[f"MN2_{tf}"])
     return max(
         indicator_warmup(name, p1, p2) for name, p1, p2, _, _, _ in _legs(params, tf)

@@ -234,8 +234,11 @@ class AlpacaLiveTrader(QThread):
             finest_tf = self._finest_tf()
 
             for tf in self.timeframes:
+                # Any strategy that trades this timeframe has cycle params;
+                # cycle-only strategies have no MN1_ keys but still need
+                # bars for the cycle evaluation (params_warmup returns 0)
                 warmups = [
-                    params_warmup(p, tf) for p in param_sets if f"MN1_{tf}" in p
+                    params_warmup(p, tf) for p in param_sets if f"On_{tf}" in p
                 ]
                 if not warmups:
                     continue

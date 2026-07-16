@@ -1,7 +1,7 @@
 """
 Regime-Adaptive Strategy Switching
 
-Stores the best optimized parameter sets (max 3 "slots") in a persistent
+Stores the best optimized parameter sets (max 5 "slots") in a persistent
 StrategyBook and runs every stored strategy as a continuous SHADOW
 simulation. Each shadow's bar returns are scored per regime type (using the
 causal BOCPD regime labels), and real trades are only taken from whichever
@@ -41,7 +41,8 @@ class StoredStrategy:
 
     name: str
     params: Dict[str, float]
-    base_score: float  # e.g. PSR from the optimization that produced it
+    base_score: float  # e.g. DSR/Sharpe from the optimization that produced it
+    objective: str = ""  # optimization goal that produced this strategy
     ticker: str = ""
     timeframes: List[str] = field(default_factory=list)
     metrics: Dict = field(default_factory=dict)
@@ -54,7 +55,9 @@ class StrategyBook:
     engine's shadow-score snapshot so live switching survives restarts.
     """
 
-    MAX_STRATEGIES = 3
+    # Enough slots for one strategy per auto-build objective plus manual
+    # saves; every slot runs as a shadow simulation, so keep this modest
+    MAX_STRATEGIES = 5
 
     def __init__(self, path):
         self.path = Path(path)
@@ -378,7 +381,7 @@ def run_switching_backtest(
     Args:
         optimizer: A constructed MultiTimeframeOptimizer (provides data,
             compute_signals, costs, position size)
-        strategies: Stored strategies to compete (2-3 recommended)
+        strategies: Stored strategies to compete (2-5 recommended)
         labels: Causal per-bar regime labels on the finest timeframe
             (from online_regime_labels)
     """

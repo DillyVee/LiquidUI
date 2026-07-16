@@ -21,7 +21,7 @@ setup(
     name="liquidui-quant",
     version="1.0.0",
     author="LiquidUI Contributors",
-    description="Multi-timeframe trading strategy optimizer with PSR optimization",
+    description="Multi-timeframe trading strategy optimizer with selectable objectives (Sharpe, Sortino, Calmar, ...)",
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/DillyVee/LiquidUI",

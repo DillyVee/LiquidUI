@@ -3,6 +3,7 @@ Unit tests for performance metrics and PSR calculation
 """
 
 import numpy as np
+import pytest
 
 from optimization.metrics import PerformanceMetrics
 from optimization.psr_composite import PSRCalculator
@@ -101,3 +102,76 @@ class TestPSRCalculator:
 
     def test_sharpe_from_flat_equity(self):
         assert PSRCalculator.calculate_sharpe_from_equity(np.full(100, 1000.0)) == 0.0
+
+
+class TestExtendedMetrics:
+    """The institutional metric suite added for objective-based optimization"""
+
+    @staticmethod
+    def _curve(seed=42, drift=0.001, n=500):
+        rng = np.random.default_rng(seed)
+        returns = rng.normal(drift, 0.01, n)
+        return 1000.0 * np.cumprod(1 + returns)
+
+    def test_extended_keys_present(self):
+        metrics = PerformanceMetrics.calculate_metrics(self._curve())
+        for key in (
+            "CAGR_%", "Sharpe_Ratio", "Calmar_Ratio", "Volatility_Ann_%",
+            "Ulcer_Index", "VaR_95_%", "CVaR_95_%",
+        ):
+            assert key in metrics, key
+
+    def test_trade_level_stats(self):
+        trades = np.array([2.0, -1.0, 3.0, -1.0, 1.0])
+        metrics = PerformanceMetrics.calculate_metrics(
+            self._curve(), trade_returns=trades
+        )
+        assert metrics["Win_Rate_%"] == 60.0
+        # Trade-based profit factor: (2+3+1) / (1+1) = 3
+        assert metrics["Profit_Factor"] == 3.0
+        assert metrics["Avg_Win_%"] == 2.0
+        assert metrics["Avg_Loss_%"] == -1.0
+        assert metrics["Payoff_Ratio"] == 2.0
+        assert metrics["Expectancy_%"] == 0.8
+        assert metrics["Best_Trade_%"] == 3.0
+        assert metrics["Worst_Trade_%"] == -1.0
+
+    def test_no_trade_stats_without_trade_returns(self):
+        metrics = PerformanceMetrics.calculate_metrics(self._curve())
+        assert "Win_Rate_%" not in metrics
+        assert "Profit_Factor" in metrics  # per-bar fallback stays
+
+    def test_cagr_matches_total_return_horizon(self):
+        # 252 bars at 252/year = exactly one year: CAGR == total return
+        eq = np.linspace(1000.0, 1210.0, 253)
+        metrics = PerformanceMetrics.calculate_metrics(eq[1:], annualization_factor=252.0)
+        assert abs(metrics["CAGR_%"] - metrics["Percent_Gain_%"]) < 1.0
+
+    def test_calmar_sign_and_scale(self):
+        metrics = PerformanceMetrics.calculate_metrics(self._curve(drift=0.002))
+        assert metrics["Calmar_Ratio"] > 0
+        losing = PerformanceMetrics.calculate_metrics(self._curve(drift=-0.002))
+        assert losing["Calmar_Ratio"] < 0
+
+    def test_var_cvar_ordering(self):
+        metrics = PerformanceMetrics.calculate_metrics(self._curve())
+        # Expected shortfall is at least as deep as VaR, both positive here
+        assert metrics["CVaR_95_%"] >= metrics["VaR_95_%"] > 0
+
+    def test_ratios_are_capped(self):
+        # A nearly risk-free ramp must not produce infinite ratios
+        eq = 1000.0 * np.cumprod(1 + np.full(300, 0.001))
+        eq[100] *= 0.99999  # one microscopic down bar
+        metrics = PerformanceMetrics.calculate_metrics(eq)
+        assert np.isfinite(metrics["Sortino_Ratio"])
+        assert abs(metrics["Sortino_Ratio"]) <= 100.0
+        assert np.isfinite(metrics["Profit_Factor"])
+
+    def test_buyhold_metrics(self):
+        rng = np.random.default_rng(9)
+        prices = 50 * np.cumprod(1 + rng.normal(0.0008, 0.012, 400))
+        bh = PerformanceMetrics.calculate_buyhold_metrics(prices)
+        assert bh is not None
+        expected = (prices[-1] / prices[0] - 1) * 100
+        assert bh["Percent_Gain_%"] == pytest.approx(expected, abs=0.01)
+        assert PerformanceMetrics.calculate_buyhold_metrics(np.array([100.0])) is None

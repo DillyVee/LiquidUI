@@ -15,9 +15,12 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
+    QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -62,8 +65,17 @@ from models.regime_diagnostics import RegimeDiagnosticAnalyzer
 from models.regime_predictor import RegimePredictor
 from models.regime_robustness import BlockBootstrapValidator, WhiteRealityCheck
 from optimization import MultiTimeframeOptimizer, WalkForwardAnalyzer
+from optimization.metrics import PerformanceMetrics
 from optimization.monte_carlo import AdvancedMonteCarloAnalyzer, MonteCarloSimulator
+from optimization.objectives import (
+    AUTO_BUILD_DEFAULTS,
+    DEFAULT_OBJECTIVE,
+    OBJECTIVES,
+    get_objective,
+)
 from optimization.validation import validate_candidate
+from signals.engine import CYCLE_ONLY
+from signals.indicators import INDICATOR_LABELS, INDICATORS
 from trading import AlpacaLiveTrader
 from trading.live_reoptimizer import LiveReoptimizer
 from trading.risk_controls import RiskLimits
@@ -104,6 +116,13 @@ class MainWindow(QMainWindow):
 
         # Batch processing queue (tickers waiting for optimization)
         self._batch_queue: List[str] = []
+
+        # Auto-build pipeline state: objectives still to optimize, whether
+        # to run the switching backtest afterwards, and what got saved
+        self._auto_objectives: List[str] = []
+        self._auto_run_backtest: bool = False
+        self._auto_saved: List[str] = []
+        self._auto_active: bool = False
 
         # Worker threads
         self.worker: Optional[MultiTimeframeOptimizer] = None
@@ -237,6 +256,20 @@ class MainWindow(QMainWindow):
         data_group.setLayout(data_layout)
         layout.addWidget(data_group)
 
+        # Buy & hold benchmark - visible the moment data is loaded, so every
+        # optimized strategy has an obvious yardstick
+        bh_group = QGroupBox("📈 Buy && Hold Benchmark")
+        bh_layout = QVBoxLayout()
+        self.bh_label = QLabel("Load a ticker to see its buy && hold performance")
+        self.bh_label.setStyleSheet(
+            "padding: 10px; background-color: #2d2d2d; border-radius: 4px; "
+            "font-family: monospace; font-size: 13px;"
+        )
+        self.bh_label.setWordWrap(True)
+        bh_layout.addWidget(self.bh_label)
+        bh_group.setLayout(bh_layout)
+        layout.addWidget(bh_group)
+
         # Timeframe selection
         tf_group = QGroupBox("Select Timeframes")
         tf_layout = QHBoxLayout()
@@ -265,7 +298,8 @@ class MainWindow(QMainWindow):
         layout.addWidget(chart_group)
 
         hint_label = QLabel(
-            "💡 Next Step: Load data, then go to 'Strategy Optimization' tab to run PSR optimization"
+            "💡 Next Step: Load data, then go to 'Strategy Optimization' tab, "
+            "pick an optimization goal, and press START"
         )
         hint_label.setStyleSheet(
             "color: #FFA726; padding: 10px; background-color: #2d2d2d; border-radius: 4px;"
@@ -295,8 +329,8 @@ class MainWindow(QMainWindow):
         params_group = QGroupBox("Strategy Parameter Ranges")
         params_layout = QVBoxLayout()
 
-        self._add_param_range(params_layout, "MN1 (RSI1 Length)", "mn1")
-        self._add_param_range(params_layout, "MN2 (RSI2 Length)", "mn2")
+        self._add_param_range(params_layout, "P1 (Indicator Length)", "mn1")
+        self._add_param_range(params_layout, "P2 (Smoothing Length)", "mn2")
         self._add_param_range(params_layout, "Entry Threshold", "entry", is_decimal=True)
         self._add_param_range(params_layout, "Exit Threshold", "exit", is_decimal=True)
         self._add_param_range(params_layout, "On Cycle", "on")
@@ -309,6 +343,65 @@ class MainWindow(QMainWindow):
 
         params_group.setLayout(params_layout)
         left_layout.addWidget(params_group)
+
+        # Optimization goal
+        obj_group = QGroupBox("Optimization Goal")
+        obj_layout = QVBoxLayout()
+
+        goal_row = QHBoxLayout()
+        goal_row.addWidget(QLabel("Maximize:"))
+        self.objective_combo = QComboBox()
+        for name, spec in OBJECTIVES.items():
+            self.objective_combo.addItem(spec.label, userData=name)
+            idx = self.objective_combo.count() - 1
+            self.objective_combo.setItemData(
+                idx, spec.description, Qt.ItemDataRole.ToolTipRole
+            )
+        self.objective_combo.setCurrentIndex(
+            list(OBJECTIVES).index(DEFAULT_OBJECTIVE)
+        )
+        goal_row.addWidget(self.objective_combo)
+        goal_row.addStretch()
+        obj_layout.addLayout(goal_row)
+
+        obj_group.setLayout(obj_layout)
+        left_layout.addWidget(obj_group)
+
+        # Signal construction: cycle-only toggle + indicator pool
+        sig_group = QGroupBox("Signal Construction")
+        sig_layout = QVBoxLayout()
+
+        self.cycle_only_cb = QCheckBox("⏱ Time cycles ONLY (no indicators)")
+        self.cycle_only_cb.setToolTip(
+            "Optimize just the ON/OFF/START calendar cycle per timeframe. "
+            "Entries and exits come from the cycle alone."
+        )
+        self.cycle_only_cb.stateChanged.connect(self._on_cycle_only_toggled)
+        sig_layout.addWidget(self.cycle_only_cb)
+
+        self.combine_ind_cb = QCheckBox("Combine two indicators (AND entry / OR exit)")
+        self.combine_ind_cb.setChecked(True)
+        self.combine_ind_cb.setToolTip(
+            "Let the optimizer AND a second indicator onto the first. "
+            "Uncheck to search single-indicator strategies only."
+        )
+        sig_layout.addWidget(self.combine_ind_cb)
+
+        ind_label = QLabel("Indicators the optimizer may use:")
+        ind_label.setStyleSheet("font-size: 11px; color: #888;")
+        sig_layout.addWidget(ind_label)
+
+        ind_grid = QGridLayout()
+        self.indicator_checkboxes: Dict[str, QCheckBox] = {}
+        for i, name in enumerate(INDICATORS):
+            cb = QCheckBox(INDICATOR_LABELS.get(name, name))
+            cb.setChecked(True)
+            self.indicator_checkboxes[name] = cb
+            ind_grid.addWidget(cb, i // 2, i % 2)
+        sig_layout.addLayout(ind_grid)
+
+        sig_group.setLayout(sig_layout)
+        left_layout.addWidget(sig_group)
 
         # Optimization settings
         opt_group = QGroupBox("Optimization Settings")
@@ -341,7 +434,7 @@ class MainWindow(QMainWindow):
         btn_layout = QVBoxLayout()
 
         opt_btn_layout = QHBoxLayout()
-        self.start_btn = QPushButton("▶️ START PSR OPTIMIZATION")
+        self.start_btn = QPushButton("▶️ START OPTIMIZATION")
         self.start_btn.setStyleSheet(
             f"background-color: {COLOR_SUCCESS}; font-weight: bold; padding: 15px; font-size: 14px;"
         )
@@ -356,6 +449,15 @@ class MainWindow(QMainWindow):
         self.stop_btn.setEnabled(False)
         opt_btn_layout.addWidget(self.stop_btn)
         btn_layout.addLayout(opt_btn_layout)
+
+        self.auto_build_btn = QPushButton("🤖 Auto-Build Strategy Book")
+        self.auto_build_btn.setToolTip(
+            "Run one optimization per selected goal (e.g. Sharpe, Sortino, "
+            "Calmar), auto-save each result to the strategy book, then run "
+            "the regime-switching backtest across them."
+        )
+        self.auto_build_btn.clicked.connect(self.auto_build_book)
+        btn_layout.addWidget(self.auto_build_btn)
 
         self.progress_bar = QProgressBar()
         self.progress_bar.setValue(0)
@@ -434,13 +536,21 @@ class MainWindow(QMainWindow):
         results_layout.addWidget(self.best_params_label)
 
         metrics_layout = QHBoxLayout()
-        self.psr_label = self._add_metric_box(metrics_layout, "PSR", large=True)
-        self.sharpe_label = self._add_metric_box(metrics_layout, "Sharpe")
-        self.sortino_label = self._add_metric_box(metrics_layout, "Sortino")
+        self.objective_title_label, self.objective_value_label = self._add_metric_box(
+            metrics_layout, "Objective", large=True
+        )
+        _, self.sharpe_label = self._add_metric_box(metrics_layout, "Sharpe")
+        _, self.sortino_label = self._add_metric_box(metrics_layout, "Sortino")
         results_layout.addLayout(metrics_layout)
 
-        self.show_report_btn = QPushButton("📊 Show Full PSR Report")
-        self.show_report_btn.clicked.connect(self.show_psr_report)
+        metrics_layout2 = QHBoxLayout()
+        _, self.return_label = self._add_metric_box(metrics_layout2, "Return %")
+        _, self.maxdd_label = self._add_metric_box(metrics_layout2, "Max DD %")
+        _, self.bh_return_label = self._add_metric_box(metrics_layout2, "Buy && Hold %")
+        results_layout.addLayout(metrics_layout2)
+
+        self.show_report_btn = QPushButton("📊 Show Full Report")
+        self.show_report_btn.clicked.connect(self.show_full_report)
         results_layout.addWidget(self.show_report_btn)
 
         self.regime_breakdown_btn = QPushButton("🔀 Regime Breakdown (Bayesian CPD)")
@@ -477,8 +587,8 @@ class MainWindow(QMainWindow):
         return tab
 
     @staticmethod
-    def _add_metric_box(layout: QHBoxLayout, title: str, large: bool = False) -> QLabel:
-        """Add a titled metric display box and return its value label"""
+    def _add_metric_box(layout: QHBoxLayout, title: str, large: bool = False):
+        """Add a titled metric display box; returns (title_label, value_label)"""
         box = QVBoxLayout()
         title_label = QLabel(title)
         title_label.setStyleSheet("font-size: 11px; color: #888;")
@@ -496,7 +606,14 @@ class MainWindow(QMainWindow):
         box.addWidget(title_label)
         box.addWidget(value_label)
         layout.addLayout(box)
-        return value_label
+        return title_label, value_label
+
+    def _on_cycle_only_toggled(self):
+        """Grey out indicator controls when running time-cycle-only"""
+        cycle_only = self.cycle_only_cb.isChecked()
+        self.combine_ind_cb.setEnabled(not cycle_only)
+        for cb in self.indicator_checkboxes.values():
+            cb.setEnabled(not cycle_only)
 
     # =============================================================================
     # TAB 3: REGIME ANALYSIS
@@ -956,6 +1073,7 @@ class MainWindow(QMainWindow):
                 )
 
             self.on_timeframe_changed()
+            self._update_buyhold_display()
             self.regime_detector = MarketRegimeDetector()
             self.statusBar().showMessage(f"Successfully loaded {ticker}")
             return True
@@ -1078,8 +1196,25 @@ class MainWindow(QMainWindow):
     # OPTIMIZATION METHODS
     # =============================================================================
 
-    def start_optimization(self):
-        """Start PSR optimization"""
+    def _selected_objective(self) -> str:
+        """Registry name of the objective chosen in the combo box"""
+        name = self.objective_combo.currentData()
+        return str(name) if name else DEFAULT_OBJECTIVE
+
+    def _signal_search_kwargs(self) -> Dict:
+        """Search-space settings shared by the optimizer, the walk-forward
+        runner, and the live re-optimizer (read once from the UI)"""
+        allowed = [
+            name for name, cb in self.indicator_checkboxes.items() if cb.isChecked()
+        ]
+        return dict(
+            cycle_only=self.cycle_only_cb.isChecked(),
+            allowed_indicators=allowed or list(INDICATORS),
+            combine_indicators=self.combine_ind_cb.isChecked(),
+        )
+
+    def start_optimization(self, *, objective: Optional[str] = None):
+        """Start strategy optimization for the selected goal"""
         if not self.df_dict:
             QMessageBox.warning(
                 self, "No Data", "Load data and select at least one timeframe first"
@@ -1089,6 +1224,19 @@ class MainWindow(QMainWindow):
         if self.worker and self.worker.isRunning():
             QMessageBox.warning(self, "Already Running", "Optimization is already running")
             return
+
+        search = self._signal_search_kwargs()
+        if not search["cycle_only"] and not any(
+            cb.isChecked() for cb in self.indicator_checkboxes.values()
+        ):
+            QMessageBox.warning(
+                self,
+                "No Indicators Selected",
+                "Check at least one indicator, or enable 'Time cycles ONLY'.",
+            )
+            return
+
+        objective = objective or self._selected_objective()
 
         params = self._get_param_ranges()
         time_cycle_ranges = (
@@ -1109,6 +1257,8 @@ class MainWindow(QMainWindow):
             batch_size=self.batch_spin.value(),
             transaction_costs=self.transaction_costs,
             position_size=self.position_size_pct / 100.0,
+            objective=objective,
+            **search,
         )
 
         self.worker.progress.connect(self.update_progress)
@@ -1118,17 +1268,24 @@ class MainWindow(QMainWindow):
         self.worker.error.connect(self.show_error)
 
         self.start_btn.setEnabled(False)
+        self.auto_build_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.progress_bar.setValue(0)
-        self.phase_label.setText("Starting optimization...")
+        spec = get_objective(objective)
+        self.objective_title_label.setText(f"Objective: {spec.label}")
+        self.phase_label.setText(f"Starting optimization ({spec.label})...")
 
         self.worker.start()
-        self.statusBar().showMessage(f"Optimization running for {self.current_ticker}...")
+        self.statusBar().showMessage(
+            f"Optimizing {self.current_ticker} for {spec.label}..."
+        )
 
     def stop_optimization(self):
         """Stop running optimization"""
         if self.worker:
             self._batch_queue.clear()
+            self._auto_objectives.clear()
+            self._auto_active = False
             self.worker.stop()
             self.phase_label.setText("Stopping...")
             self.stop_btn.setEnabled(False)
@@ -1137,29 +1294,38 @@ class MainWindow(QMainWindow):
         """Update progress bar"""
         self.progress_bar.setValue(value)
 
+    def _set_metric_boxes(self, source):
+        """Fill the metric boxes from a result dict/Series"""
+        objective_name = str(source.get("Objective", DEFAULT_OBJECTIVE))
+        try:
+            spec = get_objective(objective_name)
+            self.objective_title_label.setText(f"Objective: {spec.label}")
+            self.objective_value_label.setText(
+                f"{float(source.get('Objective_Score', 0.0)):{spec.fmt}}"
+            )
+        except (ValueError, TypeError):
+            self.objective_value_label.setText("--")
+
+        self.sharpe_label.setText(f"{float(source.get('Sharpe_Ratio', 0.0) or 0.0):.2f}")
+        self.sortino_label.setText(f"{float(source.get('Sortino_Ratio', 0.0) or 0.0):.2f}")
+        self.return_label.setText(f"{float(source.get('Percent_Gain_%', 0.0) or 0.0):+.1f}%")
+        self.maxdd_label.setText(f"{float(source.get('Max_Drawdown_%', 0.0) or 0.0):.1f}%")
+        bh = source.get("BuyHold_Return_%")
+        if bh is not None and not (isinstance(bh, float) and np.isnan(bh)):
+            self.bh_return_label.setText(f"{float(bh):+.1f}%")
+
     def update_best_label(self, best_params: Dict):
         """Update best parameters display during optimization"""
         self.best_params = best_params
+        self._set_metric_boxes(best_params)
 
-        psr = best_params.get("PSR", 0.0)
-        sharpe = best_params.get("Sharpe_Ratio", 0.0)
-        sortino = best_params.get("Sortino_Ratio", 0.0)
-
-        self.psr_label.setText(f"{psr:.3f}")
-        self.sharpe_label.setText(f"{sharpe:.2f}")
-        self.sortino_label.setText(f"{sortino:.2f}")
-
-        get = self._get_tf_value
-        fmt = self._fmt
+        sharpe = float(best_params.get("Sharpe_Ratio", 0.0) or 0.0)
+        sortino = float(best_params.get("Sortino_Ratio", 0.0) or 0.0)
         text = (
             "Best Parameters Found:\n"
-            f"PSR: {psr:.3f} | Sharpe: {sharpe:.2f} | Sortino: {sortino:.2f}\n"
-            f"RSI1 Length (MN1): {get(best_params, 'MN1')} | "
-            f"RSI2 Length (MN2): {get(best_params, 'MN2')}\n"
-            f"Entry: {fmt(get(best_params, 'Entry'))} | "
-            f"Exit: {fmt(get(best_params, 'Exit'))}\n"
-            f"Time Cycle - ON: {get(best_params, 'On')} | "
-            f"OFF: {get(best_params, 'Off')} | START: {get(best_params, 'Start')}"
+            f"Sharpe: {sharpe:.2f} | Sortino: {sortino:.2f} | "
+            f"Return: {float(best_params.get('Percent_Gain_%', 0.0) or 0.0):+.2f}%\n"
+            + self._describe_signal_params(best_params)
         )
         self.best_params_label.setText(text)
 
@@ -1170,10 +1336,13 @@ class MainWindow(QMainWindow):
     def show_results(self, df_results: pd.DataFrame):
         """Show optimization results"""
         self.start_btn.setEnabled(True)
+        self.auto_build_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
 
         if df_results.empty:
             # Optimization was stopped before producing a result
+            self._auto_objectives.clear()
+            self._auto_active = False
             self.phase_label.setText("Optimization stopped")
             self.statusBar().showMessage("Optimization stopped")
             return
@@ -1196,37 +1365,60 @@ class MainWindow(QMainWindow):
         self._run_overfit_check(best)
         self.statusBar().showMessage(f"Optimization completed for {self.current_ticker}")
 
+        # Auto-build pipeline: save this result to the book, then either
+        # start the next objective or finish with the switching backtest
+        if self._auto_active:
+            self._auto_step_finished()
+            return
+
         # Continue batch processing if more tickers are queued
         if self._batch_queue:
             self._process_batch_next()
 
     def _update_results_display(self, best: pd.Series):
         """Update the optimization results display panel"""
-        psr = best.get("PSR", 0.0)
-        sharpe = best.get("Sharpe_Ratio", 0.0)
-        sortino = best.get("Sortino_Ratio", 0.0)
+        self._set_metric_boxes(best)
 
-        self.psr_label.setText(f"{psr:.3f}")
-        self.sharpe_label.setText(f"{sharpe:.2f}")
-        self.sortino_label.setText(f"{sortino:.2f}")
+        objective_name = str(best.get("Objective", DEFAULT_OBJECTIVE))
+        try:
+            spec = get_objective(objective_name)
+            goal_line = (
+                f"{spec.label}: {float(best.get('Objective_Score', 0.0)):{spec.fmt}}"
+            )
+        except (ValueError, TypeError):
+            goal_line = str(best.get("Objective_Score", "--"))
 
-        get = self._get_tf_value
-        fmt = self._fmt
+        bh = best.get("BuyHold_Return_%")
+        strat_ret = float(best.get("Percent_Gain_%", 0.0) or 0.0)
+        if bh is not None and not (isinstance(bh, float) and np.isnan(bh)):
+            bh_line = (
+                f"  vs Buy & Hold: {strat_ret:+.2f}% vs {float(bh):+.2f}% "
+                f"(alpha {strat_ret - float(bh):+.2f}%)\n"
+            )
+        else:
+            bh_line = ""
+
+        win_rate = best.get("Win_Rate_%")
+        wr_txt = (
+            f" | Win Rate: {float(win_rate):.1f}%"
+            if win_rate is not None and not (isinstance(win_rate, float) and np.isnan(win_rate))
+            else ""
+        )
+
         text = (
             "✅ Optimization Complete!\n\n"
-            "📊 Performance Metrics:\n"
-            f"  PSR: {psr:.3f} ({psr * 100:.1f}%) | Sharpe: {sharpe:.2f} | Sortino: {sortino:.2f}\n"
-            f"  Return: {best.get('Percent_Gain_%', 0.0):.2f}% | "
-            f"Max DD: {best.get('Max_Drawdown_%', 0.0):.2f}% | "
-            f"PF: {best.get('Profit_Factor', 0.0):.2f}\n"
+            f"🎯 Optimized for -> {goal_line}\n\n"
+            "📊 Performance:\n"
+            f"  Sharpe: {float(best.get('Sharpe_Ratio', 0.0) or 0.0):.2f} | "
+            f"Sortino: {float(best.get('Sortino_Ratio', 0.0) or 0.0):.2f} | "
+            f"Calmar: {float(best.get('Calmar_Ratio', 0.0) or 0.0):.2f}\n"
+            f"  Return: {strat_ret:+.2f}% | CAGR: {float(best.get('CAGR_%', 0.0) or 0.0):+.2f}%\n"
+            + bh_line +
+            f"  Max DD: {float(best.get('Max_Drawdown_%', 0.0) or 0.0):.2f}% | "
+            f"PF: {float(best.get('Profit_Factor', 0.0) or 0.0):.2f}{wr_txt}\n"
             f"  Total Trades: {best.get('Trade_Count', 0)}\n\n"
             "⚙️  Best Parameters:\n"
-            f"  RSI1 Length (MN1): {get(best, 'MN1')}\n"
-            f"  RSI2 Length (MN2): {get(best, 'MN2')}\n"
-            f"  Entry Threshold: {fmt(get(best, 'Entry'))}\n"
-            f"  Exit Threshold: {fmt(get(best, 'Exit'))}\n"
-            f"  Time Cycle: ON={get(best, 'On')}, OFF={get(best, 'Off')}, "
-            f"START={get(best, 'Start')}"
+            + self._describe_signal_params(best)
         )
         self.best_params_label.setText(text)
 
@@ -1331,50 +1523,160 @@ class MainWindow(QMainWindow):
             print(f"Failed to calculate buy & hold: {e}")
             return None
 
-    def show_psr_report(self):
-        """Show detailed PSR report"""
+    def _buyhold_metrics_for_loaded_data(self) -> Optional[Dict]:
+        """Buy & hold benchmark metrics on the daily history of the loaded
+        ticker (full metric suite from PerformanceMetrics)"""
+        source = self.df_dict_full or self.df_dict
+        if not source or "daily" not in source:
+            return None
+        prices = source["daily"]["Close"].to_numpy(dtype=float)
+        return PerformanceMetrics.calculate_buyhold_metrics(
+            prices, annualization_factor=252.0
+        )
+
+    def _update_buyhold_display(self):
+        """Refresh the buy & hold panels (Data tab + Strategy tab box)"""
+        bh = self._buyhold_metrics_for_loaded_data()
+        if not bh:
+            self.bh_label.setText("Buy & hold unavailable (need daily data)")
+            self.bh_return_label.setText("--")
+            return
+
+        self.bh_label.setText(
+            f"{self.current_ticker} buy && hold over the loaded daily history:\n"
+            f"  Total Return: {bh['Percent_Gain_%']:+.2f}%   "
+            f"CAGR: {bh['CAGR_%']:+.2f}%\n"
+            f"  Sharpe: {bh['Sharpe_Ratio']:.2f}   "
+            f"Sortino: {bh['Sortino_Ratio']:.2f}   "
+            f"Max Drawdown: {bh['Max_Drawdown_%']:.2f}%\n"
+            f"  Volatility (ann.): {bh['Volatility_Ann_%']:.1f}%   "
+            f"Ulcer Index: {bh['Ulcer_Index']:.2f}"
+        )
+        self.bh_return_label.setText(f"{bh['Percent_Gain_%']:+.1f}%")
+
+    def show_full_report(self):
+        """Full institutional performance report for the last optimization"""
         if not self.best_params:
             QMessageBox.information(self, "No Results", "Run optimization first")
             return
 
         p = self.best_params
-        get = self._get_tf_value
-        fmt = self._fmt
-        report = f"""
-=== PSR COMPOSITE REPORT ===
+        objective_name = str(p.get("Objective", DEFAULT_OBJECTIVE))
+        try:
+            spec = get_objective(objective_name)
+            goal_line = f"{spec.label}: {float(p.get('Objective_Score', 0.0)):{spec.fmt}}"
+        except ValueError:
+            goal_line = f"{objective_name}: {p.get('Objective_Score', 0.0)}"
 
-Ticker: {self.current_ticker or 'N/A'}
-PSR: {p.get('PSR', 0.0):.4f}
+        def val(key, fmt_spec=".2f", suffix=""):
+            v = p.get(key)
+            if v is None or (isinstance(v, float) and np.isnan(v)):
+                return "n/a"
+            try:
+                return f"{float(v):{fmt_spec}}{suffix}"
+            except (TypeError, ValueError):
+                return str(v)
 
-Performance Metrics:
-  Sharpe Ratio: {p.get('Sharpe_Ratio', 0.0):.4f}
-  Sortino Ratio: {p.get('Sortino_Ratio', 0.0):.4f}
-  Total Return: {p.get('Percent_Gain_%', 0.0):.2f}%
-  Final Equity: ${p.get('Final_Equity_$', 0.0):,.2f}
+        lines = [
+            "=== STRATEGY PERFORMANCE REPORT ===",
+            "",
+            f"Ticker: {self.current_ticker or 'N/A'}",
+            f"Optimized for -> {goal_line}",
+            "",
+            "Returns:",
+            f"  Total Return: {val('Percent_Gain_%', '.2f', '%')}",
+            f"  CAGR: {val('CAGR_%', '.2f', '%')}",
+            f"  Final Equity: ${p.get('Final_Equity_$', 0.0):,.2f}",
+            f"  Buy & Hold Return: {val('BuyHold_Return_%', '.2f', '%')}",
+            "",
+            "Risk-Adjusted:",
+            f"  Sharpe Ratio: {val('Sharpe_Ratio')}",
+            f"  Sortino Ratio: {val('Sortino_Ratio')}",
+            f"  Calmar Ratio: {val('Calmar_Ratio')}",
+            f"  Volatility (ann.): {val('Volatility_Ann_%', '.2f', '%')}",
+            "",
+            "Risk:",
+            f"  Max Drawdown: {val('Max_Drawdown_%', '.2f', '%')}",
+            f"  Ulcer Index: {val('Ulcer_Index')}",
+            f"  VaR 95% (per bar): {val('VaR_95_%', '.3f', '%')}",
+            f"  CVaR 95% (per bar): {val('CVaR_95_%', '.3f', '%')}",
+            "",
+            "Trades:",
+            f"  Total Trades: {p.get('Trade_Count', 0)}",
+            f"  Win Rate: {val('Win_Rate_%', '.1f', '%')}",
+            f"  Profit Factor: {val('Profit_Factor')}",
+            f"  Expectancy: {val('Expectancy_%', '.3f', '%/trade')}",
+            f"  Avg Win / Avg Loss: {val('Avg_Win_%')} / {val('Avg_Loss_%')}",
+            f"  Payoff Ratio: {val('Payoff_Ratio')}",
+            f"  Best / Worst: {val('Best_Trade_%', '.2f', '%')} / {val('Worst_Trade_%', '.2f', '%')}",
+            "",
+            "Parameters:",
+            self._describe_signal_params(p),
+        ]
+        if self.last_validation is not None:
+            lines += ["", self.last_validation.summary()]
 
-Risk Metrics:
-  Max Drawdown: {p.get('Max_Drawdown_%', 0.0):.2f}%
-  Profit Factor: {p.get('Profit_Factor', 0.0):.4f}
+        report = "\n".join(lines)
 
-Trading Metrics:
-  Total Trades: {p.get('Trade_Count', 0)}
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Full Report - {self.current_ticker}")
+        dialog.setGeometry(150, 100, 700, 800)
+        dialog.setStyleSheet(MAIN_STYLESHEET)
+        layout = QVBoxLayout()
+        text = QTextEdit()
+        text.setReadOnly(True)
+        text.setPlainText(report)
+        text.setStyleSheet(
+            "font-family: monospace; font-size: 12px; "
+            "background-color: #1e1e1e; color: white;"
+        )
+        layout.addWidget(text)
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(dialog.close)
+        layout.addWidget(close_btn)
+        dialog.setLayout(layout)
+        dialog.exec()
 
-Parameters:
-  MN1 (RSI1 Length): {get(p, 'MN1')}
-  MN2 (RSI2 Length): {get(p, 'MN2')}
-  Entry Threshold: {fmt(get(p, 'Entry'), '.2f')}
-  Exit Threshold: {fmt(get(p, 'Exit'), '.2f')}
-  On Cycle: {get(p, 'On')}
-  Off Cycle: {get(p, 'Off')}
-  Start Cycle: {get(p, 'Start')}
-"""
+    def _describe_signal_params(self, container) -> str:
+        """Human-readable per-timeframe description of a parameter set
+        (works for dicts and pandas Series)"""
+        def has(key):
+            v = container.get(key)
+            return v is not None and not (isinstance(v, float) and np.isnan(v))
 
-        msg = QMessageBox(self)
-        msg.setIcon(QMessageBox.Icon.Information)
-        msg.setWindowTitle("PSR Composite Report")
-        msg.setText(report)
-        msg.setStyleSheet("QLabel{min-width: 500px; font-family: monospace;}")
-        msg.exec()
+        lines = []
+        for tf in ("daily", "hourly", "5min", "1min"):
+            if not has(f"On_{tf}"):
+                continue
+            lines.append(
+                f"  {tf.upper()}: cycle ON={self._fmt(container.get(f'On_{tf}'))} "
+                f"OFF={self._fmt(container.get(f'Off_{tf}'))} "
+                f"START={self._fmt(container.get(f'Start_{tf}'))}"
+            )
+            ind1 = container.get(f"IND1_{tf}")
+            if ind1 is not None and str(ind1) == CYCLE_ONLY:
+                lines.append("    signals: time cycle only (no indicators)")
+                continue
+            if has(f"MN1_{tf}"):
+                name = INDICATOR_LABELS.get(str(ind1), str(ind1)) if ind1 else "RSI"
+                inv = " (inverted)" if int(container.get(f"IND1_Inv_{tf}", 0) or 0) else ""
+                lines.append(
+                    f"    {name}{inv}: P1={self._fmt(container.get(f'MN1_{tf}'))} "
+                    f"P2={self._fmt(container.get(f'MN2_{tf}'))} "
+                    f"entry<{self._fmt(container.get(f'Entry_{tf}'))} "
+                    f"exit>{self._fmt(container.get(f'Exit_{tf}'))}"
+                )
+            ind2 = container.get(f"IND2_{tf}")
+            if ind2 is not None and str(ind2) not in ("none", "nan") and has(f"IND2_P1_{tf}"):
+                name2 = INDICATOR_LABELS.get(str(ind2), str(ind2))
+                inv2 = " (inverted)" if int(container.get(f"IND2_Inv_{tf}", 0) or 0) else ""
+                lines.append(
+                    f"    + {name2}{inv2}: P1={self._fmt(container.get(f'IND2_P1_{tf}'))} "
+                    f"P2={self._fmt(container.get(f'IND2_P2_{tf}'))} "
+                    f"entry<{self._fmt(container.get(f'IND2_Entry_{tf}'))} "
+                    f"exit>{self._fmt(container.get(f'IND2_Exit_{tf}'))}"
+                )
+        return "\n".join(lines) if lines else "  (no parameters)"
 
     def show_regime_breakdown(self):
         """Detect market regimes with Bayesian change point detection and
@@ -1523,22 +1825,83 @@ Parameters:
         return labels, result
 
     def _strategy_book(self) -> StrategyBook:
-        """The per-ticker persistent strategy book (max 3 slots)"""
+        """The per-ticker persistent strategy book"""
         ticker = self.current_ticker or "DEFAULT"
         return StrategyBook(Paths.DATA_DIR / f"{ticker}_strategy_book.json")
 
     def _book_strategies_for_current_data(self, book: StrategyBook) -> list:
-        """Stored strategies whose params cover every loaded timeframe"""
-        required = [
-            f"{key}_{tf}"
-            for tf in self.df_dict.keys()
-            for key in ("MN1", "MN2", "Entry", "Exit", "On", "Off", "Start")
-        ]
-        return [s for s in book.strategies if all(k in s.params for k in required)]
+        """Stored strategies whose params cover every loaded timeframe.
+        Cycle-only strategies need only cycle params; indicator strategies
+        also need their indicator keys."""
+        usable = []
+        for s in book.strategies:
+            ok = True
+            for tf in self.df_dict.keys():
+                if not all(f"{k}_{tf}" in s.params for k in ("On", "Off", "Start")):
+                    ok = False
+                    break
+                if str(s.params.get(f"IND1_{tf}", "")) == CYCLE_ONLY:
+                    continue  # time-cycle-only: no indicator params needed
+                if not all(
+                    f"{k}_{tf}" in s.params for k in ("MN1", "MN2", "Entry", "Exit")
+                ):
+                    ok = False
+                    break
+            if ok:
+                usable.append(s)
+        return usable
+
+    def _build_stored_strategy(self) -> Optional[StoredStrategy]:
+        """Assemble a StoredStrategy from the last optimization result.
+        base_score prefers the Deflated Sharpe Ratio (luck-adjusted, same
+        scale the live re-optimizer admits on); falls back to Sharpe."""
+        if not self.best_params:
+            return None
+
+        best = (
+            self.best_results.iloc[0]
+            if getattr(self, "best_results", None) is not None
+            else {}
+        )
+        objective = str(best.get("Objective", "") or "")
+        if self.last_validation is not None:
+            base_score = float(self.last_validation.dsr)
+        else:
+            base_score = float(best.get("Sharpe_Ratio", 0.0) or 0.0)
+
+        tfs = sorted({k.split("_", 1)[1] for k in self.best_params if k.startswith("On_")})
+        name = (
+            f"{self.current_ticker}_{objective or 'manual'}_"
+            f"{datetime.now().strftime('%m%d-%H%M%S')}"
+        )
+        param_keys = (
+            "MN1_", "MN2_", "Entry_", "Exit_", "On_", "Off_", "Start_", "IND"
+        )
+        return StoredStrategy(
+            name=name,
+            params={
+                k: v
+                for k, v in self.best_params.items()
+                if any(k.startswith(p) for p in param_keys)
+            },
+            base_score=base_score,
+            objective=objective,
+            ticker=self.current_ticker,
+            timeframes=tfs,
+            metrics={
+                k: float(best.get(k, 0.0) or 0.0)
+                for k in (
+                    "Objective_Score", "Sharpe_Ratio", "Sortino_Ratio",
+                    "Calmar_Ratio", "Percent_Gain_%", "Max_Drawdown_%",
+                    "Profit_Factor", "Win_Rate_%",
+                )
+                if k in best
+            },
+        )
 
     def save_strategy_to_book(self):
         """Store the current optimization result in the strategy book
-        (max 3 slots; a stronger newcomer replaces the weakest slot)"""
+        (a stronger newcomer replaces the weakest slot when full)"""
         if not self.best_params:
             QMessageBox.warning(
                 self, "No Results", "Run an optimization first - the book stores "
@@ -1561,37 +1924,9 @@ Parameters:
             if answer != QMessageBox.StandardButton.Yes:
                 return
 
-        best = (
-            self.best_results.iloc[0]
-            if getattr(self, "best_results", None) is not None
-            else {}
-        )
-        psr = float(best.get("PSR", 0.0) or 0.0)
-        # Prefer the deflated score when available so stored strategies
-        # compete on luck-adjusted evidence (same scale the re-optimizer uses)
-        if self.last_validation is not None:
-            base_score = float(self.last_validation.dsr)
-        else:
-            base_score = psr
-        tfs = sorted({k.split("_", 1)[1] for k in self.best_params if k.startswith("MN1_")})
-
-        name = (
-            f"{self.current_ticker}_{'+'.join(tfs)}_"
-            f"{datetime.now().strftime('%m%d-%H%M')}"
-        )
-        strategy = StoredStrategy(
-            name=name,
-            params={k: v for k, v in self.best_params.items()},
-            base_score=base_score,
-            ticker=self.current_ticker,
-            timeframes=tfs,
-            metrics={
-                k: float(best.get(k, 0.0) or 0.0)
-                for k in ("PSR", "Sharpe_Ratio", "Sortino_Ratio",
-                          "Percent_Gain_%", "Max_Drawdown_%")
-                if k in best
-            },
-        )
+        strategy = self._build_stored_strategy()
+        if strategy is None:
+            return
 
         book = self._strategy_book()
         added, replaced = book.add(strategy)
@@ -1601,21 +1936,147 @@ Parameters:
                 self,
                 "Not Stored",
                 f"Book is full ({StrategyBook.MAX_STRATEGIES} slots) and this "
-                f"strategy's score ({base_score:.3f}) does not beat the weakest "
-                "stored one. It was not saved.",
+                f"strategy's score ({strategy.base_score:.3f}) does not beat "
+                "the weakest stored one. It was not saved.",
             )
             return
 
-        msg = f"Stored '{name}' (score {base_score:.3f}, PSR {psr:.3f})."
-        if replaced and replaced != name:
+        msg = f"Stored '{strategy.name}' (score {strategy.base_score:.3f})."
+        if replaced and replaced != strategy.name:
             msg += f"\nReplaced weakest slot: '{replaced}'."
         msg += f"\n\nBook now holds {len(book)}/{StrategyBook.MAX_STRATEGIES}:"
         for s in book.strategies:
-            msg += f"\n  • {s.name}  (score {s.base_score:.3f})"
+            obj = f", {s.objective}" if getattr(s, "objective", "") else ""
+            msg += f"\n  • {s.name}  (score {s.base_score:.3f}{obj})"
         QMessageBox.information(self, "Strategy Saved", msg)
         self.statusBar().showMessage(
             f"Strategy book: {len(book)}/{StrategyBook.MAX_STRATEGIES} slots used"
         )
+
+    # =============================================================================
+    # AUTO-BUILD: one optimization per goal -> book -> switching backtest
+    # =============================================================================
+
+    def auto_build_book(self):
+        """Run one optimization per selected goal, auto-save each result to
+        the strategy book, then run the regime-switching backtest across
+        the saved strategies"""
+        if not self.df_dict:
+            QMessageBox.warning(
+                self, "No Data", "Load data and select at least one timeframe first"
+            )
+            return
+        if self.worker and self.worker.isRunning():
+            QMessageBox.warning(self, "Already Running", "Optimization is already running")
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Auto-Build Strategy Book")
+        dialog.setStyleSheet(MAIN_STYLESHEET)
+        layout = QVBoxLayout()
+
+        info = QLabel(
+            "One optimization runs per checked goal (using the current "
+            "parameter ranges, trials, and signal settings). Each result is "
+            "auto-saved to the strategy book, then the regime-switching "
+            f"backtest competes them.\nBook capacity: "
+            f"{StrategyBook.MAX_STRATEGIES} slots - weakest slot is replaced."
+        )
+        info.setWordWrap(True)
+        layout.addWidget(info)
+
+        obj_boxes: Dict[str, QCheckBox] = {}
+        for name, spec in OBJECTIVES.items():
+            cb = QCheckBox(spec.label)
+            cb.setChecked(name in AUTO_BUILD_DEFAULTS)
+            cb.setToolTip(spec.description)
+            obj_boxes[name] = cb
+            layout.addWidget(cb)
+
+        run_bt_cb = QCheckBox("Run regime-switching backtest when finished")
+        run_bt_cb.setChecked(True)
+        layout.addWidget(run_bt_cb)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.setLayout(layout)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        objectives = [name for name, cb in obj_boxes.items() if cb.isChecked()]
+        if not objectives:
+            QMessageBox.warning(self, "No Goals", "Check at least one optimization goal")
+            return
+
+        self._auto_objectives = objectives
+        self._auto_run_backtest = run_bt_cb.isChecked()
+        self._auto_saved = []
+        self._auto_active = True
+        self._start_next_auto_objective()
+
+    def _start_next_auto_objective(self):
+        """Kick off the next optimization in the auto-build pipeline"""
+        objective = self._auto_objectives.pop(0)
+        spec = get_objective(objective)
+        remaining = len(self._auto_objectives)
+        self.statusBar().showMessage(
+            f"Auto-build: optimizing for {spec.label} ({remaining} goal(s) queued)"
+        )
+        self.start_optimization(objective=objective)
+
+    def _auto_step_finished(self):
+        """One auto-build optimization finished: save it, then continue"""
+        strategy = self._build_stored_strategy()
+        if strategy is not None:
+            book = self._strategy_book()
+            added, replaced = book.add(strategy)
+            if added:
+                gates = (
+                    "passed gates"
+                    if self.last_validation is None or self.last_validation.passed
+                    else "FAILED overfit gates"
+                )
+                note = f"{strategy.name} (score {strategy.base_score:.3f}, {gates})"
+                if replaced and replaced != strategy.name:
+                    note += f" replacing {replaced}"
+                self._auto_saved.append(note)
+            else:
+                self._auto_saved.append(
+                    f"{strategy.name} NOT stored (weaker than every slot)"
+                )
+
+        if self._auto_objectives:
+            self._start_next_auto_objective()
+            return
+
+        # Pipeline complete
+        self._auto_active = False
+        summary = "Auto-build complete.\n\nSaved strategies:\n" + (
+            "\n".join(f"  • {s}" for s in self._auto_saved) or "  (none)"
+        )
+        self.statusBar().showMessage("Auto-build complete")
+
+        run_backtest = self._auto_run_backtest
+        book = self._strategy_book()
+        usable = self._book_strategies_for_current_data(book)
+        if run_backtest and len(usable) >= 2:
+            QMessageBox.information(
+                self, "Auto-Build Complete",
+                summary + "\n\nRunning the regime-switching backtest now...",
+            )
+            self.run_switching_backtest_gui()
+        else:
+            if run_backtest:
+                summary += (
+                    "\n\nSwitching backtest skipped: needs 2+ usable stored "
+                    f"strategies (book has {len(usable)})."
+                )
+            QMessageBox.information(self, "Auto-Build Complete", summary)
 
     def run_switching_backtest_gui(self):
         """Backtest the regime-switching meta-strategy: all stored
@@ -1722,9 +2183,18 @@ Parameters:
         """Show optimization error"""
         QMessageBox.critical(self, "Error", error_msg)
         self.start_btn.setEnabled(True)
+        self.auto_build_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.phase_label.setText("Error occurred")
         self.statusBar().showMessage("Error")
+
+        # Don't let one failed goal silently kill the auto-build pipeline
+        if self._auto_active:
+            if self._auto_objectives:
+                self._start_next_auto_objective()
+            else:
+                self._auto_active = False
+            return
 
         # Don't let one bad ticker abort a batch run
         if self._batch_queue:
@@ -1846,6 +2316,8 @@ Parameters:
                 ticker=self.current_ticker,
                 transaction_costs=self.transaction_costs,
                 position_size=self.position_size_pct / 100.0,
+                objective=self._selected_objective(),
+                **self._signal_search_kwargs(),
             )
 
             overfit_text = "⚠️ LIKELY OVERFIT" if results.is_overfit else "✅ Not overfit"
@@ -2549,6 +3021,8 @@ Features: {len(self.regime_predictor.feature_names)}
                         timeframes=timeframes,
                         transaction_costs=self.transaction_costs,
                         position_size=self.position_size_pct / 100.0,
+                        objective=self._selected_objective(),
+                        **self._signal_search_kwargs(),
                     ),
                     timeframes=timeframes,
                     interval_minutes=self.reopt_interval_spin.value(),
@@ -2663,6 +3137,8 @@ Features: {len(self.regime_predictor.feature_names)}
     def closeEvent(self, event):
         """Handle window close"""
         self._batch_queue.clear()
+        self._auto_objectives.clear()
+        self._auto_active = False
 
         if self.worker and self.worker.isRunning():
             self.worker.stop()
