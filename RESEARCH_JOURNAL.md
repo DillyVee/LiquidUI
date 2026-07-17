@@ -657,6 +657,44 @@ with the same paired harness before believing it.
 
 ---
 
+## Iteration 7 — 2026-07-17
+
+### Experiment H10 — turn-of-month structural calendar gate (salvage)
+
+**Hypothesis**: H9 condemned the *free-form* cycle (arbitrary period,
+~31M combinations, memorization surface). The turn-of-month window —
+last trading day through the first three trading days of each month —
+is a *documented, persistent, zero-parameter* calendar regularity
+(Ariel 1987; Lakonishok & Smidt 1988; McConnell & Xu 2008: TOM days
+carry essentially all of the equity premium in US data 1926–2005). If
+calendar gating per se has value and H9's failure was the free cycle's
+tunability, a TOM-gated indicator system should not suffer the OOS
+penalty — and may beat the ungated system.
+
+**Design**: research-only `TomGatedOptimizer` subclass (AND the TOM
+window onto entries, window close forces exit — semantics identical to
+the ON/OFF cycle, window fixed by the exchange calendar, which is known
+ex-ante, so the gate is causal). No product code is touched unless the
+hypothesis survives. Arms: C = TOM-gated indicators, B = ungated
+indicators; identical budgets/seed; cycle inert in both.
+
+**Pre-registered decision rule**:
+- Primary population: the 11 equity-index folds (SP500 + NASDAQ) — TOM
+  is an equities phenomenon; the 4 BTC folds are exploratory only and
+  carry no decision weight.
+- C − B paired OOS Sharpe significantly positive (p < 0.05) →
+  structural calendar gating validated; recommend a product TOM-gate
+  option to the maintainer (their call to adopt).
+- Not significant → calendar gating adds no measurable value even in
+  its literature-strongest form; H9's conclusion stands unqualified;
+  the research subclass stays in research/ as the record.
+- Significantly negative → gating harms even without tunability —
+  strongest possible endorsement of the ungated indicator system.
+
+**Results**: (recorded below after the run)
+
+---
+
 ### Backlog (future iterations, in priority order)
 
 1. ~~Validation-split selection inside the main optimizer~~ (closed,
