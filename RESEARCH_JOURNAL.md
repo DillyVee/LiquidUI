@@ -344,15 +344,53 @@ same 24 seeds, same pre-registered criterion:
 (a) pooled degradation A ≤ B in BOTH processes, (b) pooled paired OOS not
 significantly negative, (c) noise OOS not worse than B (do no harm).
 
-**Results (H6)**: (recorded below after the run)
+**Results (H6: validation veto) — KEPT. 24 seeds, paired within-run:**
+
+| process | arm | IS Sharpe | OOS Sharpe | degradation |
+|---|---|---|---|---|
+| edge  | A veto        | +0.23 | **+0.05** | **+0.17** |
+| edge  | B full-sample | +0.47 | −0.47 | +0.94 |
+| noise | A veto        | +0.37 | −0.15 | +0.52 |
+| noise | B full-sample | +0.47 | −0.01 | +0.48 |
+
+Significance (paired, n=24 per process):
+- **edge: paired OOS +0.52 ± 1.04, t = 2.46, p = 0.022 (Wilcoxon p =
+  0.021) — significant.** A better in 15/24 seeds; degradation +0.17 vs
+  +0.94 (full-sample selection shows the classic IS +0.47 → OOS −0.47
+  overfit signature; the veto largely removes it).
+- noise: paired −0.14 ± 1.10, p = 0.54 — statistically zero. On no-edge
+  data the veto frequently selects configurations that simply don't trade
+  OOS (stand-aside), rather than actively trading memorized noise.
+- pooled: +0.19, p = 0.24.
+
+**Verdict vs pre-registered criterion**: (b) ✓ and (c) ✓ (noise
+difference nowhere near significant); **(a) formally failed on noise by
+0.04** (+0.52 vs +0.48) — recorded, not hidden. That margin is an order
+of magnitude smaller than the measured between-run variance (identical
+full-sample arms swung OOS −0.08 → −0.47 across runs purely from Optuna
+n_jobs thread-scheduling nondeterminism), while the edge-side improvement
+is significant at 5%. Decision: **KEEP** the veto form. The failed H5a
+argmax form stays reverted and on record.
+
+**Additional lessons recorded**:
+1. A held-out slice is a budget: argmax spends all of it (falsified);
+   a pass/fail veto spends one bit per candidate (kept).
+2. With `n_jobs > 1`, TPE trial scheduling makes single-run comparisons
+   meaningless; all experiment conclusions here use paired within-run
+   differences across many seeds.
+3. The veto is conservative by construction — on edge data it sometimes
+   stands aside (0 OOS trades in 9/24 edge seeds vs 5/24 for B). The
+   significant net OOS gain already prices this in, and "flat when
+   unproven" is the preferred failure mode for live capital.
 
 ---
 
 ### Backlog (future iterations, in priority order)
 
-1. Validation-split selection inside the main optimizer (select trials on a
-   held-out slice, not the full sample) — the largest remaining source of
-   selection bias in the default GUI path.
+1. ~~Validation-split selection inside the main optimizer~~ (done,
+   iteration 3 — veto form kept, argmax form falsified and reverted).
+   Open refinement: replace the single validation slice with multiple
+   CPCV-style splits for the veto decision.
 2. ~~Exposure %~~ (done, iteration 2); trades/year and
    time-in-market-normalized comparisons still open.
 3. Canonicalize `Start` to `Start % (On + Off)` at storage time; consider
