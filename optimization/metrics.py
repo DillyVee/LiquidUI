@@ -79,12 +79,16 @@ class PerformanceMetrics:
         )
         sharpe = float(np.clip(sharpe, -_RATIO_CAP, _RATIO_CAP))
 
-        # Sortino ratio (downside deviation), annualized to the bar frequency
-        downside_returns = returns[returns < 0]
-        downside_std = np.std(downside_returns, ddof=1) if len(downside_returns) > 1 else 1e-10
+        # Sortino ratio, annualized to the bar frequency. Downside deviation
+        # is the target semideviation (root lower partial moment of order 2,
+        # MAR = 0, averaged over ALL bars - Sortino & van der Meer 1991).
+        # NOT the std of losing bars about their own mean: that rewards
+        # loss UNIFORMITY (identical -1% losses -> std ~ 0 -> ratio
+        # explodes), which an optimizer maximizing Sortino will exploit.
+        downside_dev = float(np.sqrt(np.mean(np.minimum(returns, 0.0) ** 2)))
         sortino = (
-            (avg_return / downside_std) * np.sqrt(annualization_factor)
-            if downside_std > 1e-10
+            (avg_return / downside_dev) * np.sqrt(annualization_factor)
+            if downside_dev > 1e-10
             else 0.0
         )
         sortino = float(np.clip(sortino, -_RATIO_CAP, _RATIO_CAP))

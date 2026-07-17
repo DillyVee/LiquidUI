@@ -167,6 +167,47 @@ class TestExtendedMetrics:
         assert abs(metrics["Sortino_Ratio"]) <= 100.0
         assert np.isfinite(metrics["Profit_Factor"])
 
+    def test_sortino_is_target_downside_deviation(self):
+        """Sortino must use the LPM2 target semideviation (MAR=0, over ALL
+        bars - Sortino & van der Meer 1991), not the std of losing bars
+        about their own mean. The latter rewards loss UNIFORMITY: a stream
+        of identical -1% losses had downside std ~ 0 and rode the ratio to
+        the 100.0 cap, which the optimizer could exploit."""
+        rng = np.random.default_rng(0)
+        wins = np.full(250, 0.012)
+        # Same mean return, same gross loss; only the loss dispersion differs
+        uniform_losses = np.full(250, -0.01) + rng.normal(0, 1e-5, 250)
+        mixed_losses = np.concatenate([np.full(125, -0.002), np.full(125, -0.018)])
+
+        def metrics_for(losses):
+            r = np.empty(500)
+            r[0::2] = wins
+            r[1::2] = losses
+            eq = 1000.0 * np.cumprod(1 + np.concatenate([[0.0], r]))
+            m = PerformanceMetrics.calculate_metrics(eq)
+            expected = (
+                np.mean(r)
+                / np.sqrt(np.mean(np.minimum(r, 0.0) ** 2))
+                * np.sqrt(252.0)
+            )
+            return m["Sortino_Ratio"], expected
+
+        got_u, exp_u = metrics_for(uniform_losses)
+        got_m, exp_m = metrics_for(mixed_losses)
+
+        assert got_u == pytest.approx(exp_u, abs=5e-3)
+        assert got_m == pytest.approx(exp_m, abs=5e-3)
+        # The uniform-loss stream must no longer explode to the cap; both
+        # streams carry comparable downside risk and must score comparably
+        assert got_u < 10.0
+        assert abs(got_u - got_m) < 1.0
+
+    def test_sortino_zero_without_downside(self):
+        """No losing bars = no downside evidence, not infinite skill"""
+        eq = 1000.0 * np.cumprod(1 + np.full(300, 0.001))
+        metrics = PerformanceMetrics.calculate_metrics(eq)
+        assert metrics["Sortino_Ratio"] == 0.0
+
     def test_buyhold_metrics(self):
         rng = np.random.default_rng(9)
         prices = 50 * np.cumprod(1 + rng.normal(0.0008, 0.012, 400))
