@@ -385,6 +385,44 @@ argmax form stays reverted and on record.
 
 ---
 
+## Iteration 4 — 2026-07-17
+
+### Experiment H7 — real-data, multi-asset replication of the veto
+
+**Motivation**: iteration 3's KEEP decision for the validation veto rests
+entirely on synthetic AR(1)/noise processes. The protocol requires
+multi-asset, real-market evidence. Real data adds what the synthetics
+lack: drift regimes, volatility clustering, fat tails — and a long-only
+strategy's veto may cost upside in trending eras, which the synthetic
+harness cannot reveal.
+
+**Data**: FRED daily closes (no auth, reachable through the environment
+proxy): SP500 (~10y), NASDAQCOM restricted to post-1990, CBBTCUSD
+(~11y). Yahoo/Stooq were unavailable (rate-limit / anti-bot wall —
+recorded; no circumvention attempted). Open prices are unavailable from
+FRED, so Open[t] := Close[t-1] — the same convention the test fixtures
+use; identical in both arms, so paired differences are unaffected by the
+fill approximation.
+
+**Protocol (pre-registered before running)**:
+- Per asset, consecutive non-overlapping 950-bar folds (700-bar history
+  given to the optimizer, 250-bar never-seen future), walking back from
+  the most recent bar. Expected folds: ~2 (SP500) + ~9 (NASDAQ) + ~4
+  (BTC) ≈ 15 paired comparisons on independent data blocks.
+- Arms as in H6: A = veto selection (`selection_holdout_frac=0.25`),
+  B = full-sample selection (0.0); identical sampler seed within a pair;
+  240 trials; stock costs for indices, crypto costs for BTC.
+- OOS scoring exactly as H6 (full-context simulation, future slice,
+  H1 boundary convention); buy & hold future Sharpe recorded as context.
+- **Decision rule**: pooled paired OOS Sharpe (A − B) significantly
+  negative (t-test or Wilcoxon p < 0.05) → the iteration 3 KEEP is
+  overturned and the veto reverts to opt-in. Otherwise the veto stands;
+  directionally positive pooled diff counts as replication.
+
+**Results**: (recorded below after the run)
+
+---
+
 ### Backlog (future iterations, in priority order)
 
 1. ~~Validation-split selection inside the main optimizer~~ (done,
