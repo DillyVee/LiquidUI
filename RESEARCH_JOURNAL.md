@@ -691,7 +691,43 @@ indicators; identical budgets/seed; cycle inert in both.
 - Significantly negative → gating harms even without tunability —
   strongest possible endorsement of the ungated indicator system.
 
-**Results**: (recorded below after the run)
+**Results — SALVAGE FAILED; calendar gating is closed in both forms.**
+
+Primary (11 equity folds, paired):
+
+| pooled | IS Sharpe | OOS Sharpe | degradation | OOS>0 |
+|---|---|---|---|---|
+| C TOM-gated | +0.60 | −0.04 ± 0.67 | +0.65 | 5/11 |
+| B ungated   | +0.75 | **+0.43 ± 1.05** | +0.32 | 7/11 |
+
+Paired OOS Sharpe (C − B): −0.47 (t = −1.59, p = 0.14; Wilcoxon
+p = 0.15), TOM better in 3/11. Exploratory BTC (no prior): +0.04,
+p = 0.97 — noise, as expected.
+
+**Verdict per the pre-registered rule** (not significant → no value
+demonstrated): even the zero-parameter, literature-strongest calendar
+gate adds nothing here, with a negative point estimate. Combined with
+H9 (free cycle significantly harmful, p = 0.028), **calendar gating is
+closed in both its free and structural forms for this system**. The
+measured edge lives in the indicator layer.
+
+**Interpretation recorded (mechanism, not excuse)**: this does not
+refute the TOM effect itself — McConnell & Xu documented a return
+concentration in *unconditional long exposure*. A system that already
+times entries with oscillators loses more by discarding ~85% of its
+opportunity set than the TOM premium returns: the TOM arm's OOS trade
+counts collapse (several folds at 0–3 trades). Calendar windows
+compete with indicator timing rather than compounding it.
+
+**Caveat recorded**: 11 folds is modest power — a small true TOM
+contribution cannot be excluded. But the burden was pre-registered on
+the gate, and the direction is negative; there is nothing here to act
+on.
+
+**Iteration-7 conclusion**: H9's maintainer recommendation stands
+unqualified. The indicator-only configuration (cycle ranges pinned to
+(250,250)/(0,0)) is the evidence-backed research posture; the default
+product posture remains the maintainer's decision.
 
 ---
 
@@ -704,11 +740,12 @@ indicators; identical budgets/seed; cycle inert in both.
    as CPCV-style multi-split evidence with a real-data arm.
 2. ~~Exposure %~~ (done, iteration 2); trades/year and
    time-in-market-normalized comparisons still open.
-3. ~~Cycle-space concerns~~ resolved empirically by H9 (iteration 6): the
-   free-form cycle significantly harms OOS (p = 0.028). Remaining
-   follow-up is salvage hypothesis H10 (structurally constrained
-   turn-of-month / weekly cycles) and the maintainer's product decision
-   on default search posture.
+3. ~~Cycle-space concerns~~ fully closed (iterations 6–7): free-form
+   cycle significantly harms OOS (H9, p = 0.028); the zero-parameter
+   turn-of-month gate adds nothing (H10, p = 0.14, negative point
+   estimate). The maintainer's product decision on default search
+   posture remains open — the evidence-backed posture is
+   indicators-only.
 4. ~~Volatility-targeted position sizing~~ (done, iteration 5 — retained
    as opt-in on significant real-data drawdown reduction, p = 0.013;
    isolated-replay evidence; default-on Sharpe bar not met). Live-trader
