@@ -1,0 +1,261 @@
+# LiquidUI Research Journal
+
+Running log of the quantitative research loop applied to this codebase.
+Objective: **maximize the probability that strategies produced by this system
+remain profitable on unseen data** — not backtest performance. Priorities:
+robustness > generalization > risk-adjusted return > drawdown > simplicity >
+raw return. Failed experiments are recorded and never deleted.
+
+---
+
+## Iteration 1 — 2026-07-17
+
+### 1. Understand: system map
+
+Read every module before touching anything. Baseline: 138/138 tests pass.
+
+**Data pipeline** (`data/loader.py`): Yahoo Finance, auto-adjusted OHLCV.
+Daily 10y, hourly ≤729d, 5-min ≤59d. Quality checks: non-positive prices,
+duplicate timestamps, >50% single-bar moves. Timezone-naive timestamps.
+
+**Signals** (`signals/indicators.py`, `signals/engine.py`): 10 causal
+indicators behind one interface; each takes two periods (p1, p2). Unbounded
+indicators are rank-normalized to a causal rolling percentile in [0,100];
+bounded (RSI/stoch/aroon) keep native levels. Entry = ALL legs below their
+Entry threshold on ALL timeframes AND calendar cycle ON; exit = ANY leg above
+its Exit threshold OR cycle OFF. Warm-up bars (indicator lookback + rank
+window) are masked from entries. One shared `evaluate_combo` is used by both
+backtest and live paths — good design, prevents semantic divergence.
+
+**Time cycle**: per timeframe, a calendar-anchored ON/OFF square wave
+(`On`, `Off`, `Start`; anchor = time since epoch). Search ranges up to
+On∈(1,250), Off∈(0,250), Start∈(0,500).
+
+**Backtest** (`optimization/optimizer.py::simulate_multi_tf`): long-only,
+single position, next-bar-open fills, % costs on both sides + optional fixed
+commission, fixed fraction of equity per trade (`position_size`).
+Coarse→fine timeframe mapping lags one full coarse bar (no lookahead).
+Mark-to-market at bar opens.
+
+**Optimization**: Optuna TPE, sequential coordinate descent per timeframe
+(cycle phase → indicator phase), user-selectable objective (Sharpe, Sortino,
+Calmar, total return, PF, win rate, expectancy) scored on the FULL loaded
+dataset, scaled by a trade-count confidence ramp (0 below 10 trades, full
+trust at 30+).
+
+**Anti-overfit stack** (`optimization/validation.py`, `psr_composite.py`):
+- Deflated Sharpe Ratio vs expected-max-of-N-trials benchmark
+  (Bailey & López de Prado 2014), skew/kurtosis-aware PSR, effective-n from
+  trade count.
+- CSCV PBO (Bailey, Borwein, López de Prado & Zhu 2016) over the candidate +
+  up to 12 rival parameter sets from the final phase.
+- `validate_candidate` gate: DSR ≥ 0.90, PBO ≤ 0.50, ≥ 20 trades, optional
+  held-out OOS Sharpe ≥ 0.
+- Walk-forward analyzer (hidden GUI feature): rolling train/test windows,
+  efficiency ratio, consistency, degradation verdict.
+- Live re-optimizer: 75/25 chronological train/holdout split; candidates
+  must pass gates + holdout Sharpe before book admission.
+
+**Regime machinery** (`models/bayesian_changepoint.py`): BOCPD
+(Adams & MacKay 2007) with NIG prior, causal MAP run-length; causal per-bar
+labels (Bull/Bear × Quiet/Volatile). `trading/regime_switcher.py`: strategy
+book (5 slots), per-regime exponentially-weighted shadow scoring, selection
+with optional hysteresis, positions managed to completion by their opener.
+Regime attribution is lag-1 (return over (t-1,t] credited to the label known
+at t-1) — correct.
+
+**Risk controls** (`trading/risk_controls.py`): live-only kill switch
+(daily loss, drawdown, consecutive losses, trade cap). Not present in
+backtest.
+
+**Dead code**: `CompositeOptimizer` / `PBOCalculatorSimple` /
+`TurnoverCalculator` in `psr_composite.py` are referenced only by
+`optimizer.py.backup`. `PSRCalculator` is live (used by DSR gate).
+
+### 2. Analyze: where the edge should come from, and where it leaks
+
+**Claimed edge**: buying short-term weakness (oscillator below threshold)
+within favorable calendar windows, confirmed across timeframes. Short-term
+reversal in equities is documented (Jegadeesh 1990; Lehmann 1990), and
+multi-timeframe confirmation is a coherence filter. The calendar cycle,
+however, has weak a-priori support at arbitrary periods: documented
+seasonality is structural (turn-of-month — Ariel 1987, Lakonishok & Smidt
+1988; day-of-week; January), not "37 bars on / 151 off anchored at epoch".
+With ~31M cycle combinations, **the cycle is the dominant overfitting
+surface**: it can memorize the specific price path. The system's defense is
+the DSR/PBO/holdout stack — which makes the *integrity of the OOS evaluation
+machinery* the single most important part of the codebase.
+
+**Ranked weaknesses found (evidence verified numerically):**
+
+1. **OOS evaluation is warm-up-truncated** (walk-forward `_test_window`,
+   re-optimizer holdout eval). Test slices are simulated in isolation, so
+   the warm-up mask restarts at bar 0 of the slice. Measured warm-ups:
+   RSI(50,25)=75 bars, MACD(50,25)=275 bars, TRIX(100,50)=650 bars — vs a
+   default walk-forward test window of ~21 daily bars and a typical daily
+   holdout of ~630 bars. Consequences: (a) OOS windows systematically report
+   fewer/zero trades and Sharpe→0, penalizing slower indicators for a purely
+   mechanical reason; (b) windows are silently skipped (`oos_trades < 1`),
+   injecting selection noise into the walk-forward verdict; (c) holdout
+   Sharpe of a truncated-flat curve is 0.0, which **passes** the
+   `oos_sharpe >= 0` gate vacuously.
+
+2. **Sortino is mis-specified and exploitable.** Downside deviation is
+   computed as `std(losing bars about their own mean)`. A strategy whose
+   losses are *uniform* gets downside std → 0 and Sortino → the 100.0 cap.
+   Verified: two streams with identical mean per-bar return score Sortino
+   100.0 (uniform losses) vs 1.94 (dispersed losses). Sortino is a
+   selectable optimization objective, so Optuna can actively exploit this.
+   The standard definition (Sortino & van der Meer 1991; Rom & Ferguson
+   1993) is the root lower partial moment of order 2 vs a target (MAR=0)
+   over ALL observations: `sqrt(mean(min(r,0)^2))`.
+
+3. **Zero-OOS-trade candidates pass the holdout gate.** `min_oos_sharpe=0.0`
+   and a flat holdout gives exactly 0.0 ≥ 0.0 → pass. A calendar cycle that
+   memorized in-sample rallies and is OFF for the whole holdout produces
+   *no out-of-sample evidence at all* and is admitted anyway. This is
+   precisely the failure mode the gate exists to catch.
+
+4. **Headline optimization selects in-sample.** The default "START" path
+   optimizes and reports on the full dataset; DSR/PBO run after the fact,
+   but selection itself never sees a validation split. (Backlog — larger
+   change, must not be conflated with 1–3.)
+
+5. **No exposure metric.** Time-in-market is unmeasured, so Sharpe cannot be
+   normalized by exposure and entry/exit contribution can't be attributed.
+   (Backlog.)
+
+6. **`Start` parameter redundancy**: `Start` is suggested in
+   (0, on_max+off_max) but only `Start % (On+Off)` matters — many encodings
+   of the same strategy inflate the search space and defeat TPE locality and
+   rival dedup. (Backlog.)
+
+7. **Minor**: exit at final bar uses same-bar open (stale price, not
+   lookahead); fixed commissions excluded from per-trade %; dead composite
+   optimizer code. (Backlog/cosmetic.)
+
+### 3. Hypotheses this iteration
+
+Changes are deliberately confined to the **validation machinery and metric
+definitions** — not the strategy — because with a search space this flexible,
+un-biased OOS evaluation dominates any signal tweak for out-of-sample
+survival probability.
+
+- **H1 (warm-up context in OOS evaluation).** If OOS windows are simulated
+  with their preceding training data as warm-up context (scoring only OOS
+  bars), because indicator state exists continuously in live trading and
+  only the *evaluation* artificially truncates it, then OOS trade counts and
+  OOS Sharpe become unbiased estimates of live behavior; walk-forward stops
+  silently dropping windows; slow indicators stop being mechanically
+  penalized. Expected: strictly more OOS windows retained, nonzero OOS
+  activity for strategies that hold positions across the boundary; no change
+  to in-sample results.
+
+- **H2 (Sortino → target downside deviation).** If downside deviation uses
+  LPM2 with MAR=0 over all bars, because the Sortino literature defines it
+  that way and the current form rewards loss *uniformity* rather than low
+  downside risk, then the `sortino` objective ranks candidates by true
+  downside risk. Expected: uniform-loss and dispersed-loss streams with
+  equal LPM2 score equally; the 50x inflation disappears; annualization
+  scaling unchanged.
+
+- **H3 (OOS evidence gate).** If gated admission requires a minimum number
+  of holdout trades (evidence), because "no out-of-sample trades" is absence
+  of evidence rather than evidence of harmlessness — and is the signature of
+  cycle memorization — then vacuous holdout passes are rejected. Expected:
+  candidates whose cycle is OFF through the holdout are refused admission.
+
+### 4–8. Implementation, validation, decision
+
+Recorded per-hypothesis below as experiments complete.
+
+---
+
+### Experiment H1 — warm-up context in OOS evaluation
+
+**Status**: implemented — see commit history.
+
+**Code changes**:
+- `optimization/walk_forward.py::_test_window` now simulates on
+  train+test concatenated, locates the first test bar, rescales the OOS
+  equity slice to a 1000.0 start, and counts trades whose exit lands in the
+  test window (a position opened in train and held into test contributes
+  test-period P&L, exactly as live trading would).
+- `trading/live_reoptimizer.py::run_reoptimization_cycle` evaluates the
+  holdout by simulating over the FULL data and slicing the equity curve at
+  the holdout cutoff; OOS trade count (entries inside the holdout) is now
+  reported alongside OOS Sharpe.
+
+**Validation**: unit tests construct an always-in-market strategy with a
+40-bar warm-up and a 21-bar test window. Writing the test surfaced that the
+bias is even worse than analyzed: a window shorter than the indicator
+period doesn't merely stay flat — `compute_rsi_vectorized` raises a
+broadcasting error on 21 bars with a 30-period RSI, `simulate_multi_tf`
+swallows the exception and returns `(None, 0)`, and the walk-forward loop
+**silently skips the window**. So isolated evaluation was dropping exactly
+the windows where slower strategies would have been judged. Post-fix, the
+carried position's test-period P&L is scored (verified against the exact
+open-to-open price move); a fast strategy that never needed context keeps
+its verdict. A no-context fallback stays graceful. Full suite green
+(145 tests).
+
+**Decision**: KEEP. Pure evaluation-fidelity fix; cannot inflate in-sample
+results; makes every downstream robustness verdict more truthful.
+
+---
+
+### Experiment H2 — Sortino target downside deviation
+
+**Status**: implemented — see commit history.
+
+**Code change**: `optimization/metrics.py` — downside deviation is now
+`sqrt(mean(min(r, 0)^2))` over all bars (MAR = 0), annualized as before.
+All-positive curves keep Sortino = 0.0 (no downside evidence ≠ infinite
+skill).
+
+**Measured before/after** (same mean return, same gross loss):
+| stream | old Sortino | new Sortino |
+|---|---|---|
+| uniform −1% losses | 100.0 (cap) | 2.25 |
+| mixed −0.2%/−1.8% losses | 1.94 | 1.75 |
+
+**Decision**: KEEP. Closes an objective-function exploit; standard
+definition; ordering between the two streams is now driven by the second
+moment of losses instead of their variance about their own mean.
+
+---
+
+### Experiment H3 — out-of-sample evidence gate
+
+**Status**: implemented — see commit history.
+
+**Code changes**: `validate_candidate` accepts `oos_trades` /
+`min_oos_trades` (default 0 = no behavior change for existing callers);
+`run_reoptimization_cycle` passes the holdout trade count with
+`min_oos_trades=3` and the report shows it.
+
+**Decision**: KEEP. Conservative default (3 trades on a 25% holdout, vs 20
+required in-sample) rejects only the vacuous-pass pathology.
+
+---
+
+### Backlog (future iterations, in priority order)
+
+1. Validation-split selection inside the main optimizer (select trials on a
+   held-out slice, not the full sample) — the largest remaining source of
+   selection bias in the default GUI path.
+2. Exposure %, trades/year, and time-in-market-normalized metrics.
+3. Canonicalize `Start` to `Start % (On + Off)` at storage time; consider
+   constraining the cycle space to structurally motivated periods
+   (turn-of-month, weekly) or penalizing cycle complexity.
+4. Volatility-targeted position sizing behind the shared backtest/live path
+   (Moreira & Muir 2017; Harvey et al. 2018) — must go through walk-forward
+   before adoption.
+5. Regime-dependence report for single strategies in the default flow (the
+   machinery exists but is hidden).
+6. Remove dead `CompositeOptimizer`/`PBOCalculatorSimple` code and
+   `*.backup` files.
+7. Final-bar exit uses same-bar open — harmless but imprecise; align with
+   next-open convention by dropping the last unclosed mark instead.
+8. Multi-asset validation harness: same parameter set replayed on correlated
+   tickers (SPY/QQQ/IWM) as a cheap generalization check.
