@@ -510,7 +510,33 @@ B = off, all else identical, default full-sample selection):
 - **Feature dropped (reverted)** if Sharpe directionally negative and no
   significant drawdown reduction.
 
-**Results**: (recorded below after the run)
+**Results (joint system: optimize-with-sizing vs optimize-without) —
+NULL.** 15 folds:
+
+| pooled | IS Sharpe | OOS Sharpe | OOS MaxDD | OOS>0 |
+|---|---|---|---|---|
+| A vol-targeted | +0.79 | +0.23 ± 0.98 | −9.0% | 9/15 |
+| B fixed size   | +0.69 | +0.25 ± 1.13 | −8.7% | 9/15 |
+
+Paired Sharpe −0.018 (t = −0.05, p = 0.96); paired MaxDD −0.28pp
+(p = 0.89). Dead null on both pre-registered metrics.
+
+**Confound identified**: the arms optimized under different sizing
+regimes and therefore selected different strategies (several folds where
+one arm's winner didn't trade the future at all) — TPE selection noise
+swamps the sizing effect. The literature effect applies to continuous
+exposure to a FIXED underlying strategy; the joint experiment tested
+"sizing + re-selection" instead.
+
+**Pre-registered amendment (recorded before running)**: isolate the
+mechanism — per fold, take the fixed-sizing arm's winner and replay it
+OOS twice, with and without the vol scalar (identical trades, different
+sizes; the pairing is exact). Decision: vol targeting is retained as
+opt-in only if the isolated replay shows paired OOS improvement in
+Sharpe or MaxDD at p < 0.05; otherwise the feature is dropped
+(implementation reverted, journal record kept).
+
+**Results (isolated sizing replay)**: (recorded below after the run)
 
 ---
 
