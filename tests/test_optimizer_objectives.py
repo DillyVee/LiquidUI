@@ -85,6 +85,37 @@ def test_run_records_objective_and_full_metrics(objective):
     assert 0 <= int(best["Start_daily"]) < period
 
 
+def test_vol_targeting_size_frac_is_causal_and_bounded():
+    opt = _optimizer(vol_targeting=True)
+    sf = opt._size_frac
+    assert sf is not None and len(sf) == 450
+    assert np.all(sf > 0.0) and np.all(sf <= 1.0)
+    # No vol estimate yet -> neutral sizing
+    assert np.all(sf[: opt.VOL_WINDOW] == 1.0)
+
+    # Causality: the multiplier on a data prefix must equal the prefix of
+    # the multiplier (future bars can never change past sizes)
+    prefix_df = {"daily": _df_dict()["daily"].iloc[:300].reset_index(drop=True)}
+    opt_prefix = _optimizer(df_dict=prefix_df, vol_targeting=True)
+    assert np.allclose(sf[:300], opt_prefix._size_frac)
+
+    # Off by default
+    assert _optimizer()._size_frac is None
+
+
+def test_vol_targeting_scales_equity_like_position_size():
+    """A constant 0.5 multiplier must be indistinguishable from halving
+    position_size - pins the per-trade sizing math to existing semantics"""
+    opt_half_frac = _optimizer(position_size=1.0)
+    opt_half_frac._size_frac = np.full(450, 0.5)
+    opt_half_size = _optimizer(position_size=0.5)
+
+    eq_a, t_a = opt_half_frac.simulate_multi_tf(PARAMS_RSI)
+    eq_b, t_b = opt_half_size.simulate_multi_tf(PARAMS_RSI)
+    assert t_a == t_b and t_a > 0
+    assert np.allclose(eq_a, eq_b)
+
+
 def test_cycle_start_canonicalization_is_semantically_free():
     """Start % (On + Off) must not change the simulation at all"""
     opt = _optimizer()

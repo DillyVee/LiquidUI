@@ -91,6 +91,7 @@ class MultiTimeframeOptimizer(QThread):
         seed: Optional[int] = None,
         selection_holdout_frac: float = 0.25,
         use_validation_veto: bool = False,
+        vol_targeting: bool = False,
     ):
         super().__init__()
         # Validates the objective name up front (fail fast, not mid-run)
@@ -142,6 +143,16 @@ class MultiTimeframeOptimizer(QThread):
         # sizing or backtest metrics won't describe the live system.
         self.position_size = float(np.clip(position_size, 0.001, 1.0))
 
+        # Opt-in volatility targeting (Moreira & Muir 2017; Harvey et al.
+        # 2018): per-trade size is scaled by min(1, median_vol / vol) where
+        # vol is the causal 20-bar realized volatility at the decision bar
+        # and median_vol its own expanding median - "scale down when
+        # volatility is elevated relative to its own history". Causal and
+        # parameter-free (fixed 20-bar window, no leverage), so nothing new
+        # for the optimizer to overfit. The per-bar multiplier is built in
+        # _build_size_frac after data preprocessing.
+        self.vol_targeting = bool(vol_targeting)
+
         if transaction_costs is None:
             from config.settings import TransactionCosts
 
@@ -152,6 +163,7 @@ class MultiTimeframeOptimizer(QThread):
 
         self._preprocess_data()
         self._align_timeframes()
+        self._build_size_frac()
 
         # Chronological train/validation split. Always used to RECORD
         # per-segment scores (degradation instrumentation); it only
@@ -249,6 +261,39 @@ class MultiTimeframeOptimizer(QThread):
             print(f"  Aligned {tf} to {finest_tf} (lagged one {tf} bar, no lookahead)")
 
         self.finest_tf = finest_tf
+
+    # Realized-vol window for volatility targeting, in finest-tf bars.
+    # Fixed (not searchable) on purpose: ~1 month of daily bars, inside the
+    # 1-3 month range the volatility-targeting literature uses. Making it
+    # tunable would hand the optimizer a fresh overfitting dial.
+    VOL_WINDOW = 20
+
+    def _build_size_frac(self):
+        """Causal per-bar position-size multiplier for volatility targeting
+        (None when disabled). size_frac[i] uses closes[: i + 1] only, so a
+        trade decided at bar i (filled at open i+1) never reads the future."""
+        if not self.vol_targeting:
+            self._size_frac = None
+            return
+        closes = self.np_data[self.finest_tf]["close"]
+        r = np.zeros(len(closes))
+        r[1:] = np.diff(closes) / np.where(closes[:-1] > 1e-12, closes[:-1], 1.0)
+        vol = (
+            pd.Series(r)
+            .rolling(self.VOL_WINDOW, min_periods=self.VOL_WINDOW)
+            .std()
+            .to_numpy()
+        )
+        med = pd.Series(vol).expanding(min_periods=self.VOL_WINDOW).median().to_numpy()
+        scalar = np.ones(len(closes))
+        valid = np.isfinite(vol) & np.isfinite(med) & (vol > 1e-12)
+        scalar[valid] = np.minimum(1.0, med[valid] / vol[valid])
+        self._size_frac = scalar
+        print(
+            f"📐 Volatility targeting ON: {self.VOL_WINDOW}-bar realized vol vs "
+            f"expanding median (mean size multiplier "
+            f"{float(np.mean(scalar)):.2f}, no leverage)"
+        )
 
     def stop(self):
         """Request a graceful stop of the optimization"""
@@ -460,6 +505,9 @@ class MultiTimeframeOptimizer(QThread):
             trade_pcts: List[float] = []
             trade_entry_idxs: List[int] = []
             bars_in_market = 0
+            # Fraction of equity this trade deploys; with volatility
+            # targeting it is fixed per trade at the decision bar
+            trade_f = self.position_size
 
             for i in range(n_bars):
                 if not position and enter_signal[i]:
@@ -467,6 +515,9 @@ class MultiTimeframeOptimizer(QThread):
                     if i + 1 < n_bars:
                         entry_price = open_finest[i + 1]
                         entry_idx = i + 1
+                        trade_f = self.position_size * (
+                            self._size_frac[i] if self._size_frac is not None else 1.0
+                        )
 
                         # Apply costs
                         entry_cost_pct = self.transaction_costs.TOTAL_PCT
@@ -495,10 +546,10 @@ class MultiTimeframeOptimizer(QThread):
                     trade_pcts.append(pct_change)
                     trade_entry_idxs.append(entry_idx)
 
-                    # Update equity, deploying position_size fraction of equity
-                    # per trade (must match live sizing)
+                    # Update equity, deploying this trade's fraction of
+                    # equity (must match live sizing)
                     equity_before = equity
-                    equity *= 1.0 + self.position_size * (
+                    equity *= 1.0 + trade_f * (
                         exit_price_with_costs / entry_price - 1.0
                     )
 
@@ -528,7 +579,7 @@ class MultiTimeframeOptimizer(QThread):
                 # before that the position is not yet open
                 if position and i >= entry_idx:
                     equity_curve[i] = equity * (
-                        1.0 + self.position_size * (open_finest[i] / entry_price - 1.0)
+                        1.0 + trade_f * (open_finest[i] / entry_price - 1.0)
                     )
                     bars_in_market += 1
                 else:
@@ -544,7 +595,7 @@ class MultiTimeframeOptimizer(QThread):
                 trade_pcts.append(pct_change)
                 trade_entry_idxs.append(entry_idx)
                 equity_before = equity
-                equity *= 1.0 + self.position_size * (
+                equity *= 1.0 + trade_f * (
                     exit_price_with_costs / entry_price - 1.0
                 )
 

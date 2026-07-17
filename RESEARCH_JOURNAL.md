@@ -474,6 +474,46 @@ result row) — measurement shipped, unproven action not.
 
 ---
 
+## Iteration 5 — 2026-07-17
+
+### Experiment H8 — volatility-targeted position sizing
+
+**Hypothesis**: if per-trade exposure is scaled by
+`min(1, expanding_median_vol / current_vol)` — where current_vol is the
+causal 20-bar realized volatility at the decision bar — because volatility
+clusters (Mandelbrot 1963; Engle 1982) while short-horizon expected
+returns do not scale with conditional variance (Moreira & Muir 2017,
+*Volatility-Managed Portfolios*, JF; Harvey et al. 2018, *The Impact of
+Volatility Targeting*, JPM), then OOS risk-adjusted performance improves —
+primarily through drawdown/tail reduction in high-vol regimes — without
+material return sacrifice.
+
+**Design** (opt-in `vol_targeting=False` default until proven):
+- Parameter-free by construction: fixed 20-bar window (inside the 1–3
+  month literature range), target = the vol series' own expanding median,
+  cap at 1 (no leverage; RiskConfig.MAX_LEVERAGE respected). Deliberately
+  NOT searchable by Optuna — a tunable target would be a fresh
+  overfitting dial.
+- Causal: size at decision bar i uses closes[:i+1] only (prefix test).
+- Parity enforced: simulate_multi_tf, the regime-switcher shadow sims,
+  and the real switching portfolio all use the same per-bar multiplier
+  (parity tests assert bit-equality of curves).
+
+**Pre-registered decision rule (burden on the change, per H7 lesson 1)**,
+on the FRED real-data harness (15 folds, arms A = vol targeting on /
+B = off, all else identical, default full-sample selection):
+- Primary: paired OOS Sharpe (A−B). Secondary: paired OOS max drawdown.
+- **Default-on** only if Sharpe improvement p < 0.05 AND drawdown not
+  significantly worse.
+- **Retained as opt-in** if Sharpe directionally ≥ 0, or drawdown
+  significantly reduced without significant Sharpe cost.
+- **Feature dropped (reverted)** if Sharpe directionally negative and no
+  significant drawdown reduction.
+
+**Results**: (recorded below after the run)
+
+---
+
 ### Backlog (future iterations, in priority order)
 
 1. ~~Validation-split selection inside the main optimizer~~ (closed,
