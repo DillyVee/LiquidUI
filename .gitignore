@@ -275,3 +275,4 @@ dmypy.json
 !assets/
 !README_assets/
 bandit-report.json
+research/data/

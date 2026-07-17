@@ -568,6 +568,54 @@ filters, exposure caps).
 
 ---
 
+## Iteration 6 — 2026-07-17
+
+### Infrastructure: reproducible experiment harness committed
+
+The scripts behind H5–H8b lived in the session scratchpad — an ephemeral
+container path. They are now committed under `research/` (scripts as-run
+with only path adjustments; `research/fetch_data.py` re-downloads the
+FRED series; data snapshots stay out of git because FRED's SP500 series
+is S&P-licensed). `research/README.md` records the shared protocol and
+the four standing methodology rules.
+
+### Experiment H9 — marginal OOS value of the calendar time cycle
+
+**Motivation**: the ON/OFF calendar cycle is the product's identity and
+was ranked the #1 overfitting surface in iteration 1 (a ~31M-combination
+calendar pattern with weak a-priori support at arbitrary periods —
+documented seasonality is structural: turn-of-month, day-of-week,
+January). Five iterations hardened the validation machinery around the
+cycle; this experiment finally questions the assumption itself.
+
+**Hypothesis**: if the cycle carries genuine seasonality edge, the full
+system (cycle + indicators) should outperform an otherwise-identical
+system with the cycle pinned always-ON (indicators only) on never-seen
+real data. If the cycle is primarily a memorization surface, its
+marginal OOS contribution will be ≤ 0 even though it inflates in-sample
+scores.
+
+**Protocol (pre-registered)**: the standard 15-fold real-data harness;
+Arm A = cycle searched ((1,60) on, (0,60) off) + indicators; Arm B =
+cycle ranges degenerate ((250,250),(0,0)) so the cycle phase is inert
+and entries are indicator-gated only. Identical indicator-phase budgets,
+sampler seed, costs, selection (default full-sample), no vol targeting.
+Primary metric: paired OOS Sharpe (A − B).
+
+**Decision rule (burden on the cycle)**:
+- A − B significantly positive (p < 0.05) → the cycle's edge is
+  validated on real data; record and keep everything as-is.
+- Not significant → the cycle's marginal real-data contribution is
+  unproven: record the numbers; recommendation to the maintainer that
+  cycle-bearing results should carry a caveat and per-ticker
+  walk-forward evidence before deployment. No product change — the
+  cycle is the product's identity and that call belongs to the user.
+- Significantly negative → same, flagged prominently.
+
+**Results**: (recorded below after the run)
+
+---
+
 ### Backlog (future iterations, in priority order)
 
 1. ~~Validation-split selection inside the main optimizer~~ (closed,
