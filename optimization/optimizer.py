@@ -15,6 +15,16 @@ Modes:
   - legacy             indicator_search=False reproduces the original
                        RSI-only parameter search
 
+Selection discipline: when enough data is loaded, TPE navigates on the
+TRAIN segment (first 1 - selection_holdout_frac of bars) and each phase's
+winner is chosen by its score on the untouched VALIDATION slice (the last
+selection_holdout_frac of bars). Selecting on the same data that was
+optimized is the primary mechanism by which backtests overstate live
+performance (Bailey & Lopez de Prado 2014; Arnott, Harvey & Markowitz
+2019); the validation slice is never fed to the sampler, so its maximum is
+a far weaker selection effect than a full-sample argmax. Small datasets
+(e.g. walk-forward inner windows) fall back to full-sample selection.
+
 Walk-forward analysis stays a separate function (optimization.walk_forward)
 and the anti-overfit gates live in optimization.validation.
 """
@@ -41,6 +51,12 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 class MultiTimeframeOptimizer(QThread):
     """Multi-timeframe strategy optimizer with selectable objective"""
+
+    # Below this many finest-timeframe bars a 25% validation slice is too
+    # short for stable trade statistics; selection falls back to the
+    # full-sample argmax (status quo). Keeps walk-forward inner windows
+    # (~126 daily bars) unaffected.
+    MIN_SELECTION_BARS = 400
 
     progress = pyqtSignal(int)
     new_best = pyqtSignal(dict)
@@ -69,6 +85,7 @@ class MultiTimeframeOptimizer(QThread):
         allowed_indicators: Optional[Sequence[str]] = None,
         combine_indicators: bool = True,
         seed: Optional[int] = None,
+        selection_holdout_frac: float = 0.25,
     ):
         super().__init__()
         # Validates the objective name up front (fail fast, not mid-run)
@@ -130,6 +147,25 @@ class MultiTimeframeOptimizer(QThread):
 
         self._preprocess_data()
         self._align_timeframes()
+
+        # Chronological validation slice for winner selection (None =
+        # full-sample selection, the pre-H5 behavior). TPE only ever sees
+        # train-segment scores; the validation slice picks phase winners.
+        frac = float(np.clip(selection_holdout_frac, 0.0, 0.5))
+        n_finest = self.np_data[self.finest_tf]["length"]
+        if frac > 0.0 and n_finest >= self.MIN_SELECTION_BARS:
+            self.selection_cut: Optional[int] = int(n_finest * (1.0 - frac))
+            print(
+                f"🔍 Selection: TPE on bars [0, {self.selection_cut}), winners "
+                f"picked on validation bars [{self.selection_cut}, {n_finest})"
+            )
+        else:
+            self.selection_cut = None
+            if frac > 0.0:
+                print(
+                    f"🔍 Selection: {n_finest} bars < {self.MIN_SELECTION_BARS} - "
+                    "full-sample selection (validation slice too short)"
+                )
 
     def _preprocess_data(self):
         """Convert all DataFrames to numpy arrays once for speed"""
@@ -215,15 +251,43 @@ class MultiTimeframeOptimizer(QThread):
             return 252.0 * 6.5 * 12
         return 252.0 * 6.5 * 60  # 1min
 
+    def _segment_score(
+        self, eq_curve: np.ndarray, trade_pcts: np.ndarray, start: int, end: int
+    ) -> Tuple[float, int]:
+        """
+        Confidence-scaled objective score of one chronological segment
+        [start, end) of the equity curve. The slice begins one bar early so
+        the first segment bar's return is included, and is renormalized to
+        the 1000.0 start every metric assumes. Trades belong to the segment
+        their ENTRY bar falls in.
+        """
+        lo = max(start - 1, 0)
+        eq_slice = eq_curve[lo:end]
+        if len(eq_slice) < 2 or eq_slice[0] <= 0:
+            return 0.0, 0
+        eq_norm = eq_slice * (1000.0 / eq_slice[0])
+        seg_metrics = PerformanceMetrics.calculate_metrics(
+            eq_norm,
+            annualization_factor=self.annualization_factor,
+            trade_returns=trade_pcts,
+        )
+        n_trades = len(trade_pcts)
+        _, seg_score = scored(self.objective, seg_metrics, n_trades)
+        return float(seg_score), n_trades
+
     def evaluate_params(self, params: Dict) -> Tuple[float, float, Optional[Dict], int]:
         """
         Simulate one parameter set and score it under the configured
         objective.
 
         Returns:
-            (raw_objective_value, confidence_scaled_score, metrics, trades)
-            where `score` is the raw objective value scaled by the trade-
-            count confidence multiplier (fewer than 10 trades scores 0).
+            (raw_objective_value, sampler_score, metrics, trades). `raw` is
+            the full-sample objective value (reporting continuity).
+            `sampler_score` is what TPE maximizes: with a validation split
+            active it is the TRAIN-segment confidence-scaled score (the
+            validation slice is reserved for winner selection and stored in
+            metrics as Val_Score); without a split it is the full-sample
+            confidence-scaled score, as before.
         """
         sim_stats: Dict = {}
         eq_curve, trade_count, trade_pcts = self.simulate_multi_tf(
@@ -242,6 +306,25 @@ class MultiTimeframeOptimizer(QThread):
             return 0.0, 0.0, None, int(trade_count)
 
         raw, score = scored(self.objective, metrics, trade_count)
+
+        cut = self.selection_cut
+        if cut is not None:
+            entry_idxs = np.asarray(
+                sim_stats.get("trade_entry_idxs", []), dtype=np.int64
+            )
+            in_train = entry_idxs < cut
+            train_score, train_trades = self._segment_score(
+                eq_curve, trade_pcts[in_train], 0, cut
+            )
+            val_score, val_trades = self._segment_score(
+                eq_curve, trade_pcts[~in_train], cut, len(eq_curve)
+            )
+            metrics["Train_Score"] = round(train_score, 6)
+            metrics["Val_Score"] = round(val_score, 6)
+            metrics["Train_Trades"] = int(train_trades)
+            metrics["Val_Trades"] = int(val_trades)
+            score = train_score
+
         return raw, score, metrics, int(trade_count)
 
     def compute_signals(self, params: Dict) -> Tuple[np.ndarray, np.ndarray]:
@@ -359,6 +442,7 @@ class MultiTimeframeOptimizer(QThread):
             trade_count = 0
             trades = [] if return_trades else None
             trade_pcts: List[float] = []
+            trade_entry_idxs: List[int] = []
             bars_in_market = 0
 
             for i in range(n_bars):
@@ -393,6 +477,7 @@ class MultiTimeframeOptimizer(QThread):
                     # Calculate actual percent change (price move net of costs)
                     pct_change = (exit_price_with_costs / entry_price - 1) * 100
                     trade_pcts.append(pct_change)
+                    trade_entry_idxs.append(entry_idx)
 
                     # Update equity, deploying position_size fraction of equity
                     # per trade (must match live sizing)
@@ -441,6 +526,7 @@ class MultiTimeframeOptimizer(QThread):
 
                 pct_change = (exit_price_with_costs / entry_price - 1) * 100
                 trade_pcts.append(pct_change)
+                trade_entry_idxs.append(entry_idx)
                 equity_before = equity
                 equity *= 1.0 + self.position_size * (
                     exit_price_with_costs / entry_price - 1.0
@@ -471,6 +557,7 @@ class MultiTimeframeOptimizer(QThread):
                 stats_out["exposure_frac"] = (
                     bars_in_market / n_bars if n_bars else 0.0
                 )
+                stats_out["trade_entry_idxs"] = trade_entry_idxs
 
             if return_trades:
                 return equity_curve, trade_count, trades
@@ -527,7 +614,40 @@ class MultiTimeframeOptimizer(QThread):
         trial.set_user_attr("score", float(score))
         trial.set_user_attr("metrics", metrics)
         trial.set_user_attr("trade_count", trade_count)
+        trial.set_user_attr(
+            "val_score",
+            float(metrics["Val_Score"]) if metrics and "Val_Score" in metrics else None,
+        )
         return score
+
+    def _phase_winner(self, study: optuna.Study) -> optuna.trial.FrozenTrial:
+        """
+        The trial whose suggested params win this phase.
+
+        With a validation split: the best VALIDATION-slice score among
+        trials that actually earned one (> 0). The sampler never saw these
+        scores, so this argmax is a selection over train-plausible
+        candidates, not a fit to the sampler's own navigation target.
+        Falls back to the best sampler score when no trial produced a
+        positive validation score (or no split is active).
+        """
+        completed = [
+            t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE
+        ]
+        if self.selection_cut is not None:
+            with_val = [
+                t for t in completed if (t.user_attrs.get("val_score") or 0.0) > 0.0
+            ]
+            if with_val:
+                winner = max(with_val, key=lambda t: t.user_attrs["val_score"])
+                print(
+                    f"   🏁 winner by validation score "
+                    f"{winner.user_attrs['val_score']:.4f} "
+                    f"(train score {winner.value:.4f})"
+                )
+                return winner
+            print("   🏁 no positive validation score - winner by train score")
+        return max(completed, key=lambda t: t.value if t.value is not None else -np.inf)
 
     def _save_batch_results(
         self, study: optuna.Study, n_before: int, batch_idx: int, phase_counter: int,
@@ -735,10 +855,11 @@ class MultiTimeframeOptimizer(QThread):
                         "check data quality and parameter ranges"
                     )
 
+                cycle_winner = self._phase_winner(cycle_study)
                 best_cycle = {
-                    f"On_{tf}": cycle_study.best_params[f"On_{tf}"],
-                    f"Off_{tf}": cycle_study.best_params[f"Off_{tf}"],
-                    f"Start_{tf}": cycle_study.best_params[f"Start_{tf}"],
+                    f"On_{tf}": cycle_winner.params[f"On_{tf}"],
+                    f"Off_{tf}": cycle_winner.params[f"Off_{tf}"],
+                    f"Start_{tf}": cycle_winner.params[f"Start_{tf}"],
                 }
 
                 if tf not in self.best_params_per_tf:
@@ -891,10 +1012,10 @@ class MultiTimeframeOptimizer(QThread):
                         "check data quality and parameter ranges"
                     )
 
-                # Take every suggested key of the best trial (all keys are
-                # namespaced with _{tf}); with indicator_search this
+                # Take every suggested key of the winning trial (all keys
+                # are namespaced with _{tf}); with indicator_search this
                 # includes the IND1/IND2 choices and their sub-params
-                best_ind = dict(ind_study.best_params)
+                best_ind = dict(self._phase_winner(ind_study).params)
                 if self.indicator_search and not self.combine_indicators:
                     # IND2 was forced off, not suggested - record it so the
                     # stored parameter set is self-describing
@@ -948,6 +1069,15 @@ class MultiTimeframeOptimizer(QThread):
 
             objective_raw, _ = scored(self.objective, base_metrics, base_trade_count)
 
+            # Attach the compiled set's train/validation segment scores so
+            # the result row shows how it fared on the untouched slice
+            if self.selection_cut is not None:
+                _, _, split_metrics, _ = self.evaluate_params(base_params)
+                if split_metrics:
+                    for key in ("Train_Score", "Val_Score", "Train_Trades", "Val_Trades"):
+                        if key in split_metrics:
+                            base_metrics[key] = split_metrics[key]
+
             base_metrics["Trade_Count"] = base_trade_count
             base_metrics["Objective"] = self.objective
             base_metrics["Objective_Score"] = objective_raw
@@ -969,6 +1099,12 @@ class MultiTimeframeOptimizer(QThread):
                 f"Sharpe: {base_metrics['Sharpe_Ratio']:.2f} | "
                 f"Sortino: {base_metrics['Sortino_Ratio']:.2f}"
             )
+            if "Val_Score" in base_metrics:
+                print(
+                    f"   Validation slice: score {base_metrics['Val_Score']:.4f} "
+                    f"({base_metrics.get('Val_Trades', 0)} trades) | "
+                    f"train score {base_metrics.get('Train_Score', 0.0):.4f}"
+                )
 
             # Append final result and rewrite CSV
             final_result = {**base_params, **base_metrics}

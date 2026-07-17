@@ -271,6 +271,50 @@ absent without simulation stats; clipped to [0, 100]. Full suite green
 
 ---
 
+## Iteration 3 — 2026-07-17
+
+### Experiment H5 — validation-split selection in the main optimizer
+
+**Hypothesis**: if trial *selection* uses a chronologically held-out
+validation slice (TPE navigates on the first 75% of bars; each phase's
+winner is the best score on the untouched last 25%), because selecting on
+the data that was optimized is the primary mechanism by which backtests
+overstate live performance (Bailey & López de Prado 2014; Arnott, Harvey &
+Markowitz 2019 backtesting protocol), then the selected parameter set's
+performance on genuinely unseen data improves — most visibly on data with
+no true edge, where full-sample selection picks pure memorizers.
+
+**Design**:
+- `selection_holdout_frac=0.25` constructor parameter (0 disables; clipped
+  to ≤ 0.5). Below `MIN_SELECTION_BARS=400` finest bars the split is
+  disabled automatically, so walk-forward inner windows (~126 daily bars)
+  keep full-sample selection rather than selecting on a ~30-bar slice.
+- TPE's objective value is the TRAIN-segment confidence-scaled score; the
+  sampler never sees validation data, so the winner argmax over validation
+  is a selection over train-plausible candidates, not a fit to the
+  sampler's navigation target.
+- Winner per phase = max validation score among trials with a positive
+  one; fallback to the train argmax when no trial earned one (logged).
+- Segment scoring reuses the H1 slice convention (start one bar early,
+  renormalize to 1000) and assigns trades to the segment containing their
+  entry bar (same convention as the H3 evidence gate). The trade-count
+  confidence ramp applies within each segment.
+- Every trial row (and the final result) records Train_Score / Val_Score /
+  Train_Trades / Val_Trades; nested layers (reoptimizer holdout, DSR/PBO
+  gates) are unchanged and sit outside this split.
+
+**Controlled experiment** (synthetic, 8 seeds × 2 arms × 2 processes;
+700-bar history given to the optimizer, 250-bar future never shown;
+240 trials, identical sampler seed per arm; winners scored on the future
+via full-context simulation, H1 convention):
+- `edge`: AR(1) returns, φ = −0.25 — a true, harvestable short-term
+  reversal (buy-weakness oscillators have a real edge here).
+- `noise`: iid returns, zero drift — any apparent edge is memorization.
+
+**Results**: (recorded below after the run)
+
+---
+
 ### Backlog (future iterations, in priority order)
 
 1. Validation-split selection inside the main optimizer (select trials on a

@@ -78,6 +78,8 @@ def test_run_records_objective_and_full_metrics(objective):
     # Exposure (time in market) recorded alongside the other metrics
     assert "Exposure_%" in best
     assert 0.0 <= best["Exposure_%"] <= 100.0
+    # Validation-split selection active on 450 bars: segment scores present
+    assert "Train_Score" in best and "Val_Score" in best
 
 
 def test_simulate_reports_exposure_stats():
@@ -147,18 +149,83 @@ def test_results_csv_columns_stay_aligned():
     results_path.unlink()
 
 
+PARAMS_RSI = {
+    "MN1_daily": 10, "MN2_daily": 3,
+    "Entry_daily": 35.0, "Exit_daily": 65.0,
+    "On_daily": 10, "Off_daily": 5, "Start_daily": 0,
+}
+
+
 def test_evaluate_params_scales_by_trade_confidence():
-    opt = _optimizer()
-    params = {
-        "MN1_daily": 10, "MN2_daily": 3,
-        "Entry_daily": 35.0, "Exit_daily": 65.0,
-        "On_daily": 10, "Off_daily": 5, "Start_daily": 0,
-    }
-    raw, score, metrics, trade_count = opt.evaluate_params(params)
+    """Without a validation split the sampler score is the full-sample
+    objective scaled by the trade-confidence ramp (pre-H5 contract)"""
+    opt = _optimizer(selection_holdout_frac=0.0)
+    assert opt.selection_cut is None
+
+    raw, score, metrics, trade_count = opt.evaluate_params(PARAMS_RSI)
     assert metrics is not None
+    assert "Val_Score" not in metrics
     if trade_count >= 30:
         assert score == pytest.approx(raw)
     elif trade_count < 10:
         assert score == 0.0
     else:
         assert score == pytest.approx(raw * (trade_count - 10) / 20.0)
+
+
+def test_evaluate_params_with_validation_split():
+    """With the split active the sampler only ever sees the TRAIN-segment
+    score; the validation slice is recorded for winner selection"""
+    opt = _optimizer()  # 450 bars >= MIN_SELECTION_BARS -> split active
+    assert opt.selection_cut == int(450 * 0.75)
+
+    raw, score, metrics, trade_count = opt.evaluate_params(PARAMS_RSI)
+    assert metrics is not None
+    for key in ("Train_Score", "Val_Score", "Train_Trades", "Val_Trades"):
+        assert key in metrics, key
+    assert score == pytest.approx(metrics["Train_Score"])
+    assert metrics["Train_Trades"] + metrics["Val_Trades"] == trade_count
+    # Full-sample raw objective is preserved for reporting
+    assert np.isfinite(raw)
+
+
+def test_selection_split_disabled_on_small_data():
+    """Walk-forward-sized windows must keep full-sample selection"""
+    opt = _optimizer(df_dict=_df_dict(n=300))
+    assert opt.selection_cut is None
+
+
+def test_phase_winner_prefers_validation_score():
+    import optuna
+
+    opt = _optimizer()  # split active
+    dists = {"x": optuna.distributions.IntDistribution(0, 10)}
+
+    def add(study, x, train, val):
+        study.add_trial(
+            optuna.trial.create_trial(
+                params={"x": x},
+                distributions=dists,
+                value=train,
+                user_attrs={"val_score": val, "params": {"x": x}},
+            )
+        )
+
+    study = optuna.create_study(direction="maximize")
+    add(study, 0, train=1.0, val=0.1)  # best train, weak validation
+    add(study, 1, train=0.5, val=0.9)  # weaker train, best validation
+    add(study, 2, train=0.8, val=None)  # no validation evidence
+    assert opt._phase_winner(study).params["x"] == 1
+
+    # No positive validation score anywhere -> fall back to train argmax
+    study2 = optuna.create_study(direction="maximize")
+    add(study2, 0, train=0.3, val=0.0)
+    add(study2, 1, train=0.9, val=0.0)
+    assert opt._phase_winner(study2).params["x"] == 1
+
+    # Split inactive -> validation attrs are ignored entirely
+    small = _optimizer(df_dict=_df_dict(n=300))
+    study3 = optuna.create_study(direction="maximize")
+    add(study3, 0, train=0.9, val=0.1)
+    add(study3, 1, train=0.2, val=0.8)
+    assert small._phase_winner(study3).params["x"] == 0
