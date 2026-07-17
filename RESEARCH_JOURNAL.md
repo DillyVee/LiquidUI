@@ -536,7 +536,35 @@ opt-in only if the isolated replay shows paired OOS improvement in
 Sharpe or MaxDD at p < 0.05; otherwise the feature is dropped
 (implementation reverted, journal record kept).
 
-**Results (isolated sizing replay)**: (recorded below after the run)
+**Results (isolated sizing replay) — KEPT as opt-in.** 15 folds, exact
+pairing (same winner strategy, same trades, ± the vol scalar):
+
+| pooled | OOS Sharpe | OOS MaxDD |
+|---|---|---|
+| vol-targeted | +0.07 ± 1.08 | **−11.26%** |
+| fixed size   | +0.02 ± 1.07 | −13.84% |
+
+- **Paired MaxDD +2.59pp shallower (t = 2.85, p = 0.013; Wilcoxon
+  p = 0.001; better in 13/15 folds)** — significant on both tests, and a
+  ~19% relative drawdown reduction. The standout folds are exactly the
+  hypothesized regime: the 2022 bear (NASDAQ −15.5% vs −26.1%; SPX
+  −4.5% vs −10.6%) and the 2018 BTC crash (−23.7% vs −33.0%).
+- Paired Sharpe +0.046 (p = 0.27) — directionally positive, not
+  significant: drawdown protection came at no measurable return cost.
+
+**Verdict per the amendment rule** (p < 0.05 in Sharpe OR MaxDD →
+retain): **RETAINED as opt-in** (`vol_targeting=True`). Default-on was
+pre-registered to require a joint-system Sharpe gain at p < 0.05, which
+was null — so the default stays off. The feature ships as what the
+evidence says it is: a convex risk-reduction overlay (priority 4:
+drawdown reduction), not an alpha source.
+
+**Methodology lesson recorded**: sizing/risk overlays must be evaluated
+on FIXED strategies (exact pairing) — testing them through
+re-optimization confounds the overlay with TPE selection noise, which
+turned a p = 0.013 drawdown effect into a p = 0.89 null in the joint
+experiment. Applies to every future overlay hypothesis (stops, regime
+filters, exposure caps).
 
 ---
 
@@ -552,9 +580,12 @@ Sharpe or MaxDD at p < 0.05; otherwise the feature is dropped
 3. Canonicalize `Start` to `Start % (On + Off)` at storage time; consider
    constraining the cycle space to structurally motivated periods
    (turn-of-month, weekly) or penalizing cycle complexity.
-4. Volatility-targeted position sizing behind the shared backtest/live path
-   (Moreira & Muir 2017; Harvey et al. 2018) — must go through walk-forward
-   before adoption.
+4. ~~Volatility-targeted position sizing~~ (done, iteration 5 — retained
+   as opt-in on significant real-data drawdown reduction, p = 0.013;
+   isolated-replay evidence; default-on Sharpe bar not met). Live-trader
+   wiring (alpaca path) still needed before the opt-in flag may be used
+   with real orders — parity currently covers backtest + shadow +
+   switching portfolio only.
 5. Regime-dependence report for single strategies in the default flow (the
    machinery exists but is hidden).
 6. Remove dead `CompositeOptimizer`/`PBOCalculatorSimple` code and

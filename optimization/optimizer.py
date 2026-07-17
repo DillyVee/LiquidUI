@@ -151,6 +151,12 @@ class MultiTimeframeOptimizer(QThread):
         # parameter-free (fixed 20-bar window, no leverage), so nothing new
         # for the optimizer to overfit. The per-bar multiplier is built in
         # _build_size_frac after data preprocessing.
+        #
+        # Evidence (journal H8/H8b): on fixed strategies over 15 real-data
+        # folds it cut OOS max drawdown by 2.6pp (p=0.013) at no Sharpe
+        # cost - a risk-reduction overlay, not an alpha source. Stays off
+        # by default because the joint (re-optimized) system showed no
+        # Sharpe gain.
         self.vol_targeting = bool(vol_targeting)
 
         if transaction_costs is None:
