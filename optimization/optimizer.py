@@ -225,8 +225,9 @@ class MultiTimeframeOptimizer(QThread):
             where `score` is the raw objective value scaled by the trade-
             count confidence multiplier (fewer than 10 trades scores 0).
         """
+        sim_stats: Dict = {}
         eq_curve, trade_count, trade_pcts = self.simulate_multi_tf(
-            params, return_trade_pcts=True
+            params, return_trade_pcts=True, stats_out=sim_stats
         )
         if eq_curve is None or len(eq_curve) < 50:
             return 0.0, 0.0, None, 0
@@ -235,6 +236,7 @@ class MultiTimeframeOptimizer(QThread):
             eq_curve,
             annualization_factor=self.annualization_factor,
             trade_returns=trade_pcts,
+            exposure_frac=sim_stats.get("exposure_frac"),
         )
         if metrics is None:
             return 0.0, 0.0, None, int(trade_count)
@@ -306,10 +308,20 @@ class MultiTimeframeOptimizer(QThread):
         return enter_signal, exit_signal
 
     def simulate_multi_tf(
-        self, params: Dict, return_trades: bool = False, return_trade_pcts: bool = False
+        self,
+        params: Dict,
+        return_trades: bool = False,
+        return_trade_pcts: bool = False,
+        stats_out: Optional[Dict] = None,
     ):
         """
         Simulate a parameter set on the finest timeframe.
+
+        Args:
+            stats_out: Optional caller-owned dict that receives simulation
+                statistics ("exposure_frac": fraction of bars marked
+                in-market). Caller-owned so concurrent trials (Optuna
+                n_jobs threads) can never race on shared state.
 
         Returns:
             (equity_curve, trade_count) by default;
@@ -347,6 +359,7 @@ class MultiTimeframeOptimizer(QThread):
             trade_count = 0
             trades = [] if return_trades else None
             trade_pcts: List[float] = []
+            bars_in_market = 0
 
             for i in range(n_bars):
                 if not position and enter_signal[i]:
@@ -416,6 +429,7 @@ class MultiTimeframeOptimizer(QThread):
                     equity_curve[i] = equity * (
                         1.0 + self.position_size * (open_finest[i] / entry_price - 1.0)
                     )
+                    bars_in_market += 1
                 else:
                     equity_curve[i] = equity
 
@@ -452,6 +466,11 @@ class MultiTimeframeOptimizer(QThread):
                     )
 
                 equity_curve[-1] = equity
+
+            if stats_out is not None:
+                stats_out["exposure_frac"] = (
+                    bars_in_market / n_bars if n_bars else 0.0
+                )
 
             if return_trades:
                 return equity_curve, trade_count, trades
@@ -906,8 +925,9 @@ class MultiTimeframeOptimizer(QThread):
                     base_params.update(self.best_params_per_tf[tf])
 
             # Get equity curve AND trade log for GUI display
+            final_stats: Dict = {}
             base_eq_curve, base_trade_count, base_trades = self.simulate_multi_tf(
-                base_params, return_trades=True
+                base_params, return_trades=True, stats_out=final_stats
             )
 
             if base_eq_curve is None:
@@ -920,6 +940,7 @@ class MultiTimeframeOptimizer(QThread):
                 base_eq_curve,
                 annualization_factor=self.annualization_factor,
                 trade_returns=trade_pcts,
+                exposure_frac=final_stats.get("exposure_frac"),
             )
 
             if base_metrics is None:

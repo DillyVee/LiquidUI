@@ -239,12 +239,45 @@ required in-sample) rejects only the vacuous-pass pathology.
 
 ---
 
+## Iteration 2 — 2026-07-17
+
+### Experiment H4 — Exposure metric (time in market)
+
+**Hypothesis**: if time-in-market is measured and reported with every
+result, because a Sharpe earned while invested 8% of bars has a different
+capacity/regime/risk profile than one earned at 80% (per-bar risk metrics
+are diluted by flat bars, and the calendar cycle makes low exposure the
+norm here), then results become comparable on capital-efficiency terms and
+entry/exit attribution becomes possible. Measurement only — no behavior
+change to any simulation, objective, or gate.
+
+**Code changes**:
+- `simulate_multi_tf` counts in-market bars (same condition as the
+  mark-to-market branch) and reports `exposure_frac` through an optional
+  caller-owned `stats_out` dict — caller-owned so Optuna's `n_jobs`
+  threads can never race on shared optimizer state.
+- `calculate_metrics(..., exposure_frac=)` adds `Exposure_%` (absent when
+  not provided, so buy-and-hold benchmark metrics are unaffected).
+- Every trial's metrics, the final result row, the results CSV, and the
+  GUI full report now carry `Exposure_%`.
+
+**Validation**: exposure of an always-in-market parameter set equals
+(n − first_fill_bar)/n exactly; a never-entering set reports 0.0; metric
+absent without simulation stats; clipped to [0, 100]. Full suite green
+(147 tests).
+
+**Decision**: KEEP. Zero behavioral risk, unlocks exposure-aware analysis
+(backlog: exposure-normalized comparisons across strategy-book slots).
+
+---
+
 ### Backlog (future iterations, in priority order)
 
 1. Validation-split selection inside the main optimizer (select trials on a
    held-out slice, not the full sample) — the largest remaining source of
    selection bias in the default GUI path.
-2. Exposure %, trades/year, and time-in-market-normalized metrics.
+2. ~~Exposure %~~ (done, iteration 2); trades/year and
+   time-in-market-normalized comparisons still open.
 3. Canonicalize `Start` to `Start % (On + Off)` at storage time; consider
    constraining the cycle space to structurally motivated periods
    (turn-of-month, weekly) or penalizing cycle complexity.

@@ -1603,6 +1603,7 @@ class MainWindow(QMainWindow):
             "",
             "Trades:",
             f"  Total Trades: {p.get('Trade_Count', 0)}",
+            f"  Exposure (time in market): {val('Exposure_%', '.1f', '%')}",
             f"  Win Rate: {val('Win_Rate_%', '.1f', '%')}",
             f"  Profit Factor: {val('Profit_Factor')}",
             f"  Expectancy: {val('Expectancy_%', '.3f', '%/trade')}",

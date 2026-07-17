@@ -75,6 +75,36 @@ def test_run_records_objective_and_full_metrics(objective):
     # DSR inputs collected for the anti-overfit gates
     assert len(opt.trial_sharpes) > 0
     assert opt.rival_params
+    # Exposure (time in market) recorded alongside the other metrics
+    assert "Exposure_%" in best
+    assert 0.0 <= best["Exposure_%"] <= 100.0
+
+
+def test_simulate_reports_exposure_stats():
+    opt = _optimizer()
+
+    # Always-in-market once warmed up: enter below 100.5 (always), never
+    # exit; cycle always ON. Exposure = bars from first entry to the end.
+    hold = {
+        "MN1_daily": 5, "MN2_daily": 3,
+        "Entry_daily": 100.5, "Exit_daily": 100.5,
+        "On_daily": 20, "Off_daily": 0, "Start_daily": 0,
+    }
+    stats = {}
+    eq, trades = opt.simulate_multi_tf(hold, stats_out=stats)
+    n = len(eq)
+    enter, _ = opt.compute_signals(hold)
+    first_entry = int(np.argmax(enter)) + 1  # fills at next bar's open
+    assert stats["exposure_frac"] == pytest.approx((n - first_entry) / n)
+
+    # Cycle permanently OFF: no trades, zero exposure
+    never = dict(hold, On_daily=1, Off_daily=0, Start_daily=0)
+    # On=1, Off=0 -> period 1, cycle always ON; instead block via Entry=0
+    never["Entry_daily"] = 0.0  # oscillator can never be below 0
+    stats2 = {}
+    eq2, trades2 = opt.simulate_multi_tf(never, stats_out=stats2)
+    assert trades2 == 0
+    assert stats2["exposure_frac"] == 0.0
 
 
 def test_allowed_indicators_restricts_search():

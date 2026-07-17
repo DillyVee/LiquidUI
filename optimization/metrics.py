@@ -27,6 +27,7 @@ class PerformanceMetrics:
         eq_curve: np.ndarray,
         annualization_factor: float = 252.0,
         trade_returns: Optional[np.ndarray] = None,
+        exposure_frac: Optional[float] = None,
     ) -> Optional[Dict[str, float]]:
         """
         Calculate comprehensive performance metrics.
@@ -38,6 +39,11 @@ class PerformanceMetrics:
             trade_returns: Optional per-trade percent changes (e.g. [1.2,
                 -0.4, ...] in %). Enables trade-level statistics and a
                 trade-based profit factor.
+            exposure_frac: Optional fraction of bars spent in the market
+                (0..1, from the simulation). Adds "Exposure_%": a Sharpe
+                earned while invested 8% of the time has a very different
+                capacity, regime and risk profile than one earned at 80%,
+                and per-bar risk metrics are diluted by flat bars.
 
         Returns:
             Dictionary of metrics or None if invalid
@@ -142,6 +148,11 @@ class PerformanceMetrics:
             "CVaR_95_%": round(cvar_95, 3),
             "Profit_Factor": round(profit_factor, 3),
         }
+
+        if exposure_frac is not None and np.isfinite(exposure_frac):
+            metrics["Exposure_%"] = round(
+                float(np.clip(exposure_frac, 0.0, 1.0)) * 100.0, 2
+            )
 
         # Trade-level statistics (industry-standard definitions: computed
         # over closed trades, not bars)

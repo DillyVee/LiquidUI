@@ -202,6 +202,17 @@ class TestExtendedMetrics:
         assert got_u < 10.0
         assert abs(got_u - got_m) < 1.0
 
+    def test_exposure_metric(self):
+        metrics = PerformanceMetrics.calculate_metrics(
+            self._curve(), exposure_frac=0.375
+        )
+        assert metrics["Exposure_%"] == 37.5
+
+        # Absent unless the simulation provides it; clipped to [0, 100]
+        assert "Exposure_%" not in PerformanceMetrics.calculate_metrics(self._curve())
+        capped = PerformanceMetrics.calculate_metrics(self._curve(), exposure_frac=1.7)
+        assert capped["Exposure_%"] == 100.0
+
     def test_sortino_zero_without_downside(self):
         """No losing bars = no downside evidence, not infinite skill"""
         eq = 1000.0 * np.cumprod(1 + np.full(300, 0.001))
