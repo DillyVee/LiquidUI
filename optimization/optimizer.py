@@ -624,30 +624,36 @@ class MultiTimeframeOptimizer(QThread):
         """
         The trial whose suggested params win this phase.
 
-        With a validation split: the best VALIDATION-slice score among
-        trials that actually earned one (> 0). The sampler never saw these
-        scores, so this argmax is a selection over train-plausible
-        candidates, not a fit to the sampler's own navigation target.
-        Falls back to the best sampler score when no trial produced a
-        positive validation score (or no split is active).
+        With a validation split: the best TRAIN score among trials whose
+        validation-slice score is positive (validation as a VETO, not an
+        argmax). A full argmax over the short validation slice was tested
+        and falsified - with hundreds of candidates, max-over-175-bars has
+        HIGHER selection variance than max-over-700-bars, so on no-edge
+        data it picks validation-lucky strategies that mean-revert below
+        zero out-of-sample (see RESEARCH_JOURNAL.md, experiment H5a).
+        Consuming a single bit of validation information (survived / did
+        not) keeps the memorizer filter while barely spending the slice.
+        Falls back to the plain train argmax when no trial has a positive
+        validation score (or no split is active).
         """
         completed = [
             t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE
         ]
+        train_key = lambda t: t.value if t.value is not None else -np.inf  # noqa: E731
         if self.selection_cut is not None:
-            with_val = [
+            survivors = [
                 t for t in completed if (t.user_attrs.get("val_score") or 0.0) > 0.0
             ]
-            if with_val:
-                winner = max(with_val, key=lambda t: t.user_attrs["val_score"])
+            if survivors:
+                winner = max(survivors, key=train_key)
                 print(
-                    f"   🏁 winner by validation score "
-                    f"{winner.user_attrs['val_score']:.4f} "
-                    f"(train score {winner.value:.4f})"
+                    f"   🏁 winner: train score {winner.value:.4f} among "
+                    f"{len(survivors)}/{len(completed)} validation survivors "
+                    f"(val score {winner.user_attrs['val_score']:.4f})"
                 )
                 return winner
-            print("   🏁 no positive validation score - winner by train score")
-        return max(completed, key=lambda t: t.value if t.value is not None else -np.inf)
+            print("   🏁 no validation survivors - winner by train score")
+        return max(completed, key=train_key)
 
     def _save_batch_results(
         self, study: optuna.Study, n_before: int, batch_idx: int, phase_counter: int,

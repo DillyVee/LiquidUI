@@ -195,7 +195,11 @@ def test_selection_split_disabled_on_small_data():
     assert opt.selection_cut is None
 
 
-def test_phase_winner_prefers_validation_score():
+def test_phase_winner_validation_veto():
+    """Validation acts as a VETO (survivors ranked by train score), not an
+    argmax - the argmax variant was falsified on no-edge data (journal
+    experiment H5a: max over a short slice has higher selection variance
+    than max over the full sample)"""
     import optuna
 
     opt = _optimizer()  # split active
@@ -211,21 +215,30 @@ def test_phase_winner_prefers_validation_score():
             )
         )
 
+    # Best train candidate survives validation -> it wins (val magnitude
+    # beyond the veto is deliberately ignored)
     study = optuna.create_study(direction="maximize")
-    add(study, 0, train=1.0, val=0.1)  # best train, weak validation
-    add(study, 1, train=0.5, val=0.9)  # weaker train, best validation
+    add(study, 0, train=1.0, val=0.1)  # best train, survives
+    add(study, 1, train=0.5, val=0.9)  # best validation, weaker train
     add(study, 2, train=0.8, val=None)  # no validation evidence
-    assert opt._phase_winner(study).params["x"] == 1
+    assert opt._phase_winner(study).params["x"] == 0
 
-    # No positive validation score anywhere -> fall back to train argmax
+    # Best train candidate vetoed (val <= 0) -> best surviving train wins
     study2 = optuna.create_study(direction="maximize")
-    add(study2, 0, train=0.3, val=0.0)
-    add(study2, 1, train=0.9, val=0.0)
+    add(study2, 0, train=1.0, val=-0.2)
+    add(study2, 1, train=0.5, val=0.3)
+    add(study2, 2, train=0.7, val=0.0)
     assert opt._phase_winner(study2).params["x"] == 1
+
+    # No survivors anywhere -> fall back to plain train argmax
+    study3 = optuna.create_study(direction="maximize")
+    add(study3, 0, train=0.3, val=0.0)
+    add(study3, 1, train=0.9, val=-0.5)
+    assert opt._phase_winner(study3).params["x"] == 1
 
     # Split inactive -> validation attrs are ignored entirely
     small = _optimizer(df_dict=_df_dict(n=300))
-    study3 = optuna.create_study(direction="maximize")
-    add(study3, 0, train=0.9, val=0.1)
-    add(study3, 1, train=0.2, val=0.8)
-    assert small._phase_winner(study3).params["x"] == 0
+    study4 = optuna.create_study(direction="maximize")
+    add(study4, 0, train=0.9, val=-0.8)
+    add(study4, 1, train=0.2, val=0.8)
+    assert small._phase_winner(study4).params["x"] == 0

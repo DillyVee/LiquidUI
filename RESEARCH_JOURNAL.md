@@ -311,7 +311,40 @@ via full-context simulation, H1 convention):
   reversal (buy-weakness oscillators have a real edge here).
 - `noise`: iid returns, zero drift — any apparent edge is memorization.
 
-**Results**: (recorded below after the run)
+**Results (H5a: winner = validation argmax) — FALSIFIED, 24 seeds pooled:**
+
+| process | arm | IS Sharpe | OOS Sharpe | degradation | 
+|---|---|---|---|---|
+| edge  | A val-argmax   | +0.20 | **+0.12** | +0.08 |
+| edge  | B full-sample  | +0.29 | −0.08 | +0.38 |
+| noise | A val-argmax   | +0.24 | **−0.36** | **+0.60** |
+| noise | B full-sample  | +0.38 | −0.10 | +0.48 |
+
+On the planted-edge process the validation argmax helped (paired OOS
++0.20, degradation +0.08 vs +0.38) and reported scores were honest. But on
+the no-edge process it was actively harmful: **the argmax of ~240
+candidates over a 175-bar validation slice has HIGHER selection variance
+than the argmax over the 700-bar train sample** — validation-lucky noise
+strategies (e.g. one seed: IS +1.76 → OOS −1.50) mean-revert below zero
+out-of-sample because trading noise pays costs. Pre-registered criterion
+(a) (degradation must improve in both processes) failed on noise: +0.60 vs
++0.48. Decision on H5a: **REJECT** the argmax form. Lesson recorded: a
+held-out slice is only as good as how little you spend it — argmax spends
+all of it.
+
+**Follow-up hypothesis H6 (winner = train argmax among validation
+survivors)**: consume ONE BIT of validation information per candidate
+(Val_Score > 0 = survive, else vetoed; survivors ranked by TRAIN score;
+plain train argmax when nobody survives). Rationale: the memorizer filter
+is preserved (a pure memorizer's validation score is centered below zero
+after costs) while the selection-variance channel that sank H5a is closed —
+you cannot chase validation luck if validation only answers pass/fail.
+Same philosophy as the re-optimizer's holdout gate (H3). Same harness,
+same 24 seeds, same pre-registered criterion:
+(a) pooled degradation A ≤ B in BOTH processes, (b) pooled paired OOS not
+significantly negative, (c) noise OOS not worse than B (do no harm).
+
+**Results (H6)**: (recorded below after the run)
 
 ---
 
