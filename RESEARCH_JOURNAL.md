@@ -612,7 +612,48 @@ Primary metric: paired OOS Sharpe (A − B).
   cycle is the product's identity and that call belongs to the user.
 - Significantly negative → same, flagged prominently.
 
-**Results**: (recorded below after the run)
+**Results — ⚠️ THE CYCLE SIGNIFICANTLY HARMS OUT-OF-SAMPLE PERFORMANCE.**
+
+15 folds, paired within fold:
+
+| pooled | IS Sharpe | OOS Sharpe | degradation | OOS>0 |
+|---|---|---|---|---|
+| A cycle + indicators | +1.15 | +0.11 ± 0.77 | **+1.03** | 8/15 |
+| B indicators only    | +0.87 | **+0.67 ± 1.03** | +0.20 | 12/15 |
+
+Paired OOS Sharpe (A − B): **−0.557** (t = −2.45, **p = 0.028**;
+Wilcoxon p = 0.055 borderline), cycle better in only 4/15 folds.
+
+This is the textbook overfitting signature, measured directly on the
+system's core feature: the cycle's ~31M-combination calendar pattern
+reliably *inflates* in-sample scores (+1.15 vs +0.87 — an extra flexible
+dimension always fits better) and *subtracts* out-of-sample (degradation
++1.03 vs +0.20). Indicators alone were OOS-positive in 12/15 folds at
++0.67 mean Sharpe. The iteration-1 architectural diagnosis ("the cycle
+is the dominant overfitting surface") is now an empirical result, not an
+argument.
+
+**Verdict per the pre-registered rule** (significantly negative →
+record, flag prominently, recommend; NO product change without the
+maintainer's decision — the cycle is the product's identity):
+1. Recorded and flagged here; a caveat added to the README's strategy
+   section pointing at this experiment.
+2. **Recommendation to the maintainer**: treat any cycle-bearing
+   optimization result as presumptively overfit unless it passes the
+   full gate stack (DSR, PBO, OOS trade evidence) AND walk-forward on
+   the specific ticker; consider making indicators-only the default
+   search posture (achievable today by pinning cycle ranges to
+   (250,250)/(0,0)); reserve cycle search for explicit opt-in.
+3. The H3 evidence gate (zero-OOS-trade rejection) and H1 warm-up fix
+   remain the system's main line of defense against exactly this
+   failure mode in the live re-optimizer path.
+
+**Salvage hypothesis queued (H10, future)**: the *arbitrary-period*
+cycle is what failed. Structural calendar effects (turn-of-month —
+Ariel 1987, Lakonishok & Smidt 1988; day-of-week) are documented and
+testable: a cycle constrained to monthly/weekly boundaries with far
+fewer combinations may retain value the free-form cycle destroys. Test
+with the same paired harness before believing it.
 
 ---
 
@@ -625,9 +666,11 @@ Primary metric: paired OOS Sharpe (A − B).
    as CPCV-style multi-split evidence with a real-data arm.
 2. ~~Exposure %~~ (done, iteration 2); trades/year and
    time-in-market-normalized comparisons still open.
-3. Canonicalize `Start` to `Start % (On + Off)` at storage time; consider
-   constraining the cycle space to structurally motivated periods
-   (turn-of-month, weekly) or penalizing cycle complexity.
+3. ~~Cycle-space concerns~~ resolved empirically by H9 (iteration 6): the
+   free-form cycle significantly harms OOS (p = 0.028). Remaining
+   follow-up is salvage hypothesis H10 (structurally constrained
+   turn-of-month / weekly cycles) and the maintainer's product decision
+   on default search posture.
 4. ~~Volatility-targeted position sizing~~ (done, iteration 5 — retained
    as opt-in on significant real-data drawdown reduction, p = 0.013;
    isolated-replay evidence; default-on Sharpe bar not met). Live-trader

@@ -96,6 +96,8 @@ The strategy combines a normalized indicator oscillator (or two, AND-combined) w
 
 The optimizer searches the indicator choice, its periods (P1/P2), entry/exit thresholds, and cycle parameters (ON/OFF/START) per timeframe. TradingView ports of the regime indicator and strategy are included as `.pine` files.
 
+> **⚠️ Research note on the time cycle**: a controlled 15-fold experiment on real market data (SP500/NASDAQ/BTC, see `RESEARCH_JOURNAL.md`, experiment H9) found that the free-form calendar cycle *inflates in-sample scores and significantly reduces out-of-sample Sharpe* (paired −0.56, p = 0.028) versus running the same indicator search with the cycle disabled. Treat cycle-bearing results as presumptively overfit unless they pass the anti-overfit gates **and** walk-forward validation on your specific ticker.
+
 ---
 
 ## Testing
