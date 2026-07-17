@@ -80,6 +80,21 @@ def test_run_records_objective_and_full_metrics(objective):
     assert 0.0 <= best["Exposure_%"] <= 100.0
     # Validation-split selection active on 450 bars: segment scores present
     assert "Train_Score" in best and "Val_Score" in best
+    # Cycle Start stored canonically (one encoding per strategy)
+    period = max(1, int(best["On_daily"]) + int(best["Off_daily"]))
+    assert 0 <= int(best["Start_daily"]) < period
+
+
+def test_cycle_start_canonicalization_is_semantically_free():
+    """Start % (On + Off) must not change the simulation at all"""
+    opt = _optimizer()
+    period = PARAMS_RSI["On_daily"] + PARAMS_RSI["Off_daily"]
+    shifted = dict(PARAMS_RSI, Start_daily=PARAMS_RSI["Start_daily"] + 3 * period)
+
+    eq1, t1 = opt.simulate_multi_tf(PARAMS_RSI)
+    eq2, t2 = opt.simulate_multi_tf(shifted)
+    assert t1 == t2
+    assert np.allclose(eq1, eq2)
 
 
 def test_simulate_reports_exposure_stats():

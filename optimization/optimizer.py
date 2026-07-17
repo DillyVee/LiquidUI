@@ -862,10 +862,15 @@ class MultiTimeframeOptimizer(QThread):
                     )
 
                 cycle_winner = self._phase_winner(cycle_study)
+                won = int(cycle_winner.params[f"On_{tf}"])
+                woff = int(cycle_winner.params[f"Off_{tf}"])
+                # Canonicalize the phase: only Start % (On + Off) matters
+                # to the cycle, so store one encoding per strategy (keeps
+                # CSVs comparable and CSCV rivals deduplicable)
                 best_cycle = {
-                    f"On_{tf}": cycle_winner.params[f"On_{tf}"],
-                    f"Off_{tf}": cycle_winner.params[f"Off_{tf}"],
-                    f"Start_{tf}": cycle_winner.params[f"Start_{tf}"],
+                    f"On_{tf}": won,
+                    f"Off_{tf}": woff,
+                    f"Start_{tf}": int(cycle_winner.params[f"Start_{tf}"]) % max(1, won + woff),
                 }
 
                 if tf not in self.best_params_per_tf:
