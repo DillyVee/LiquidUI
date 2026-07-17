@@ -202,6 +202,14 @@ class TestExtendedMetrics:
         assert got_u < 10.0
         assert abs(got_u - got_m) < 1.0
 
+    def test_trades_per_year(self):
+        # 505-bar curve at 252/year ~= 2 years; 5 trades -> 2.5/year
+        eq = self._curve(n=505)
+        trades = np.array([2.0, -1.0, 3.0, -1.0, 1.0])
+        metrics = PerformanceMetrics.calculate_metrics(eq, trade_returns=trades)
+        assert metrics["Trades_Per_Year"] == pytest.approx(5 / (505 / 252.0), abs=0.01)
+        assert "Trades_Per_Year" not in PerformanceMetrics.calculate_metrics(eq)
+
     def test_exposure_metric(self):
         metrics = PerformanceMetrics.calculate_metrics(
             self._curve(), exposure_frac=0.375

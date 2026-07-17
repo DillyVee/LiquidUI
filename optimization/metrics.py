@@ -176,6 +176,9 @@ class PerformanceMetrics:
                 )
                 metrics.update(
                     {
+                        "Trades_Per_Year": (
+                            round(len(tr) / years, 2) if years > 0 else 0.0
+                        ),
                         "Win_Rate_%": round(win_rate, 2),
                         "Profit_Factor": round(pf_trades, 3),
                         "Avg_Win_%": round(avg_win, 3),
