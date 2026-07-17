@@ -139,3 +139,46 @@ def test_validate_candidate_min_trades_and_oos_gates():
 
     report_text = rep2.summary()
     assert "FAILED" in report_text and "OOS" in report_text
+
+
+def test_validate_candidate_requires_oos_evidence():
+    """A flat holdout scores Sharpe exactly 0.0 and passes `>= 0`
+    vacuously; the evidence gate must catch it. Zero OOS trades is the
+    signature of a calendar cycle that memorized in-sample rallies and is
+    simply OFF for the entire held-out window."""
+    rng = np.random.default_rng(6)
+    r = rng.normal(0.002, 0.01, 400)
+
+    def simulate(params):
+        return 1000.0 * np.cumprod(1 + np.concatenate([[0.0], r])), 60
+
+    # Vacuous pass without the gate: flat holdout, Sharpe 0.0 >= 0.0
+    vacuous = validate_candidate(
+        simulate, {}, [], [1.0], ANN, oos_sharpe=0.0, min_oos_sharpe=0.0
+    )
+    assert vacuous.passed, "documents the loophole the gate exists to close"
+
+    gated = validate_candidate(
+        simulate, {}, [], [1.0], ANN,
+        oos_sharpe=0.0, min_oos_sharpe=0.0,
+        oos_trades=0, min_oos_trades=3,
+    )
+    assert not gated.passed
+    assert any("no out-of-sample evidence" in x for x in gated.reasons)
+    assert gated.oos_trades == 0
+    assert "OOS trades" in gated.summary()
+
+    # Enough OOS evidence: the gate stays silent
+    ok = validate_candidate(
+        simulate, {}, [], [1.0], ANN,
+        oos_sharpe=0.5, min_oos_sharpe=0.0,
+        oos_trades=5, min_oos_trades=3,
+    )
+    assert ok.passed, ok.reasons
+
+    # Default min_oos_trades=0 keeps the check disabled (no behavior
+    # change for callers that don't opt in)
+    default_off = validate_candidate(
+        simulate, {}, [], [1.0], ANN, oos_sharpe=0.0, oos_trades=0
+    )
+    assert default_off.passed
