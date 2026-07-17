@@ -15,15 +15,19 @@ Modes:
   - legacy             indicator_search=False reproduces the original
                        RSI-only parameter search
 
-Selection discipline: when enough data is loaded, TPE navigates on the
-TRAIN segment (first 1 - selection_holdout_frac of bars) and each phase's
-winner is chosen by its score on the untouched VALIDATION slice (the last
-selection_holdout_frac of bars). Selecting on the same data that was
-optimized is the primary mechanism by which backtests overstate live
-performance (Bailey & Lopez de Prado 2014; Arnott, Harvey & Markowitz
-2019); the validation slice is never fed to the sampler, so its maximum is
-a far weaker selection effect than a full-sample argmax. Small datasets
-(e.g. walk-forward inner windows) fall back to full-sample selection.
+Selection instrumentation: when enough data is loaded, every trial also
+records its score on a chronological TRAIN segment and a held-out
+VALIDATION slice (Train_Score / Val_Score / *_Trades in every result
+row) so train-vs-validation degradation is always visible.
+
+By default this is measurement only - selection remains the full-sample
+argmax. The opt-in `use_validation_veto` mode makes TPE navigate on the
+train segment and picks each phase winner as the best train score among
+trials with a positive validation score. The veto significantly improved
+OOS results on synthetic planted-edge data (paired +0.52, p=0.022) but
+FAILED to replicate on real multi-asset data (15 folds, paired -0.31,
+p=0.38, stand-aside opportunity cost in trending markets), so it is not
+the default - see RESEARCH_JOURNAL.md experiments H5a/H6/H7.
 
 Walk-forward analysis stays a separate function (optimization.walk_forward)
 and the anti-overfit gates live in optimization.validation.
@@ -86,6 +90,7 @@ class MultiTimeframeOptimizer(QThread):
         combine_indicators: bool = True,
         seed: Optional[int] = None,
         selection_holdout_frac: float = 0.25,
+        use_validation_veto: bool = False,
     ):
         super().__init__()
         # Validates the objective name up front (fail fast, not mid-run)
@@ -148,23 +153,32 @@ class MultiTimeframeOptimizer(QThread):
         self._preprocess_data()
         self._align_timeframes()
 
-        # Chronological validation slice for winner selection (None =
-        # full-sample selection, the pre-H5 behavior). TPE only ever sees
-        # train-segment scores; the validation slice picks phase winners.
+        # Chronological train/validation split. Always used to RECORD
+        # per-segment scores (degradation instrumentation); it only
+        # affects selection when use_validation_veto is opted in - the
+        # veto failed to replicate on real multi-asset data (journal H7)
+        # so measurement is on by default and action is not.
+        self.use_validation_veto = bool(use_validation_veto)
         frac = float(np.clip(selection_holdout_frac, 0.0, 0.5))
         n_finest = self.np_data[self.finest_tf]["length"]
         if frac > 0.0 and n_finest >= self.MIN_SELECTION_BARS:
             self.selection_cut: Optional[int] = int(n_finest * (1.0 - frac))
-            print(
-                f"🔍 Selection: TPE on bars [0, {self.selection_cut}), winners "
-                f"picked on validation bars [{self.selection_cut}, {n_finest})"
-            )
+            if self.use_validation_veto:
+                print(
+                    f"🔍 Selection: VETO mode - TPE on bars [0, {self.selection_cut}), "
+                    f"winners must score > 0 on bars [{self.selection_cut}, {n_finest})"
+                )
+            else:
+                print(
+                    f"🔍 Selection: full-sample; train/validation scores recorded "
+                    f"(split at bar {self.selection_cut}) for degradation visibility"
+                )
         else:
             self.selection_cut = None
             if frac > 0.0:
                 print(
                     f"🔍 Selection: {n_finest} bars < {self.MIN_SELECTION_BARS} - "
-                    "full-sample selection (validation slice too short)"
+                    "no train/validation split (slice too short)"
                 )
 
     def _preprocess_data(self):
@@ -283,11 +297,12 @@ class MultiTimeframeOptimizer(QThread):
         Returns:
             (raw_objective_value, sampler_score, metrics, trades). `raw` is
             the full-sample objective value (reporting continuity).
-            `sampler_score` is what TPE maximizes: with a validation split
-            active it is the TRAIN-segment confidence-scaled score (the
-            validation slice is reserved for winner selection and stored in
-            metrics as Val_Score); without a split it is the full-sample
-            confidence-scaled score, as before.
+            `sampler_score` is what TPE maximizes: the full-sample
+            confidence-scaled score by default; in opt-in veto mode with a
+            split active it is the TRAIN-segment score instead (the
+            validation slice is reserved for the veto). When a split is
+            active, Train_Score / Val_Score / *_Trades are always recorded
+            in the metrics dict regardless of mode.
         """
         sim_stats: Dict = {}
         eq_curve, trade_count, trade_pcts = self.simulate_multi_tf(
@@ -323,7 +338,8 @@ class MultiTimeframeOptimizer(QThread):
             metrics["Val_Score"] = round(val_score, 6)
             metrics["Train_Trades"] = int(train_trades)
             metrics["Val_Trades"] = int(val_trades)
-            score = train_score
+            if self.use_validation_veto:
+                score = train_score
 
         return raw, score, metrics, int(trade_count)
 
@@ -624,23 +640,23 @@ class MultiTimeframeOptimizer(QThread):
         """
         The trial whose suggested params win this phase.
 
-        With a validation split: the best TRAIN score among trials whose
-        validation-slice score is positive (validation as a VETO, not an
-        argmax). A full argmax over the short validation slice was tested
-        and falsified - with hundreds of candidates, max-over-175-bars has
-        HIGHER selection variance than max-over-700-bars, so on no-edge
-        data it picks validation-lucky strategies that mean-revert below
-        zero out-of-sample (see RESEARCH_JOURNAL.md, experiment H5a).
-        Consuming a single bit of validation information (survived / did
-        not) keeps the memorizer filter while barely spending the slice.
-        Falls back to the plain train argmax when no trial has a positive
-        validation score (or no split is active).
+        Default: the plain sampler-score argmax (full-sample selection).
+
+        Opt-in veto mode: the best TRAIN score among trials whose
+        validation-slice score is positive. Two variants were tested
+        against pre-registered criteria (RESEARCH_JOURNAL.md): the
+        validation ARGMAX was falsified on synthetic no-edge data (a max
+        over a short slice has higher selection variance than over the
+        full sample, H5a); the VETO won significantly on synthetic
+        planted-edge data (H6) but failed to replicate on real
+        multi-asset folds (H7) - hence opt-in, not default. Falls back to
+        the plain argmax when no trial has a positive validation score.
         """
         completed = [
             t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE
         ]
         train_key = lambda t: t.value if t.value is not None else -np.inf  # noqa: E731
-        if self.selection_cut is not None:
+        if self.use_validation_veto and self.selection_cut is not None:
             survivors = [
                 t for t in completed if (t.user_attrs.get("val_score") or 0.0) > 0.0
             ]

@@ -172,26 +172,26 @@ PARAMS_RSI = {
 
 
 def test_evaluate_params_scales_by_trade_confidence():
-    """Without a validation split the sampler score is the full-sample
-    objective scaled by the trade-confidence ramp (pre-H5 contract)"""
-    opt = _optimizer(selection_holdout_frac=0.0)
-    assert opt.selection_cut is None
+    """By default the sampler score is the full-sample objective scaled by
+    the trade-confidence ramp - the split only adds instrumentation"""
+    for opt in (_optimizer(selection_holdout_frac=0.0), _optimizer()):
+        raw, score, metrics, trade_count = opt.evaluate_params(PARAMS_RSI)
+        assert metrics is not None
+        if trade_count >= 30:
+            assert score == pytest.approx(raw)
+        elif trade_count < 10:
+            assert score == 0.0
+        else:
+            assert score == pytest.approx(raw * (trade_count - 10) / 20.0)
+    # No split -> no instrumentation keys; split -> keys present
+    assert "Val_Score" not in _optimizer(selection_holdout_frac=0.0).evaluate_params(PARAMS_RSI)[2]
+    assert "Val_Score" in _optimizer().evaluate_params(PARAMS_RSI)[2]
 
-    raw, score, metrics, trade_count = opt.evaluate_params(PARAMS_RSI)
-    assert metrics is not None
-    assert "Val_Score" not in metrics
-    if trade_count >= 30:
-        assert score == pytest.approx(raw)
-    elif trade_count < 10:
-        assert score == 0.0
-    else:
-        assert score == pytest.approx(raw * (trade_count - 10) / 20.0)
 
-
-def test_evaluate_params_with_validation_split():
-    """With the split active the sampler only ever sees the TRAIN-segment
-    score; the validation slice is recorded for winner selection"""
-    opt = _optimizer()  # 450 bars >= MIN_SELECTION_BARS -> split active
+def test_evaluate_params_veto_mode_scores_on_train():
+    """In opt-in veto mode the sampler only ever sees the TRAIN-segment
+    score; the validation slice is reserved for the veto"""
+    opt = _optimizer(use_validation_veto=True)  # 450 bars -> split active
     assert opt.selection_cut == int(450 * 0.75)
 
     raw, score, metrics, trade_count = opt.evaluate_params(PARAMS_RSI)
@@ -211,13 +211,13 @@ def test_selection_split_disabled_on_small_data():
 
 
 def test_phase_winner_validation_veto():
-    """Validation acts as a VETO (survivors ranked by train score), not an
-    argmax - the argmax variant was falsified on no-edge data (journal
-    experiment H5a: max over a short slice has higher selection variance
-    than max over the full sample)"""
+    """In opt-in veto mode, validation acts as a VETO (survivors ranked by
+    train score), not an argmax - the argmax variant was falsified on
+    no-edge data (journal H5a) and the veto itself failed real-data
+    replication (journal H7), hence opt-in"""
     import optuna
 
-    opt = _optimizer()  # split active
+    opt = _optimizer(use_validation_veto=True)  # split active
     dists = {"x": optuna.distributions.IntDistribution(0, 10)}
 
     def add(study, x, train, val):
@@ -252,8 +252,16 @@ def test_phase_winner_validation_veto():
     assert opt._phase_winner(study3).params["x"] == 1
 
     # Split inactive -> validation attrs are ignored entirely
-    small = _optimizer(df_dict=_df_dict(n=300))
+    small = _optimizer(df_dict=_df_dict(n=300), use_validation_veto=True)
     study4 = optuna.create_study(direction="maximize")
     add(study4, 0, train=0.9, val=-0.8)
     add(study4, 1, train=0.2, val=0.8)
     assert small._phase_winner(study4).params["x"] == 0
+
+    # Default mode: veto off - plain sampler-score argmax even though the
+    # split is active and validation attrs exist
+    default = _optimizer()
+    study5 = optuna.create_study(direction="maximize")
+    add(study5, 0, train=0.9, val=-0.8)
+    add(study5, 1, train=0.2, val=0.8)
+    assert default._phase_winner(study5).params["x"] == 0

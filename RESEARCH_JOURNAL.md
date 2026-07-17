@@ -419,16 +419,68 @@ fill approximation.
   overturned and the veto reverts to opt-in. Otherwise the veto stands;
   directionally positive pooled diff counts as replication.
 
-**Results**: (recorded below after the run)
+**Results — REPLICATION FAILED; veto demoted to opt-in.**
+
+15 folds (SP500 ×2, NASDAQ ×9, BTC ×4), paired within-fold:
+
+| pooled | IS Sharpe | OOS Sharpe | degradation | OOS>0 |
+|---|---|---|---|---|
+| A veto        | +0.44 | −0.05 ± 0.94 | +0.49 | 4/15 |
+| B full-sample | +0.43 | +0.26 ± 1.03 | +0.17 | 7/15 |
+
+Paired (A−B): **−0.31** (t = −0.91, p = 0.38; Wilcoxon p = 0.42), A
+better in 5/15 folds. Buy & hold future-slice Sharpe averaged +0.89.
+
+**Failure analysis**: two mechanisms visible in the folds that the
+zero-drift synthetics could not expose:
+1. *Stand-aside opportunity cost.* In trending-up folds the veto
+   repeatedly selected configurations that did not trade the future at
+   all (0 OOS trades in 5 up-folds) while full-sample selection captured
+   part of the trend (+2.18, +1.14, +0.87, +0.65). For a long-only
+   system in markets with positive drift, "flat when unproven" has a
+   real price that synthetic μ≈0 processes hid.
+2. *No downside protection delivered.* In the down folds (2022, 2018,
+   BTC 2026) the veto's survivors did no better - and often worse - than
+   full-sample winners. A single 175-bar validation slice does not
+   reliably separate real-data memorizers.
+
+**Decision**: by the letter of the pre-registered rule (overturn only if
+p < 0.05 negative) the veto could stand — but the rule was mis-designed:
+it placed the burden of proof on the *reversion*, while the project
+constitution places it on the *change* ("keep only statistically
+significant improvements; otherwise revert"). The synthetic
+significance (H6, p = 0.022) did not survive contact with real data
+(directionally negative, 5/15). **Demoted to opt-in**
+(`use_validation_veto=False` default): default selection returns to the
+pre-H5 full-sample argmax; the train/validation split instrumentation
+stays always-on (Train_Score / Val_Score / *_Trades recorded in every
+result row) — measurement shipped, unproven action not.
+
+**Lessons recorded**:
+1. Pre-registration must put the significance burden on the change, not
+   the status quo. Rules written asymmetrically get overridden by the
+   constitution — noted for every future experiment.
+2. Synthetic validation is necessary but nowhere near sufficient: the
+   veto's synthetic win (p = 0.022, 24 seeds) was real and still failed
+   on markets, because the synthetic processes lacked drift. Every
+   future strategy-side hypothesis gets a real-data replication arm
+   BEFORE any default changes.
+3. Single-slice vetoes are noisy instruments. If held-out selection is
+   revisited, it should be CPCV-style multi-split evidence, and it must
+   demonstrate real-data value first.
+4. Data access constraints documented: Yahoo rate-limits this egress IP;
+   Stooq sits behind an anti-bot wall (not circumvented); FRED daily
+   closes work and are sufficient for close-fill paired experiments.
 
 ---
 
 ### Backlog (future iterations, in priority order)
 
-1. ~~Validation-split selection inside the main optimizer~~ (done,
-   iteration 3 — veto form kept, argmax form falsified and reverted).
-   Open refinement: replace the single validation slice with multiple
-   CPCV-style splits for the veto decision.
+1. ~~Validation-split selection inside the main optimizer~~ (closed,
+   iterations 3–4: argmax form falsified on synthetics; veto form won on
+   synthetics but failed real-data replication and is opt-in only;
+   split instrumentation shipped as always-on measurement). Reopen only
+   as CPCV-style multi-split evidence with a real-data arm.
 2. ~~Exposure %~~ (done, iteration 2); trades/year and
    time-in-market-normalized comparisons still open.
 3. Canonicalize `Start` to `Start % (On + Off)` at storage time; consider
