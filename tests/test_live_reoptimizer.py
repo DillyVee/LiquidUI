@@ -102,8 +102,15 @@ def test_reopt_candidate_params_are_simulable(tmp_path):
         pbo_threshold=1.0,
         min_trades=1,
         min_oos_sharpe=-99.0,
+        min_oos_trades=0,
     )
     assert result.admitted, f"loose gates should admit: {result.message}"
+
+    # The 225-bar holdout was evaluated (with train warm-up context), so
+    # the stored strategy must carry its OOS evidence count
+    stored_metrics = book.strategies[0].metrics
+    assert "OOS_Trades" in stored_metrics
+    assert stored_metrics["OOS_Trades"] >= 0
 
     fresh = MultiTimeframeOptimizer(
         df_dict=_df_dict(seed=10), n_trials=1, ticker="FRESH", **OPT_KWARGS

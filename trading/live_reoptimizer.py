@@ -81,6 +81,7 @@ def run_reoptimization_cycle(
     min_trades: int = 20,
     min_holdout_bars: int = 150,
     min_oos_sharpe: float = 0.0,
+    min_oos_trades: int = 3,
 ) -> ReoptimizationResult:
     """
     One full re-optimization cycle: optimize on train, gate, admit.
@@ -92,6 +93,10 @@ def run_reoptimization_cycle(
             (everything except df_dict, n_trials, ticker)
         n_trials: Trial budget for the re-optimization (kept modest -
             the DSR gate punishes big budgets on noise)
+        min_oos_trades: Minimum trades the candidate must ENTER inside the
+            holdout window (when one is evaluated). A candidate that never
+            trades out-of-sample has produced no OOS evidence and must not
+            be admitted on a vacuous Sharpe of 0.0.
     """
     from optimization.optimizer import MultiTimeframeOptimizer
 
@@ -123,19 +128,40 @@ def run_reoptimization_cycle(
         )
     }
 
-    # 2) True out-of-sample evaluation on the untouched holdout
+    # 2) True out-of-sample evaluation on the untouched holdout.
+    # Simulate over the FULL data (train supplies indicator warm-up
+    # context, exactly as live trading would have it) and score only the
+    # holdout bars - simulating the holdout in isolation restarts the
+    # warm-up mask, which for slow indicators can swallow most of the
+    # holdout and bias OOS Sharpe toward 0 with zero trades.
     oos_sharpe = None
+    oos_trades: Optional[int] = None
     if len(hold_dict[finest]) >= min_holdout_bars:
         eval_optimizer = MultiTimeframeOptimizer(
-            df_dict=hold_dict, n_trials=1, ticker="HOLDOUT", **optimizer_kwargs
+            df_dict=df_dict, n_trials=1, ticker="HOLDOUT", **optimizer_kwargs
         )
-        oos_curve, oos_trades = eval_optimizer.simulate_multi_tf(candidate)
-        if oos_curve is not None and len(oos_curve) > 2:
-            oos_sharpe = float(
-                PSRCalculator.calculate_sharpe_from_equity(
-                    oos_curve, annualization_factor=eval_optimizer.annualization_factor
+        full_curve, _, full_trades = eval_optimizer.simulate_multi_tf(
+            candidate, return_trades=True
+        )
+        if full_curve is not None and len(full_curve) > 2:
+            cutoff = pd.Timestamp(hold_dict[finest]["Datetime"].iloc[0])
+            finest_dt = df_dict[finest]["Datetime"]
+            cut_idx = int(finest_dt.searchsorted(cutoff, side="left"))
+            if 0 < cut_idx < len(full_curve):
+                # Slice one bar early so the first holdout bar's return
+                # is included in the OOS Sharpe
+                oos_curve = full_curve[cut_idx - 1 :]
+                oos_sharpe = float(
+                    PSRCalculator.calculate_sharpe_from_equity(
+                        oos_curve,
+                        annualization_factor=eval_optimizer.annualization_factor,
+                    )
                 )
-            )
+                oos_trades = sum(
+                    1
+                    for t in full_trades
+                    if pd.Timestamp(t["Entry_Date"]) >= cutoff
+                )
 
     # 3) Anti-overfit gates
     report = validate_candidate(
@@ -149,6 +175,8 @@ def run_reoptimization_cycle(
         min_trades=min_trades,
         oos_sharpe=oos_sharpe,
         min_oos_sharpe=min_oos_sharpe,
+        oos_trades=oos_trades,
+        min_oos_trades=min_oos_trades,
     )
 
     if not report.passed:
@@ -169,6 +197,7 @@ def run_reoptimization_cycle(
             "DSR": report.dsr,
             "PBO": report.pbo if report.pbo is not None else -1.0,
             "OOS_Sharpe": oos_sharpe if oos_sharpe is not None else 0.0,
+            "OOS_Trades": oos_trades if oos_trades is not None else -1,
             "Trades": report.trade_count,
         },
     )
