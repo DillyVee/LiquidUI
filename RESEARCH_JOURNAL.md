@@ -731,6 +731,47 @@ product posture remains the maintainer's decision.
 
 ---
 
+## Iteration 8 — 2026-07-17
+
+### Experiment H11 — viability certification of the V1 candidate system
+
+**The candidate** (assembled from accumulated evidence, not searched
+for): optimize **indicators-only** (cycle pinned inert — H9 p = 0.028,
+H10 confirmed nothing salvageable), standard Sharpe objective and gate
+stack; deploy the fixed winner **with the volatility overlay** (H8b:
+−2.6pp OOS MaxDD, p = 0.013, at no Sharpe cost — proven precisely in
+this fixed-strategy application). Every component earned its place in a
+pre-registered experiment; the assembly itself is what gets certified
+now.
+
+**Fresh holdout**: 20 new folds from assets and asset classes no prior
+decision this session ever touched — NIKKEI225 post-1990 (9 folds,
+non-US equity), DJIA (2 folds), WTI spot post-1990 (9 folds,
+commodity) — plus the original 15 (SP500/NASDAQ/BTC). 35 folds total,
+reported pooled AND split original-vs-holdout.
+
+**Pre-registered viability criteria** (ALL must hold):
+- **V1 absolute**: pooled candidate OOS Sharpe mean > 0 with one-sample
+  t-test p < 0.05 AND Wilcoxon signed-rank p < 0.05.
+- **V2 risk proposition**: paired candidate-vs-B&H OOS max drawdown
+  significantly shallower (p < 0.05).
+- **V3 no significant return sacrifice**: paired candidate-vs-B&H OOS
+  Sharpe NOT significantly negative (inferiority not established at
+  p < 0.05).
+- **Generalization override**: if the pooled battery passes but the
+  untouched-asset subset's mean OOS Sharpe is negative, the verdict
+  downgrades to NOT certified.
+- Note: B&H on WTI uses the spot series (no roll costs), which flatters
+  the benchmark — a conservative bias against certification.
+
+Verdict semantics: "viable" = survives this battery; the app's live
+re-optimizer with its gate stack (H1/H3-hardened) remains the
+deployment path, and paper trading remains the final arbiter.
+
+**Results**: (recorded below after the run)
+
+---
+
 ### Backlog (future iterations, in priority order)
 
 1. ~~Validation-split selection inside the main optimizer~~ (closed,
