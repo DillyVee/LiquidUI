@@ -75,6 +75,84 @@ def test_run_records_objective_and_full_metrics(objective):
     # DSR inputs collected for the anti-overfit gates
     assert len(opt.trial_sharpes) > 0
     assert opt.rival_params
+    # Exposure (time in market) recorded alongside the other metrics
+    assert "Exposure_%" in best
+    assert 0.0 <= best["Exposure_%"] <= 100.0
+    # Validation-split selection active on 450 bars: segment scores present
+    assert "Train_Score" in best and "Val_Score" in best
+    # Cycle Start stored canonically (one encoding per strategy)
+    period = max(1, int(best["On_daily"]) + int(best["Off_daily"]))
+    assert 0 <= int(best["Start_daily"]) < period
+
+
+def test_vol_targeting_size_frac_is_causal_and_bounded():
+    opt = _optimizer(vol_targeting=True)
+    sf = opt._size_frac
+    assert sf is not None and len(sf) == 450
+    assert np.all(sf > 0.0) and np.all(sf <= 1.0)
+    # No vol estimate yet -> neutral sizing
+    assert np.all(sf[: opt.VOL_WINDOW] == 1.0)
+
+    # Causality: the multiplier on a data prefix must equal the prefix of
+    # the multiplier (future bars can never change past sizes)
+    prefix_df = {"daily": _df_dict()["daily"].iloc[:300].reset_index(drop=True)}
+    opt_prefix = _optimizer(df_dict=prefix_df, vol_targeting=True)
+    assert np.allclose(sf[:300], opt_prefix._size_frac)
+
+    # Off by default
+    assert _optimizer()._size_frac is None
+
+
+def test_vol_targeting_scales_equity_like_position_size():
+    """A constant 0.5 multiplier must be indistinguishable from halving
+    position_size - pins the per-trade sizing math to existing semantics"""
+    opt_half_frac = _optimizer(position_size=1.0)
+    opt_half_frac._size_frac = np.full(450, 0.5)
+    opt_half_size = _optimizer(position_size=0.5)
+
+    eq_a, t_a = opt_half_frac.simulate_multi_tf(PARAMS_RSI)
+    eq_b, t_b = opt_half_size.simulate_multi_tf(PARAMS_RSI)
+    assert t_a == t_b and t_a > 0
+    assert np.allclose(eq_a, eq_b)
+
+
+def test_cycle_start_canonicalization_is_semantically_free():
+    """Start % (On + Off) must not change the simulation at all"""
+    opt = _optimizer()
+    period = PARAMS_RSI["On_daily"] + PARAMS_RSI["Off_daily"]
+    shifted = dict(PARAMS_RSI, Start_daily=PARAMS_RSI["Start_daily"] + 3 * period)
+
+    eq1, t1 = opt.simulate_multi_tf(PARAMS_RSI)
+    eq2, t2 = opt.simulate_multi_tf(shifted)
+    assert t1 == t2
+    assert np.allclose(eq1, eq2)
+
+
+def test_simulate_reports_exposure_stats():
+    opt = _optimizer()
+
+    # Always-in-market once warmed up: enter below 100.5 (always), never
+    # exit; cycle always ON. Exposure = bars from first entry to the end.
+    hold = {
+        "MN1_daily": 5, "MN2_daily": 3,
+        "Entry_daily": 100.5, "Exit_daily": 100.5,
+        "On_daily": 20, "Off_daily": 0, "Start_daily": 0,
+    }
+    stats = {}
+    eq, trades = opt.simulate_multi_tf(hold, stats_out=stats)
+    n = len(eq)
+    enter, _ = opt.compute_signals(hold)
+    first_entry = int(np.argmax(enter)) + 1  # fills at next bar's open
+    assert stats["exposure_frac"] == pytest.approx((n - first_entry) / n)
+
+    # Cycle permanently OFF: no trades, zero exposure
+    never = dict(hold, On_daily=1, Off_daily=0, Start_daily=0)
+    # On=1, Off=0 -> period 1, cycle always ON; instead block via Entry=0
+    never["Entry_daily"] = 0.0  # oscillator can never be below 0
+    stats2 = {}
+    eq2, trades2 = opt.simulate_multi_tf(never, stats_out=stats2)
+    assert trades2 == 0
+    assert stats2["exposure_frac"] == 0.0
 
 
 def test_allowed_indicators_restricts_search():
@@ -117,18 +195,104 @@ def test_results_csv_columns_stay_aligned():
     results_path.unlink()
 
 
+PARAMS_RSI = {
+    "MN1_daily": 10, "MN2_daily": 3,
+    "Entry_daily": 35.0, "Exit_daily": 65.0,
+    "On_daily": 10, "Off_daily": 5, "Start_daily": 0,
+}
+
+
 def test_evaluate_params_scales_by_trade_confidence():
-    opt = _optimizer()
-    params = {
-        "MN1_daily": 10, "MN2_daily": 3,
-        "Entry_daily": 35.0, "Exit_daily": 65.0,
-        "On_daily": 10, "Off_daily": 5, "Start_daily": 0,
-    }
-    raw, score, metrics, trade_count = opt.evaluate_params(params)
+    """By default the sampler score is the full-sample objective scaled by
+    the trade-confidence ramp - the split only adds instrumentation"""
+    for opt in (_optimizer(selection_holdout_frac=0.0), _optimizer()):
+        raw, score, metrics, trade_count = opt.evaluate_params(PARAMS_RSI)
+        assert metrics is not None
+        if trade_count >= 30:
+            assert score == pytest.approx(raw)
+        elif trade_count < 10:
+            assert score == 0.0
+        else:
+            assert score == pytest.approx(raw * (trade_count - 10) / 20.0)
+    # No split -> no instrumentation keys; split -> keys present
+    assert "Val_Score" not in _optimizer(selection_holdout_frac=0.0).evaluate_params(PARAMS_RSI)[2]
+    assert "Val_Score" in _optimizer().evaluate_params(PARAMS_RSI)[2]
+
+
+def test_evaluate_params_veto_mode_scores_on_train():
+    """In opt-in veto mode the sampler only ever sees the TRAIN-segment
+    score; the validation slice is reserved for the veto"""
+    opt = _optimizer(use_validation_veto=True)  # 450 bars -> split active
+    assert opt.selection_cut == int(450 * 0.75)
+
+    raw, score, metrics, trade_count = opt.evaluate_params(PARAMS_RSI)
     assert metrics is not None
-    if trade_count >= 30:
-        assert score == pytest.approx(raw)
-    elif trade_count < 10:
-        assert score == 0.0
-    else:
-        assert score == pytest.approx(raw * (trade_count - 10) / 20.0)
+    for key in ("Train_Score", "Val_Score", "Train_Trades", "Val_Trades"):
+        assert key in metrics, key
+    assert score == pytest.approx(metrics["Train_Score"])
+    assert metrics["Train_Trades"] + metrics["Val_Trades"] == trade_count
+    # Full-sample raw objective is preserved for reporting
+    assert np.isfinite(raw)
+
+
+def test_selection_split_disabled_on_small_data():
+    """Walk-forward-sized windows must keep full-sample selection"""
+    opt = _optimizer(df_dict=_df_dict(n=300))
+    assert opt.selection_cut is None
+
+
+def test_phase_winner_validation_veto():
+    """In opt-in veto mode, validation acts as a VETO (survivors ranked by
+    train score), not an argmax - the argmax variant was falsified on
+    no-edge data (journal H5a) and the veto itself failed real-data
+    replication (journal H7), hence opt-in"""
+    import optuna
+
+    opt = _optimizer(use_validation_veto=True)  # split active
+    dists = {"x": optuna.distributions.IntDistribution(0, 10)}
+
+    def add(study, x, train, val):
+        study.add_trial(
+            optuna.trial.create_trial(
+                params={"x": x},
+                distributions=dists,
+                value=train,
+                user_attrs={"val_score": val, "params": {"x": x}},
+            )
+        )
+
+    # Best train candidate survives validation -> it wins (val magnitude
+    # beyond the veto is deliberately ignored)
+    study = optuna.create_study(direction="maximize")
+    add(study, 0, train=1.0, val=0.1)  # best train, survives
+    add(study, 1, train=0.5, val=0.9)  # best validation, weaker train
+    add(study, 2, train=0.8, val=None)  # no validation evidence
+    assert opt._phase_winner(study).params["x"] == 0
+
+    # Best train candidate vetoed (val <= 0) -> best surviving train wins
+    study2 = optuna.create_study(direction="maximize")
+    add(study2, 0, train=1.0, val=-0.2)
+    add(study2, 1, train=0.5, val=0.3)
+    add(study2, 2, train=0.7, val=0.0)
+    assert opt._phase_winner(study2).params["x"] == 1
+
+    # No survivors anywhere -> fall back to plain train argmax
+    study3 = optuna.create_study(direction="maximize")
+    add(study3, 0, train=0.3, val=0.0)
+    add(study3, 1, train=0.9, val=-0.5)
+    assert opt._phase_winner(study3).params["x"] == 1
+
+    # Split inactive -> validation attrs are ignored entirely
+    small = _optimizer(df_dict=_df_dict(n=300), use_validation_veto=True)
+    study4 = optuna.create_study(direction="maximize")
+    add(study4, 0, train=0.9, val=-0.8)
+    add(study4, 1, train=0.2, val=0.8)
+    assert small._phase_winner(study4).params["x"] == 0
+
+    # Default mode: veto off - plain sampler-score argmax even though the
+    # split is active and validation attrs exist
+    default = _optimizer()
+    study5 = optuna.create_study(direction="maximize")
+    add(study5, 0, train=0.9, val=-0.8)
+    add(study5, 1, train=0.2, val=0.8)
+    assert default._phase_winner(study5).params["x"] == 0

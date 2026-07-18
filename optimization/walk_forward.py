@@ -160,10 +160,16 @@ class WalkForwardAnalyzer:
                 is_return = (is_equity[-1] / 1000.0 - 1) * 100
                 print(f"✓ In-sample: {is_return:+.2f}% ({is_trades} trades)")
 
-                # Test on out-of-sample data
+                # Test on out-of-sample data (train slice supplies indicator
+                # warm-up context; only test-period bars are scored)
                 print(f"\n📈 Testing on out-of-sample data...")
                 oos_equity, oos_trades = WalkForwardAnalyzer._test_window(
-                    optimizer_class, test_dict, best_params, **optimizer_kwargs
+                    optimizer_class,
+                    train_dict,
+                    test_dict,
+                    test_start,
+                    best_params,
+                    **optimizer_kwargs,
                 )
 
                 if oos_equity is None or oos_trades < 1:
@@ -318,15 +324,74 @@ class WalkForwardAnalyzer:
             return None, None, 0
 
     @staticmethod
-    def _test_window(optimizer_class, test_dict: Dict, best_params: Dict, **optimizer_kwargs):
-        """Test on out-of-sample window"""
+    def _test_window(
+        optimizer_class,
+        train_dict: Dict,
+        test_dict: Dict,
+        test_start,
+        best_params: Dict,
+        **optimizer_kwargs,
+    ):
+        """
+        Test on the out-of-sample window WITH warm-up context.
+
+        Simulating the test slice in isolation restarts the indicator
+        warm-up mask at bar 0, so a window shorter than the warm-up
+        (e.g. MACD(50,25) needs 275 bars vs a ~21-bar test window) can
+        never trade - OOS results get biased toward zero trades and zero
+        return for purely mechanical reasons. Live trading has continuous
+        indicator state, so evaluation must too: simulate on train+test
+        and score only the test-period bars.
+
+        Returns:
+            (oos_equity, oos_trades): equity over the test bars rescaled
+            to a 1000.0 start, and the number of trades whose exit falls
+            in the test window (a position carried across the boundary
+            contributes test-period P&L, exactly as it would live).
+        """
         try:
             # Remove n_trials from kwargs for testing
             test_kwargs = {k: v for k, v in optimizer_kwargs.items() if k != "n_trials"}
 
-            test_optimizer = optimizer_class(df_dict=test_dict, n_trials=1, **test_kwargs)
+            combined = {}
+            for tf, test_df in test_dict.items():
+                train_df = train_dict.get(tf)
+                if train_df is not None and len(train_df) > 0:
+                    combined[tf] = pd.concat(
+                        [train_df, test_df], ignore_index=True
+                    )
+                else:
+                    combined[tf] = test_df.copy().reset_index(drop=True)
 
-            oos_equity, oos_trades = test_optimizer.simulate_multi_tf(best_params)
+            test_optimizer = optimizer_class(df_dict=combined, n_trials=1, **test_kwargs)
+
+            eq_curve, _, trades = test_optimizer.simulate_multi_tf(
+                best_params, return_trades=True
+            )
+            if eq_curve is None:
+                return None, 0
+
+            finest = test_optimizer.finest_tf
+            finest_dt = combined[finest]["Datetime"]
+            cut_idx = int(finest_dt.searchsorted(test_start, side="left"))
+            if cut_idx >= len(eq_curve):
+                return None, 0
+
+            # Equity over the test period, normalized so the caller's
+            # (eq[-1] / 1000 - 1) return convention still holds. Start the
+            # slice one bar early so the first test bar's return is kept.
+            base_idx = max(cut_idx - 1, 0)
+            eq_slice = eq_curve[base_idx:]
+            if eq_slice[0] <= 0:
+                return None, 0
+            oos_equity = eq_slice / eq_slice[0] * 1000.0
+
+            test_start_ts = pd.Timestamp(test_start)
+            oos_trades = sum(
+                1
+                for t in trades
+                if pd.Timestamp(t["Exit_Date"]) >= test_start_ts
+            )
             return oos_equity, oos_trades
 
         except Exception as e:

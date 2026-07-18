@@ -367,6 +367,20 @@ class MainWindow(QMainWindow):
         obj_group.setLayout(obj_layout)
         left_layout.addWidget(obj_group)
 
+        # Evidence-backed preset (RESEARCH_JOURNAL.md: certified strategy)
+        preset_btn = QPushButton("⭐ Apply Certified Preset")
+        preset_btn.setToolTip(
+            "One click applies the evidence-backed configuration certified in\n"
+            "RESEARCH_JOURNAL.md over 60 out-of-sample folds (8 markets,\n"
+            "1954-2026): calendar cycle disabled, all indicators enabled,\n"
+            "Sharpe objective, volatility targeting on.\n"
+            "Measured profile: ~half the drawdowns of buy & hold at\n"
+            "statistically non-inferior returns. Equities & crypto only."
+        )
+        preset_btn.setStyleSheet("font-weight: bold; padding: 6px;")
+        preset_btn.clicked.connect(self.apply_certified_preset)
+        left_layout.addWidget(preset_btn)
+
         # Signal construction: cycle-only toggle + indicator pool
         sig_group = QGroupBox("Signal Construction")
         sig_layout = QVBoxLayout()
@@ -378,6 +392,29 @@ class MainWindow(QMainWindow):
         )
         self.cycle_only_cb.stateChanged.connect(self._on_cycle_only_toggled)
         sig_layout.addWidget(self.cycle_only_cb)
+
+        self.no_cycle_cb = QCheckBox("🚫 Disable calendar cycle (indicators only)")
+        self.no_cycle_cb.setToolTip(
+            "Pin the calendar cycle permanently ON so entries and exits come\n"
+            "from indicators alone. A controlled 15-fold study found the\n"
+            "free-form cycle inflates in-sample scores and significantly\n"
+            "REDUCES out-of-sample Sharpe (RESEARCH_JOURNAL.md, H9,\n"
+            "p = 0.028). The ON/OFF range spinboxes are ignored while this\n"
+            "is checked."
+        )
+        self.no_cycle_cb.stateChanged.connect(self._on_no_cycle_toggled)
+        sig_layout.addWidget(self.no_cycle_cb)
+
+        self.vol_target_cb = QCheckBox("🛡 Volatility targeting (size down in high vol)")
+        self.vol_target_cb.setToolTip(
+            "Scale each trade's size by min(1, median vol / current 20-bar\n"
+            "vol) - no leverage, nothing extra to optimize. Cut out-of-sample\n"
+            "max drawdown by 2.6pp (p = 0.013) at no Sharpe cost in a 15-fold\n"
+            "fixed-strategy study (RESEARCH_JOURNAL.md, H8b).\n"
+            "Applies to backtests, walk-forward, and the switching backtest;\n"
+            "NOT yet applied by the live Alpaca trader."
+        )
+        sig_layout.addWidget(self.vol_target_cb)
 
         self.combine_ind_cb = QCheckBox("Combine two indicators (AND entry / OR exit)")
         self.combine_ind_cb.setChecked(True)
@@ -614,6 +651,50 @@ class MainWindow(QMainWindow):
         self.combine_ind_cb.setEnabled(not cycle_only)
         for cb in self.indicator_checkboxes.values():
             cb.setEnabled(not cycle_only)
+        # Cycle-only and cycle-disabled are contradictory
+        if cycle_only and self.no_cycle_cb.isChecked():
+            self.no_cycle_cb.setChecked(False)
+
+    def _on_no_cycle_toggled(self):
+        """Indicators-only mode: the calendar cycle is pinned ON"""
+        no_cycle = self.no_cycle_cb.isChecked()
+        if no_cycle and self.cycle_only_cb.isChecked():
+            self.cycle_only_cb.setChecked(False)
+        # The ON/OFF range spinboxes are ignored while the cycle is disabled
+        for name in ("on", "off"):
+            getattr(self, f"{name}_min").setEnabled(not no_cycle)
+            getattr(self, f"{name}_max").setEnabled(not no_cycle)
+
+    def apply_certified_preset(self):
+        """Apply the evidence-backed configuration certified in
+        RESEARCH_JOURNAL.md (indicators-only + Sharpe objective +
+        volatility targeting; 60 OOS folds, 8 markets, 1954-2026)"""
+        self.cycle_only_cb.setChecked(False)
+        self.no_cycle_cb.setChecked(True)
+        self.vol_target_cb.setChecked(True)
+        self.combine_ind_cb.setChecked(True)
+        for cb in self.indicator_checkboxes.values():
+            cb.setChecked(True)
+        idx = self.objective_combo.findData("sharpe")
+        if idx >= 0:
+            self.objective_combo.setCurrentIndex(idx)
+        self.statusBar().showMessage(
+            "Certified preset applied: calendar cycle OFF, all indicators, "
+            "Sharpe objective, volatility targeting ON (see RESEARCH_JOURNAL.md). "
+            "Best suited to equities and crypto."
+        )
+
+    def _effective_cycle_ranges(self, params: Dict) -> tuple:
+        """Cycle search ranges honoring the disable-cycle checkbox: pinned
+        permanently ON (period 250, no OFF phase) when disabled, so the
+        strategy is gated by indicators alone"""
+        if self.no_cycle_cb.isChecked():
+            return ((250, 250), (0, 0), (0, 0))
+        return (
+            params["on"],
+            params["off"],
+            (0, params["on"][1] + params["off"][1]),
+        )
 
     # =============================================================================
     # TAB 3: REGIME ANALYSIS
@@ -1211,6 +1292,7 @@ class MainWindow(QMainWindow):
             cycle_only=self.cycle_only_cb.isChecked(),
             allowed_indicators=allowed or list(INDICATORS),
             combine_indicators=self.combine_ind_cb.isChecked(),
+            vol_targeting=self.vol_target_cb.isChecked(),
         )
 
     def start_optimization(self, *, objective: Optional[str] = None):
@@ -1239,11 +1321,7 @@ class MainWindow(QMainWindow):
         objective = objective or self._selected_objective()
 
         params = self._get_param_ranges()
-        time_cycle_ranges = (
-            params["on"],
-            params["off"],
-            (0, params["on"][1] + params["off"][1]),
-        )
+        time_cycle_ranges = self._effective_cycle_ranges(params)
 
         self.worker = MultiTimeframeOptimizer(
             df_dict=self.df_dict,
@@ -1603,6 +1681,8 @@ class MainWindow(QMainWindow):
             "",
             "Trades:",
             f"  Total Trades: {p.get('Trade_Count', 0)}",
+            f"  Trades / Year: {val('Trades_Per_Year', '.1f')}",
+            f"  Exposure (time in market): {val('Exposure_%', '.1f', '%')}",
             f"  Win Rate: {val('Win_Rate_%', '.1f', '%')}",
             f"  Profit Factor: {val('Profit_Factor')}",
             f"  Expectancy: {val('Expectancy_%', '.3f', '%/trade')}",
@@ -2108,11 +2188,7 @@ class MainWindow(QMainWindow):
             temp_optimizer = MultiTimeframeOptimizer(
                 df_dict=self.df_dict,
                 n_trials=1,
-                time_cycle_ranges=(
-                    params_ranges["on"],
-                    params_ranges["off"],
-                    (0, params_ranges["on"][1] + params_ranges["off"][1]),
-                ),
+                time_cycle_ranges=self._effective_cycle_ranges(params_ranges),
                 mn1_range=params_ranges["mn1"],
                 mn2_range=params_ranges["mn2"],
                 entry_range=params_ranges["entry"],
@@ -2120,6 +2196,9 @@ class MainWindow(QMainWindow):
                 ticker=self.current_ticker,
                 transaction_costs=self.transaction_costs,
                 position_size=self.position_size_pct / 100.0,
+                # Sizing parity: shadows and the switching portfolio must
+                # apply the same volatility overlay the backtests use
+                vol_targeting=self.vol_target_cb.isChecked(),
             )
 
             closes = temp_optimizer.np_data[temp_optimizer.finest_tf]["close"]
@@ -2296,11 +2375,7 @@ class MainWindow(QMainWindow):
 
         try:
             params = self._get_param_ranges()
-            time_cycle_ranges = (
-                params["on"],
-                params["off"],
-                (0, params["on"][1] + params["off"][1]),
-            )
+            time_cycle_ranges = self._effective_cycle_ranges(params)
 
             results = WalkForwardAnalyzer.run_walk_forward(
                 optimizer_class=MultiTimeframeOptimizer,
@@ -3009,11 +3084,7 @@ Features: {len(self.regime_predictor.feature_names)}
                     ticker=self.current_ticker,
                     book_path=self._strategy_book().path,
                     optimizer_kwargs=dict(
-                        time_cycle_ranges=(
-                            params_ranges["on"],
-                            params_ranges["off"],
-                            (0, params_ranges["on"][1] + params_ranges["off"][1]),
-                        ),
+                        time_cycle_ranges=self._effective_cycle_ranges(params_ranges),
                         mn1_range=params_ranges["mn1"],
                         mn2_range=params_ranges["mn2"],
                         entry_range=params_ranges["entry"],

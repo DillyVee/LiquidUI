@@ -27,6 +27,7 @@ class PerformanceMetrics:
         eq_curve: np.ndarray,
         annualization_factor: float = 252.0,
         trade_returns: Optional[np.ndarray] = None,
+        exposure_frac: Optional[float] = None,
     ) -> Optional[Dict[str, float]]:
         """
         Calculate comprehensive performance metrics.
@@ -38,6 +39,11 @@ class PerformanceMetrics:
             trade_returns: Optional per-trade percent changes (e.g. [1.2,
                 -0.4, ...] in %). Enables trade-level statistics and a
                 trade-based profit factor.
+            exposure_frac: Optional fraction of bars spent in the market
+                (0..1, from the simulation). Adds "Exposure_%": a Sharpe
+                earned while invested 8% of the time has a very different
+                capacity, regime and risk profile than one earned at 80%,
+                and per-bar risk metrics are diluted by flat bars.
 
         Returns:
             Dictionary of metrics or None if invalid
@@ -79,12 +85,16 @@ class PerformanceMetrics:
         )
         sharpe = float(np.clip(sharpe, -_RATIO_CAP, _RATIO_CAP))
 
-        # Sortino ratio (downside deviation), annualized to the bar frequency
-        downside_returns = returns[returns < 0]
-        downside_std = np.std(downside_returns, ddof=1) if len(downside_returns) > 1 else 1e-10
+        # Sortino ratio, annualized to the bar frequency. Downside deviation
+        # is the target semideviation (root lower partial moment of order 2,
+        # MAR = 0, averaged over ALL bars - Sortino & van der Meer 1991).
+        # NOT the std of losing bars about their own mean: that rewards
+        # loss UNIFORMITY (identical -1% losses -> std ~ 0 -> ratio
+        # explodes), which an optimizer maximizing Sortino will exploit.
+        downside_dev = float(np.sqrt(np.mean(np.minimum(returns, 0.0) ** 2)))
         sortino = (
-            (avg_return / downside_std) * np.sqrt(annualization_factor)
-            if downside_std > 1e-10
+            (avg_return / downside_dev) * np.sqrt(annualization_factor)
+            if downside_dev > 1e-10
             else 0.0
         )
         sortino = float(np.clip(sortino, -_RATIO_CAP, _RATIO_CAP))
@@ -139,6 +149,11 @@ class PerformanceMetrics:
             "Profit_Factor": round(profit_factor, 3),
         }
 
+        if exposure_frac is not None and np.isfinite(exposure_frac):
+            metrics["Exposure_%"] = round(
+                float(np.clip(exposure_frac, 0.0, 1.0)) * 100.0, 2
+            )
+
         # Trade-level statistics (industry-standard definitions: computed
         # over closed trades, not bars)
         if trade_returns is not None:
@@ -161,6 +176,9 @@ class PerformanceMetrics:
                 )
                 metrics.update(
                     {
+                        "Trades_Per_Year": (
+                            round(len(tr) / years, 2) if years > 0 else 0.0
+                        ),
                         "Win_Rate_%": round(win_rate, 2),
                         "Profit_Factor": round(pf_trades, 3),
                         "Avg_Win_%": round(avg_win, 3),

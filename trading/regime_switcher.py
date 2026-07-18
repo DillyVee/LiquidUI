@@ -322,14 +322,20 @@ class SwitchingBacktestResult:
 
 class _ShadowSim:
     """One strategy's shadow position state, mirroring simulate_multi_tf
-    semantics exactly (next-bar-open fills, cost model, sized exposure)"""
+    semantics exactly (next-bar-open fills, cost model, sized exposure,
+    optional per-bar volatility-targeted size multiplier)"""
 
-    def __init__(self, enter_signal, exit_signal, open_prices, costs, position_size):
+    def __init__(
+        self, enter_signal, exit_signal, open_prices, costs, position_size,
+        size_frac=None,
+    ):
         self.enter = enter_signal
         self.exit = exit_signal
         self.opens = open_prices
         self.costs = costs
         self.f = position_size
+        self.size_frac = size_frac
+        self.trade_f = position_size
         self.equity = 1000.0
         self.position = False
         self.entry_price = 0.0
@@ -343,20 +349,25 @@ class _ShadowSim:
                 price = self.opens[i + 1]
                 self.entry_price = price * (1 + self.costs.TOTAL_PCT)
                 self.entry_idx = i + 1
+                self.trade_f = self.f * (
+                    self.size_frac[i] if self.size_frac is not None else 1.0
+                )
                 if self.costs.COMMISSION_FIXED > 0:
                     self.equity -= self.costs.COMMISSION_FIXED
                 self.position = True
         elif self.position and self.exit[i]:
             exit_price = self.opens[i + 1] if i + 1 < self.n else self.opens[i]
             exit_with_costs = exit_price * (1 - self.costs.TOTAL_PCT)
-            self.equity *= 1.0 + self.f * (exit_with_costs / self.entry_price - 1.0)
+            self.equity *= 1.0 + self.trade_f * (
+                exit_with_costs / self.entry_price - 1.0
+            )
             if self.costs.COMMISSION_FIXED > 0:
                 self.equity -= self.costs.COMMISSION_FIXED
             self.position = False
 
         if self.position and i >= self.entry_idx:
             return self.equity * (
-                1.0 + self.f * (self.opens[i] / self.entry_price - 1.0)
+                1.0 + self.trade_f * (self.opens[i] / self.entry_price - 1.0)
             )
         return self.equity
 
@@ -397,13 +408,17 @@ def run_switching_backtest(
 
     costs = optimizer.transaction_costs
     f = optimizer.position_size
+    # Per-bar volatility-targeting multiplier (None unless the optimizer
+    # was built with vol_targeting=True) - shadows and the real portfolio
+    # must size exactly like simulate_multi_tf or parity breaks
+    size_frac = getattr(optimizer, "_size_frac", None)
 
     signals: Dict[str, Tuple[np.ndarray, np.ndarray]] = {}
     shadows: Dict[str, _ShadowSim] = {}
     for s in strategies:
         enter, exit_ = optimizer.compute_signals(s.params)
         signals[s.name] = (enter, exit_)
-        shadows[s.name] = _ShadowSim(enter, exit_, opens, costs, f)
+        shadows[s.name] = _ShadowSim(enter, exit_, opens, costs, f, size_frac)
 
     engine = RegimeSwitchingEngine(
         [s.name for s in strategies],
@@ -423,6 +438,7 @@ def run_switching_backtest(
     entry_price = 0.0
     entry_idx = 0
     entry_regime = ""
+    trade_f = f
     trades: List[Dict] = []
 
     for i in range(n):
@@ -451,6 +467,7 @@ def run_switching_backtest(
                     price = opens[i + 1]
                     entry_price = price * (1 + costs.TOTAL_PCT)
                     entry_idx = i + 1
+                    trade_f = f * (size_frac[i] if size_frac is not None else 1.0)
                     if costs.COMMISSION_FIXED > 0:
                         equity -= costs.COMMISSION_FIXED
                     position = True
@@ -460,7 +477,7 @@ def run_switching_backtest(
             exit_price = opens[i + 1] if i + 1 < n else opens[i]
             exit_with_costs = exit_price * (1 - costs.TOTAL_PCT)
             pct = (exit_with_costs / entry_price - 1.0) * 100
-            equity *= 1.0 + f * (exit_with_costs / entry_price - 1.0)
+            equity *= 1.0 + trade_f * (exit_with_costs / entry_price - 1.0)
             if costs.COMMISSION_FIXED > 0:
                 equity -= costs.COMMISSION_FIXED
             trades.append(
@@ -477,7 +494,7 @@ def run_switching_backtest(
             owner = None
 
         if position and i >= entry_idx:
-            equity_curve[i] = equity * (1.0 + f * (opens[i] / entry_price - 1.0))
+            equity_curve[i] = equity * (1.0 + trade_f * (opens[i] / entry_price - 1.0))
         else:
             equity_curve[i] = equity
 
@@ -485,7 +502,7 @@ def run_switching_backtest(
     if position:
         exit_with_costs = opens[-1] * (1 - costs.TOTAL_PCT)
         pct = (exit_with_costs / entry_price - 1.0) * 100
-        equity *= 1.0 + f * (exit_with_costs / entry_price - 1.0)
+        equity *= 1.0 + trade_f * (exit_with_costs / entry_price - 1.0)
         if costs.COMMISSION_FIXED > 0:
             equity -= costs.COMMISSION_FIXED
         trades.append(

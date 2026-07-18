@@ -335,3 +335,66 @@ def test_shadow_simulation_matches_simulate_multi_tf():
     assert np.allclose(shadow[:-1], sim_curve[:-1]), (
         "shadow simulation diverged from simulate_multi_tf"
     )
+
+
+def test_shadow_and_real_parity_with_vol_targeting():
+    """With volatility targeting enabled, the shadow sims AND the real
+    switching portfolio must still replicate simulate_multi_tf exactly -
+    per-trade sizing is part of the parity contract"""
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from optimization.optimizer import MultiTimeframeOptimizer
+
+    rng = np.random.default_rng(5)
+    n = 400
+    # Alternating quiet/volatile blocks so the size multiplier truly varies
+    sigma = np.where((np.arange(n) // 50) % 2 == 0, 0.006, 0.025)
+    closes = 100 * np.cumprod(1 + rng.normal(0.0005, 1.0, n) * sigma)
+    df = pd.DataFrame(
+        {
+            "Datetime": pd.bdate_range("2023-01-02", periods=n),
+            "Open": np.concatenate([[100.0], closes[:-1]]),
+            "Close": closes,
+        }
+    )
+
+    opt = MultiTimeframeOptimizer(
+        df_dict={"daily": df},
+        n_trials=1,
+        time_cycle_ranges=((1, 20), (0, 20), (0, 40)),
+        mn1_range=(5, 20),
+        mn2_range=(3, 10),
+        entry_range=(10.0, 40.0),
+        exit_range=(50.0, 90.0),
+        timeframes=["daily"],
+        transaction_costs=TransactionCosts.for_stocks(),
+        position_size=0.8,
+        vol_targeting=True,
+    )
+    assert opt._size_frac is not None
+    assert np.min(opt._size_frac) < 0.999, "multiplier must actually bind"
+
+    params = {
+        "MN1_daily": 10, "MN2_daily": 5,
+        "Entry_daily": 45.0, "Exit_daily": 55.0,
+        "On_daily": 15, "Off_daily": 5, "Start_daily": 2,
+    }
+
+    sim_curve, sim_trades = opt.simulate_multi_tf(params)
+    assert sim_trades > 0
+
+    labels = np.array(["Bull-Quiet"] * n, dtype=object)
+    result = run_switching_backtest(
+        opt,
+        [StoredStrategy("only", params, base_score=1.0)],
+        labels,
+        require_positive_score=False,
+    )
+
+    assert np.allclose(result.shadow_curves["only"][:-1], sim_curve[:-1]), (
+        "vol-targeted shadow diverged from simulate_multi_tf"
+    )
+    assert np.allclose(result.equity_curve, sim_curve), (
+        "vol-targeted real switching portfolio diverged from simulate_multi_tf"
+    )

@@ -15,6 +15,20 @@ Modes:
   - legacy             indicator_search=False reproduces the original
                        RSI-only parameter search
 
+Selection instrumentation: when enough data is loaded, every trial also
+records its score on a chronological TRAIN segment and a held-out
+VALIDATION slice (Train_Score / Val_Score / *_Trades in every result
+row) so train-vs-validation degradation is always visible.
+
+By default this is measurement only - selection remains the full-sample
+argmax. The opt-in `use_validation_veto` mode makes TPE navigate on the
+train segment and picks each phase winner as the best train score among
+trials with a positive validation score. The veto significantly improved
+OOS results on synthetic planted-edge data (paired +0.52, p=0.022) but
+FAILED to replicate on real multi-asset data (15 folds, paired -0.31,
+p=0.38, stand-aside opportunity cost in trending markets), so it is not
+the default - see RESEARCH_JOURNAL.md experiments H5a/H6/H7.
+
 Walk-forward analysis stays a separate function (optimization.walk_forward)
 and the anti-overfit gates live in optimization.validation.
 """
@@ -41,6 +55,12 @@ optuna.logging.set_verbosity(optuna.logging.WARNING)
 
 class MultiTimeframeOptimizer(QThread):
     """Multi-timeframe strategy optimizer with selectable objective"""
+
+    # Below this many finest-timeframe bars a 25% validation slice is too
+    # short for stable trade statistics; selection falls back to the
+    # full-sample argmax (status quo). Keeps walk-forward inner windows
+    # (~126 daily bars) unaffected.
+    MIN_SELECTION_BARS = 400
 
     progress = pyqtSignal(int)
     new_best = pyqtSignal(dict)
@@ -69,6 +89,9 @@ class MultiTimeframeOptimizer(QThread):
         allowed_indicators: Optional[Sequence[str]] = None,
         combine_indicators: bool = True,
         seed: Optional[int] = None,
+        selection_holdout_frac: float = 0.25,
+        use_validation_veto: bool = False,
+        vol_targeting: bool = False,
     ):
         super().__init__()
         # Validates the objective name up front (fail fast, not mid-run)
@@ -120,6 +143,22 @@ class MultiTimeframeOptimizer(QThread):
         # sizing or backtest metrics won't describe the live system.
         self.position_size = float(np.clip(position_size, 0.001, 1.0))
 
+        # Opt-in volatility targeting (Moreira & Muir 2017; Harvey et al.
+        # 2018): per-trade size is scaled by min(1, median_vol / vol) where
+        # vol is the causal 20-bar realized volatility at the decision bar
+        # and median_vol its own expanding median - "scale down when
+        # volatility is elevated relative to its own history". Causal and
+        # parameter-free (fixed 20-bar window, no leverage), so nothing new
+        # for the optimizer to overfit. The per-bar multiplier is built in
+        # _build_size_frac after data preprocessing.
+        #
+        # Evidence (journal H8/H8b): on fixed strategies over 15 real-data
+        # folds it cut OOS max drawdown by 2.6pp (p=0.013) at no Sharpe
+        # cost - a risk-reduction overlay, not an alpha source. Stays off
+        # by default because the joint (re-optimized) system showed no
+        # Sharpe gain.
+        self.vol_targeting = bool(vol_targeting)
+
         if transaction_costs is None:
             from config.settings import TransactionCosts
 
@@ -130,6 +169,35 @@ class MultiTimeframeOptimizer(QThread):
 
         self._preprocess_data()
         self._align_timeframes()
+        self._build_size_frac()
+
+        # Chronological train/validation split. Always used to RECORD
+        # per-segment scores (degradation instrumentation); it only
+        # affects selection when use_validation_veto is opted in - the
+        # veto failed to replicate on real multi-asset data (journal H7)
+        # so measurement is on by default and action is not.
+        self.use_validation_veto = bool(use_validation_veto)
+        frac = float(np.clip(selection_holdout_frac, 0.0, 0.5))
+        n_finest = self.np_data[self.finest_tf]["length"]
+        if frac > 0.0 and n_finest >= self.MIN_SELECTION_BARS:
+            self.selection_cut: Optional[int] = int(n_finest * (1.0 - frac))
+            if self.use_validation_veto:
+                print(
+                    f"🔍 Selection: VETO mode - TPE on bars [0, {self.selection_cut}), "
+                    f"winners must score > 0 on bars [{self.selection_cut}, {n_finest})"
+                )
+            else:
+                print(
+                    f"🔍 Selection: full-sample; train/validation scores recorded "
+                    f"(split at bar {self.selection_cut}) for degradation visibility"
+                )
+        else:
+            self.selection_cut = None
+            if frac > 0.0:
+                print(
+                    f"🔍 Selection: {n_finest} bars < {self.MIN_SELECTION_BARS} - "
+                    "no train/validation split (slice too short)"
+                )
 
     def _preprocess_data(self):
         """Convert all DataFrames to numpy arrays once for speed"""
@@ -200,6 +268,39 @@ class MultiTimeframeOptimizer(QThread):
 
         self.finest_tf = finest_tf
 
+    # Realized-vol window for volatility targeting, in finest-tf bars.
+    # Fixed (not searchable) on purpose: ~1 month of daily bars, inside the
+    # 1-3 month range the volatility-targeting literature uses. Making it
+    # tunable would hand the optimizer a fresh overfitting dial.
+    VOL_WINDOW = 20
+
+    def _build_size_frac(self):
+        """Causal per-bar position-size multiplier for volatility targeting
+        (None when disabled). size_frac[i] uses closes[: i + 1] only, so a
+        trade decided at bar i (filled at open i+1) never reads the future."""
+        if not self.vol_targeting:
+            self._size_frac = None
+            return
+        closes = self.np_data[self.finest_tf]["close"]
+        r = np.zeros(len(closes))
+        r[1:] = np.diff(closes) / np.where(closes[:-1] > 1e-12, closes[:-1], 1.0)
+        vol = (
+            pd.Series(r)
+            .rolling(self.VOL_WINDOW, min_periods=self.VOL_WINDOW)
+            .std()
+            .to_numpy()
+        )
+        med = pd.Series(vol).expanding(min_periods=self.VOL_WINDOW).median().to_numpy()
+        scalar = np.ones(len(closes))
+        valid = np.isfinite(vol) & np.isfinite(med) & (vol > 1e-12)
+        scalar[valid] = np.minimum(1.0, med[valid] / vol[valid])
+        self._size_frac = scalar
+        print(
+            f"📐 Volatility targeting ON: {self.VOL_WINDOW}-bar realized vol vs "
+            f"expanding median (mean size multiplier "
+            f"{float(np.mean(scalar)):.2f}, no leverage)"
+        )
+
     def stop(self):
         """Request a graceful stop of the optimization"""
         self.stopped = True
@@ -215,18 +316,48 @@ class MultiTimeframeOptimizer(QThread):
             return 252.0 * 6.5 * 12
         return 252.0 * 6.5 * 60  # 1min
 
+    def _segment_score(
+        self, eq_curve: np.ndarray, trade_pcts: np.ndarray, start: int, end: int
+    ) -> Tuple[float, int]:
+        """
+        Confidence-scaled objective score of one chronological segment
+        [start, end) of the equity curve. The slice begins one bar early so
+        the first segment bar's return is included, and is renormalized to
+        the 1000.0 start every metric assumes. Trades belong to the segment
+        their ENTRY bar falls in.
+        """
+        lo = max(start - 1, 0)
+        eq_slice = eq_curve[lo:end]
+        if len(eq_slice) < 2 or eq_slice[0] <= 0:
+            return 0.0, 0
+        eq_norm = eq_slice * (1000.0 / eq_slice[0])
+        seg_metrics = PerformanceMetrics.calculate_metrics(
+            eq_norm,
+            annualization_factor=self.annualization_factor,
+            trade_returns=trade_pcts,
+        )
+        n_trades = len(trade_pcts)
+        _, seg_score = scored(self.objective, seg_metrics, n_trades)
+        return float(seg_score), n_trades
+
     def evaluate_params(self, params: Dict) -> Tuple[float, float, Optional[Dict], int]:
         """
         Simulate one parameter set and score it under the configured
         objective.
 
         Returns:
-            (raw_objective_value, confidence_scaled_score, metrics, trades)
-            where `score` is the raw objective value scaled by the trade-
-            count confidence multiplier (fewer than 10 trades scores 0).
+            (raw_objective_value, sampler_score, metrics, trades). `raw` is
+            the full-sample objective value (reporting continuity).
+            `sampler_score` is what TPE maximizes: the full-sample
+            confidence-scaled score by default; in opt-in veto mode with a
+            split active it is the TRAIN-segment score instead (the
+            validation slice is reserved for the veto). When a split is
+            active, Train_Score / Val_Score / *_Trades are always recorded
+            in the metrics dict regardless of mode.
         """
+        sim_stats: Dict = {}
         eq_curve, trade_count, trade_pcts = self.simulate_multi_tf(
-            params, return_trade_pcts=True
+            params, return_trade_pcts=True, stats_out=sim_stats
         )
         if eq_curve is None or len(eq_curve) < 50:
             return 0.0, 0.0, None, 0
@@ -235,11 +366,32 @@ class MultiTimeframeOptimizer(QThread):
             eq_curve,
             annualization_factor=self.annualization_factor,
             trade_returns=trade_pcts,
+            exposure_frac=sim_stats.get("exposure_frac"),
         )
         if metrics is None:
             return 0.0, 0.0, None, int(trade_count)
 
         raw, score = scored(self.objective, metrics, trade_count)
+
+        cut = self.selection_cut
+        if cut is not None:
+            entry_idxs = np.asarray(
+                sim_stats.get("trade_entry_idxs", []), dtype=np.int64
+            )
+            in_train = entry_idxs < cut
+            train_score, train_trades = self._segment_score(
+                eq_curve, trade_pcts[in_train], 0, cut
+            )
+            val_score, val_trades = self._segment_score(
+                eq_curve, trade_pcts[~in_train], cut, len(eq_curve)
+            )
+            metrics["Train_Score"] = round(train_score, 6)
+            metrics["Val_Score"] = round(val_score, 6)
+            metrics["Train_Trades"] = int(train_trades)
+            metrics["Val_Trades"] = int(val_trades)
+            if self.use_validation_veto:
+                score = train_score
+
         return raw, score, metrics, int(trade_count)
 
     def compute_signals(self, params: Dict) -> Tuple[np.ndarray, np.ndarray]:
@@ -306,10 +458,20 @@ class MultiTimeframeOptimizer(QThread):
         return enter_signal, exit_signal
 
     def simulate_multi_tf(
-        self, params: Dict, return_trades: bool = False, return_trade_pcts: bool = False
+        self,
+        params: Dict,
+        return_trades: bool = False,
+        return_trade_pcts: bool = False,
+        stats_out: Optional[Dict] = None,
     ):
         """
         Simulate a parameter set on the finest timeframe.
+
+        Args:
+            stats_out: Optional caller-owned dict that receives simulation
+                statistics ("exposure_frac": fraction of bars marked
+                in-market). Caller-owned so concurrent trials (Optuna
+                n_jobs threads) can never race on shared state.
 
         Returns:
             (equity_curve, trade_count) by default;
@@ -347,6 +509,11 @@ class MultiTimeframeOptimizer(QThread):
             trade_count = 0
             trades = [] if return_trades else None
             trade_pcts: List[float] = []
+            trade_entry_idxs: List[int] = []
+            bars_in_market = 0
+            # Fraction of equity this trade deploys; with volatility
+            # targeting it is fixed per trade at the decision bar
+            trade_f = self.position_size
 
             for i in range(n_bars):
                 if not position and enter_signal[i]:
@@ -354,6 +521,9 @@ class MultiTimeframeOptimizer(QThread):
                     if i + 1 < n_bars:
                         entry_price = open_finest[i + 1]
                         entry_idx = i + 1
+                        trade_f = self.position_size * (
+                            self._size_frac[i] if self._size_frac is not None else 1.0
+                        )
 
                         # Apply costs
                         entry_cost_pct = self.transaction_costs.TOTAL_PCT
@@ -380,11 +550,12 @@ class MultiTimeframeOptimizer(QThread):
                     # Calculate actual percent change (price move net of costs)
                     pct_change = (exit_price_with_costs / entry_price - 1) * 100
                     trade_pcts.append(pct_change)
+                    trade_entry_idxs.append(entry_idx)
 
-                    # Update equity, deploying position_size fraction of equity
-                    # per trade (must match live sizing)
+                    # Update equity, deploying this trade's fraction of
+                    # equity (must match live sizing)
                     equity_before = equity
-                    equity *= 1.0 + self.position_size * (
+                    equity *= 1.0 + trade_f * (
                         exit_price_with_costs / entry_price - 1.0
                     )
 
@@ -414,8 +585,9 @@ class MultiTimeframeOptimizer(QThread):
                 # before that the position is not yet open
                 if position and i >= entry_idx:
                     equity_curve[i] = equity * (
-                        1.0 + self.position_size * (open_finest[i] / entry_price - 1.0)
+                        1.0 + trade_f * (open_finest[i] / entry_price - 1.0)
                     )
+                    bars_in_market += 1
                 else:
                     equity_curve[i] = equity
 
@@ -427,8 +599,9 @@ class MultiTimeframeOptimizer(QThread):
 
                 pct_change = (exit_price_with_costs / entry_price - 1) * 100
                 trade_pcts.append(pct_change)
+                trade_entry_idxs.append(entry_idx)
                 equity_before = equity
-                equity *= 1.0 + self.position_size * (
+                equity *= 1.0 + trade_f * (
                     exit_price_with_costs / entry_price - 1.0
                 )
 
@@ -452,6 +625,12 @@ class MultiTimeframeOptimizer(QThread):
                     )
 
                 equity_curve[-1] = equity
+
+            if stats_out is not None:
+                stats_out["exposure_frac"] = (
+                    bars_in_market / n_bars if n_bars else 0.0
+                )
+                stats_out["trade_entry_idxs"] = trade_entry_idxs
 
             if return_trades:
                 return equity_curve, trade_count, trades
@@ -508,7 +687,46 @@ class MultiTimeframeOptimizer(QThread):
         trial.set_user_attr("score", float(score))
         trial.set_user_attr("metrics", metrics)
         trial.set_user_attr("trade_count", trade_count)
+        trial.set_user_attr(
+            "val_score",
+            float(metrics["Val_Score"]) if metrics and "Val_Score" in metrics else None,
+        )
         return score
+
+    def _phase_winner(self, study: optuna.Study) -> optuna.trial.FrozenTrial:
+        """
+        The trial whose suggested params win this phase.
+
+        Default: the plain sampler-score argmax (full-sample selection).
+
+        Opt-in veto mode: the best TRAIN score among trials whose
+        validation-slice score is positive. Two variants were tested
+        against pre-registered criteria (RESEARCH_JOURNAL.md): the
+        validation ARGMAX was falsified on synthetic no-edge data (a max
+        over a short slice has higher selection variance than over the
+        full sample, H5a); the VETO won significantly on synthetic
+        planted-edge data (H6) but failed to replicate on real
+        multi-asset folds (H7) - hence opt-in, not default. Falls back to
+        the plain argmax when no trial has a positive validation score.
+        """
+        completed = [
+            t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE
+        ]
+        train_key = lambda t: t.value if t.value is not None else -np.inf  # noqa: E731
+        if self.use_validation_veto and self.selection_cut is not None:
+            survivors = [
+                t for t in completed if (t.user_attrs.get("val_score") or 0.0) > 0.0
+            ]
+            if survivors:
+                winner = max(survivors, key=train_key)
+                print(
+                    f"   🏁 winner: train score {winner.value:.4f} among "
+                    f"{len(survivors)}/{len(completed)} validation survivors "
+                    f"(val score {winner.user_attrs['val_score']:.4f})"
+                )
+                return winner
+            print("   🏁 no validation survivors - winner by train score")
+        return max(completed, key=train_key)
 
     def _save_batch_results(
         self, study: optuna.Study, n_before: int, batch_idx: int, phase_counter: int,
@@ -716,10 +934,16 @@ class MultiTimeframeOptimizer(QThread):
                         "check data quality and parameter ranges"
                     )
 
+                cycle_winner = self._phase_winner(cycle_study)
+                won = int(cycle_winner.params[f"On_{tf}"])
+                woff = int(cycle_winner.params[f"Off_{tf}"])
+                # Canonicalize the phase: only Start % (On + Off) matters
+                # to the cycle, so store one encoding per strategy (keeps
+                # CSVs comparable and CSCV rivals deduplicable)
                 best_cycle = {
-                    f"On_{tf}": cycle_study.best_params[f"On_{tf}"],
-                    f"Off_{tf}": cycle_study.best_params[f"Off_{tf}"],
-                    f"Start_{tf}": cycle_study.best_params[f"Start_{tf}"],
+                    f"On_{tf}": won,
+                    f"Off_{tf}": woff,
+                    f"Start_{tf}": int(cycle_winner.params[f"Start_{tf}"]) % max(1, won + woff),
                 }
 
                 if tf not in self.best_params_per_tf:
@@ -872,10 +1096,10 @@ class MultiTimeframeOptimizer(QThread):
                         "check data quality and parameter ranges"
                     )
 
-                # Take every suggested key of the best trial (all keys are
-                # namespaced with _{tf}); with indicator_search this
+                # Take every suggested key of the winning trial (all keys
+                # are namespaced with _{tf}); with indicator_search this
                 # includes the IND1/IND2 choices and their sub-params
-                best_ind = dict(ind_study.best_params)
+                best_ind = dict(self._phase_winner(ind_study).params)
                 if self.indicator_search and not self.combine_indicators:
                     # IND2 was forced off, not suggested - record it so the
                     # stored parameter set is self-describing
@@ -906,8 +1130,9 @@ class MultiTimeframeOptimizer(QThread):
                     base_params.update(self.best_params_per_tf[tf])
 
             # Get equity curve AND trade log for GUI display
+            final_stats: Dict = {}
             base_eq_curve, base_trade_count, base_trades = self.simulate_multi_tf(
-                base_params, return_trades=True
+                base_params, return_trades=True, stats_out=final_stats
             )
 
             if base_eq_curve is None:
@@ -920,12 +1145,22 @@ class MultiTimeframeOptimizer(QThread):
                 base_eq_curve,
                 annualization_factor=self.annualization_factor,
                 trade_returns=trade_pcts,
+                exposure_frac=final_stats.get("exposure_frac"),
             )
 
             if base_metrics is None:
                 raise ValueError("Failed to calculate performance metrics")
 
             objective_raw, _ = scored(self.objective, base_metrics, base_trade_count)
+
+            # Attach the compiled set's train/validation segment scores so
+            # the result row shows how it fared on the untouched slice
+            if self.selection_cut is not None:
+                _, _, split_metrics, _ = self.evaluate_params(base_params)
+                if split_metrics:
+                    for key in ("Train_Score", "Val_Score", "Train_Trades", "Val_Trades"):
+                        if key in split_metrics:
+                            base_metrics[key] = split_metrics[key]
 
             base_metrics["Trade_Count"] = base_trade_count
             base_metrics["Objective"] = self.objective
@@ -948,6 +1183,12 @@ class MultiTimeframeOptimizer(QThread):
                 f"Sharpe: {base_metrics['Sharpe_Ratio']:.2f} | "
                 f"Sortino: {base_metrics['Sortino_Ratio']:.2f}"
             )
+            if "Val_Score" in base_metrics:
+                print(
+                    f"   Validation slice: score {base_metrics['Val_Score']:.4f} "
+                    f"({base_metrics.get('Val_Trades', 0)} trades) | "
+                    f"train score {base_metrics.get('Train_Score', 0.0):.4f}"
+                )
 
             # Append final result and rewrite CSV
             final_result = {**base_params, **base_metrics}

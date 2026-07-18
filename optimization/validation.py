@@ -146,6 +146,7 @@ class ValidationReport:
     trade_count: int
     sharpe: float
     oos_sharpe: Optional[float] = None
+    oos_trades: Optional[int] = None
     reasons: List[str] = field(default_factory=list)
 
     def summary(self) -> str:
@@ -159,7 +160,10 @@ class ValidationReport:
             lines.append(f"  Prob. of Backtest Overfitting (CSCV): {self.pbo:.2f}")
         lines.append(f"  Trades: {self.trade_count}  |  Sharpe: {self.sharpe:.2f}")
         if self.oos_sharpe is not None:
-            lines.append(f"  Held-out OOS Sharpe: {self.oos_sharpe:.2f}")
+            oos = f"  Held-out OOS Sharpe: {self.oos_sharpe:.2f}"
+            if self.oos_trades is not None:
+                oos += f"  ({self.oos_trades} OOS trades)"
+            lines.append(oos)
         for r in self.reasons:
             lines.append(f"  ⚠ {r}")
         return "\n".join(lines)
@@ -176,6 +180,8 @@ def validate_candidate(
     min_trades: int = 20,
     oos_sharpe: Optional[float] = None,
     min_oos_sharpe: float = 0.0,
+    oos_trades: Optional[int] = None,
+    min_oos_trades: int = 0,
 ) -> ValidationReport:
     """
     Run the anti-overfit gates on a candidate parameter set.
@@ -189,6 +195,14 @@ def validate_candidate(
         trial_sharpes: Annualized Sharpe of every trial the optimizer ran
         oos_sharpe: Optional true held-out Sharpe (from the live
             re-optimizer's untouched validation window)
+        oos_trades: Optional count of trades ENTERED inside the held-out
+            window. A flat holdout scores Sharpe 0.0, which passes a
+            `>= 0` threshold vacuously - but zero OOS trades is absence
+            of evidence, not evidence of harmlessness (and is the
+            signature of a calendar cycle that memorized in-sample
+            rallies). Gate it separately.
+        min_oos_trades: Minimum OOS trades required when oos_trades is
+            provided (0 disables the check)
     """
     reasons: List[str] = []
 
@@ -240,6 +254,16 @@ def validate_candidate(
             f"held-out OOS Sharpe {oos_sharpe:.2f} < {min_oos_sharpe:.2f}"
         )
 
+    if (
+        oos_trades is not None
+        and min_oos_trades > 0
+        and oos_trades < min_oos_trades
+    ):
+        reasons.append(
+            f"only {oos_trades} trades entered in the held-out window "
+            f"(< {min_oos_trades}) - no out-of-sample evidence"
+        )
+
     return ValidationReport(
         passed=len(reasons) == 0,
         dsr=float(dsr),
@@ -248,5 +272,6 @@ def validate_candidate(
         trade_count=int(trade_count),
         sharpe=sharpe,
         oos_sharpe=oos_sharpe,
+        oos_trades=oos_trades,
         reasons=reasons,
     )
