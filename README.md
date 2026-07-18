@@ -81,7 +81,7 @@ python main.py
 ```
 
 1. **Data & Setup** - Enter a ticker (e.g. `SPY`, `AAPL`, `BTC-USD`) and load data; the buy & hold benchmark appears immediately. Select the timeframes to optimize
-2. **Strategy Optimization** - Pick an optimization goal (Sharpe, Sortino, Calmar, ...), choose which indicators the search may use (or toggle time-cycles-only), set ranges and trials, then press START; results and equity curves update live. Use **🤖 Auto-Build Strategy Book** to optimize several goals back-to-back, save them to the strategy book, and run the regime-switching backtest
+2. **Strategy Optimization** - Pick an optimization goal (Sharpe, Sortino, Calmar, ...), choose which indicators the search may use (or toggle time-cycles-only), set ranges and trials, then press START; results and equity curves update live. Use **🤖 Auto-Build Strategy Book** to optimize several goals back-to-back, save them to the strategy book, and run the regime-switching backtest. **⭐ Apply Certified Preset** configures the evidence-backed strategy (below) in one click: calendar cycle disabled, all indicators, Sharpe objective, volatility targeting on
 3. **Settings** - Configure position sizing and transaction costs (stock/crypto presets available)
 
 Optimization results are also written to `data_output/<TICKER>_results_<objective>.csv`.
@@ -100,7 +100,9 @@ The optimizer searches the indicator choice, its periods (P1/P2), entry/exit thr
 
 ### Evidence-backed configuration
 
-A 60-fold out-of-sample study across 8 markets and 7 decades (`RESEARCH_JOURNAL.md`, experiments H8–H13) certified one configuration as viable — a **risk-managed long exposure** with roughly half the drawdowns of buy & hold at statistically non-inferior returns (pooled OOS Sharpe ≈ +0.5, t p = 0.003 / Wilcoxon p = 0.010; drawdown shallower in 58/60 folds, p < 1e-8):
+A 60-fold out-of-sample study across 8 markets and 7 decades (`RESEARCH_JOURNAL.md`, experiments H8–H13) certified one configuration as viable — a **risk-managed long exposure** with roughly half the drawdowns of buy & hold at statistically non-inferior returns (pooled OOS Sharpe ≈ +0.5, t p = 0.003 / Wilcoxon p = 0.010; drawdown shallower in 58/60 folds, p < 1e-8).
+
+**In the GUI**: press **⭐ Apply Certified Preset** on the Strategy Optimization tab, load an equity or crypto ticker, and press START. The same configuration in code:
 
 ```python
 MultiTimeframeOptimizer(
