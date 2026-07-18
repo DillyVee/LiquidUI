@@ -818,6 +818,55 @@ No cherry-picking of assets: WTI stays in. If this fails, the verdict
 is recorded and the loop continues elsewhere — the battery does not
 get easier.
 
+**Results (H12) — FALSIFIED; the ensemble is worse.** 35 folds:
+
+| pooled | OOS Sharpe | MaxDD | vs B&H Sharpe |
+|---|---|---|---|
+| 1/N ensemble | +0.28 ± 1.11 (23/35 > 0) | −10.5% | −0.31 (p = 0.0036 ✗) |
+| (H11 single) | +0.40 ± 1.04 | −12.5% | −0.19 (p = 0.26 ✓) |
+
+V2 strengthened to a perfect 35/35 shallower drawdowns (+12.9pp,
+p < 0.0001) — but V1 fully failed (t p = 0.146, Wilcoxon p = 0.149) and
+V3 flipped to **significant Sharpe inferiority** vs B&H. The leg data
+shows why: the sortino and calmar legs are frequently weaker selectors
+than the sharpe leg, and 1/N averaged them in. Diversification across
+selection criteria reduced variance less than it diluted the mean.
+**The single sharpe-winner configuration (H11) remains the best
+measured candidate.** Lesson: 1/N helps when legs have comparable
+expected quality (DeMiguel et al.'s setting); ensembling a strong
+selector with weaker ones is dilution, not diversification.
+
+### Experiment H13 — frozen-candidate confirmation on fresh in-domain data
+
+**Domain claim (pre-registered with justification)**: the candidate's
+claimed domain is **equities and crypto** — precisely the two asset
+classes the product supports (its only cost presets are
+`for_stocks`/`for_crypto`). The H11 WTI folds stand as recorded
+evidence that the system does NOT extend to commodities. This narrowing
+is acknowledged as a post-hoc hypothesis prompted by WTI's failure —
+which is exactly why the confirmation below uses ONLY data that played
+no part in any prior decision this session.
+
+**Frozen candidate**: H11's V1 exactly — indicators-only sharpe
+optimization (240 trials, seed 777, cycle inert), single winner
+deployed with the H8b vol overlay. Nothing tuned, nothing re-selected.
+
+**Fresh confirmation set (25 folds, all in-domain, all untouched)**:
+NASDAQ pre-1990 (5), NIKKEI pre-1990 (10), Dow Transports (2), Dow
+Utilities (2), Coinbase ETH (3), Coinbase LTC (3).
+
+**Pre-registered battery (same as H11)**: V1 absolute (t AND Wilcoxon
+p < 0.05), V2 drawdown vs B&H (p < 0.05), V3 no significant Sharpe
+inferiority. All folds are holdout by construction. The combined
+in-domain totality (fresh 25 + H11's 26 equity/crypto folds) is
+reported as context, clearly labeled as partially non-fresh.
+
+**Caveats recorded up front**: pre-1990 eras carry modern cost presets
+(historical costs were higher — flatters absolute returns; noted
+against certification confidence); NIKKEI pre-1990 includes the 1980s
+bubble (a brutal B&H benchmark — biases V3 against the candidate,
+conservative).
+
 **Results**: (recorded below after the run)
 
 ---
