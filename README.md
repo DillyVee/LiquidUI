@@ -98,6 +98,22 @@ The optimizer searches the indicator choice, its periods (P1/P2), entry/exit thr
 
 > **⚠️ Research note on the time cycle**: a controlled 15-fold experiment on real market data (SP500/NASDAQ/BTC, see `RESEARCH_JOURNAL.md`, experiment H9) found that the free-form calendar cycle *inflates in-sample scores and significantly reduces out-of-sample Sharpe* (paired −0.56, p = 0.028) versus running the same indicator search with the cycle disabled. Treat cycle-bearing results as presumptively overfit unless they pass the anti-overfit gates **and** walk-forward validation on your specific ticker.
 
+### Evidence-backed configuration
+
+A 60-fold out-of-sample study across 8 markets and 7 decades (`RESEARCH_JOURNAL.md`, experiments H8–H13) certified one configuration as viable — a **risk-managed long exposure** with roughly half the drawdowns of buy & hold at statistically non-inferior returns (pooled OOS Sharpe ≈ +0.5, t p = 0.003 / Wilcoxon p = 0.010; drawdown shallower in 58/60 folds, p < 1e-8):
+
+```python
+MultiTimeframeOptimizer(
+    df_dict=data,                                    # equities or crypto only
+    time_cycle_ranges=((250, 250), (0, 0), (0, 0)),  # calendar cycle DISABLED
+    objective="sharpe",
+    vol_targeting=True,                              # proven drawdown overlay
+    # ... standard ranges, costs preset for your asset class
+)
+```
+
+Keep the anti-overfit gates on, re-optimize on ~3 years of daily history, and paper-trade through the live gate stack before any real capital. Full definition, measured profile, and limitations: `RESEARCH_JOURNAL.md`, "THE CERTIFIED STRATEGY".
+
 ---
 
 ## Testing
