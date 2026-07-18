@@ -768,6 +768,56 @@ Verdict semantics: "viable" = survives this battery; the app's live
 re-optimizer with its gate stack (H1/H3-hardened) remains the
 deployment path, and paper trading remains the final arbiter.
 
+**Results — NOT CERTIFIED (one criterion short), risk proposition
+overwhelming.** 35 folds:
+
+| population | cand OOS Sharpe | cand MaxDD | B&H Sharpe | B&H MaxDD |
+|---|---|---|---|---|
+| pooled (35) | +0.40 ± 1.04 (21/35 > 0) | −12.5% | +0.59 | −23.3% |
+| holdout (20) | +0.24 (13/20 > 0) | −13.1% | +0.37 | −25.3% |
+| original (15) | +0.62 | −11.6% | +0.89 | −20.7% |
+
+- **V2 ✓ (emphatic)**: paired MaxDD +10.9pp shallower, t = 7.73,
+  p < 0.0001, shallower in **34/35** folds (holdout 20/20). The
+  candidate cuts drawdowns roughly in half across every asset class
+  and era.
+- **V3 ✓**: paired Sharpe vs B&H −0.19, p = 0.26 — inferiority not
+  established.
+- **Override ✓**: holdout subset positive (+0.24).
+- **V1 ✗ (split)**: t-test p = 0.030 passes; Wilcoxon p = 0.081
+  fails the AND requirement. The median fold is not far enough from
+  zero: a fat negative tail, concentrated in WTI (equity-tuned
+  mean-reversion on a commodity, mean fold Sharpe ≈ −0.1) and
+  high-turnover folds (20–40 trades/fold paying costs).
+
+**Verdict**: by the pre-registered letter, NOT certified. The same
+discipline that rejected H5a and demoted the veto binds here. The
+candidate is demonstrably a superior *risk* vehicle to passive
+exposure; its absolute-profitability consistency is one test short.
+
+**Diagnosis for the next iteration**: the shortfall is fold-median
+consistency — single-winner variance. The one product component never
+tested in this loop is ensemble diversification (the strategy book /
+auto-build machinery exists for exactly this). 1/N ensembles of
+heterogeneous selections are the classic variance reducer that
+survives out-of-sample (DeMiguel, Garlappi & Uppal 2009).
+
+### Experiment H12 — V2 candidate: 1/N multi-objective ensemble
+
+**Hypothesis**: if each fold deploys an equal-weight (1/N) portfolio of
+THREE winners — the same indicators-only optimization run under the
+sharpe, sortino, and calmar objectives (distinct seeds), each with the
+H8b vol overlay — because 1/N diversification across heterogeneous
+selection criteria reduces single-draw variance without adding fitted
+parameters, then fold-level consistency (the failed Wilcoxon) improves
+while the proven drawdown edge is preserved.
+
+**Pre-registered rule: identical battery to H11** (V1 t AND Wilcoxon
+p < 0.05; V2; V3; holdout override), same 35 folds, same benchmarks.
+No cherry-picking of assets: WTI stays in. If this fails, the verdict
+is recorded and the loop continues elsewhere — the battery does not
+get easier.
+
 **Results**: (recorded below after the run)
 
 ---
