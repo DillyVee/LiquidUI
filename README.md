@@ -98,6 +98,42 @@ The optimizer searches the indicator choice, its periods (P1/P2), entry/exit thr
 
 ---
 
+## Time-Cycle Sweep (`cycle_backtest.py`)
+
+A standalone batch runner that sweeps a pure calendar ON/OFF/SHIFT cycle across a
+large ticker list (defaults to `data/top_500_tickers.txt`) and records the result
+of **every** cycle configuration for **every** ticker.
+
+A configuration is `(buy, out, offset)`: `buy` days held in the market, `out` days
+flat, and the whole pattern shifted right by `offset` days. The cycle length is
+`buy + out`, and a cycle has one distinct shift per day (a 3/4 cycle has 7 offsets,
+0-6). Configurations are grouped by `(buy, out)` and ordered by cycle length, then
+out-length: `1,1,0 -> 1,1,1 -> 2,1,0 -> 2,1,1 -> 2,1,2 -> 1,2,0 -> ...`. The outer
+loop is the cycle group and the inner loop is the ticker, so every ticker is scored
+on the `1,1` cycle before any ticker moves on to `2,1`.
+
+```bash
+python cycle_backtest.py                    # full 10x10 sweep, all tickers, live dashboard
+python cycle_backtest.py --max-buy 7 --max-out 7
+python cycle_backtest.py --no-ui            # headless, console logs only
+python cycle_backtest.py --selftest         # offline correctness checks
+```
+
+- **Data** - daily bars pulled from Yahoo Finance once per ticker and cached to
+  `data_output/cycle_cache/`; tickers Yahoo cannot return are skipped and remembered.
+- **Output** - one row per `(ticker, buy, out, offset)` appended live to
+  `data_output/cycle_backtest_results.csv`: return %, max drawdown %, profit factor,
+  Sharpe, Sortino (plus CAGR, Calmar, trade count, win rate, buy & hold). Sharpe,
+  Sortino, drawdown and profit factor come from the same `PerformanceMetrics` engine
+  as the rest of the app.
+- **Resumable** - a re-run skips rows already in the CSV, so a multi-day sweep can be
+  stopped and restarted freely.
+- **Monitoring** - a dependency-free dashboard at `http://localhost:8765` shows the
+  current cycle/ticker, progress, ETA, and the best and most recent results
+  (`--no-ui` to disable).
+
+---
+
 ## Testing
 
 ```bash
